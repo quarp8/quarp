@@ -1,0 +1,10 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <AssemblyName>quarp</AssemblyName>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\Quarp.Core\Quarp.Core.csproj" />
+    <ProjectReference Include="..\Quarp.Shell.Desktop\Quarp.Shell.Desktop.csproj" />
+  </ItemGroup>
+</Project>

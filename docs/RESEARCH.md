@@ -1,0 +1,83 @@
+# Сводка исследования (август 2026)
+
+Выжимка из исследования 16–17 августа 2026: 6 направлений, каждое перепроверено
+независимым фактчекером по живым первоисточникам. Здесь — только факты, на которые
+опираются решения проекта (ADR). Даты и цифры — на момент проверки.
+
+## Рынок: почему проект — хобби, а не бизнес (ADR-011, README)
+
+- За всю историю жанра зарплатного уровня достиг один продукт — PICO-8 ($14.99, Lexaloffle,
+  ~2 человека, 11 лет форы). Цифр продаж Lexaloffle не публикует.
+- TIC-80 (консоль №2, free/MIT): 7 спонсоров на GitHub, сбор 2022 года — $210 из $2000;
+  стабильного релиза нет с октября 2023. <https://github.com/sponsors/nesbox>
+- Picotron (автор PICO-8, $19.99, альфа марта 2024): 75 игр на itch.io против 7115 у PICO-8;
+  стартовый джем — 6 работ. <https://itch.io/games/tag-picotron>
+- Pixel Vision 8 — C#/MonoGame фэнтези-консоль с Roslyn-раннером (ближайший прецедент
+  проекта): автор выгорел за 6 лет, монетизация не сработала, репозиторий в архиве
+  с 04.01.2023. <https://github.com/PixelVision8/PixelVision8>
+- Sharpie (16-битная консоль, написанная на C#, январь 2026): 3 балла на Hacker News.
+  Ниша «фэнтези-консоль, где игры пишут на C#» на 2026 год пуста.
+
+## Песочница .NET: почему «открытый исходник вместо песочницы» (ADR-003, ARCHITECTURE §6)
+
+- CAS удалён из .NET; Microsoft: «AssemblyLoadContext does not provide any security
+  features. All code has full permissions of the process».
+  <https://learn.microsoft.com/en-us/dotnet/core/dependency-loading/understanding-assemblyloadcontext>
+- Самая серьёзная индустриальная попытка whitelist-песочницы C# (s&box, Facepunch)
+  обойдена через Unsafe-трюки (ноябрь 2025, HackerOne; разбор май 2026).
+  <https://slugcat.systems/post/26-05-21-how-to-open-calc-exe-from-sbox/>
+- Честный путь песочницы — WASM-картриджи: wasmtime-dotnet (v44, поддерживается)
+  на десктопе, WACS (чистый C#-интерпретатор WASM, IL2CPP/iOS-совместим) на мобильных.
+- В .NET 5+ ref-сборки консолидированы: `File`, `Reflection`, `Random`, `DateTime`
+  публично доступны из `System.Runtime.dll` — ограничить BCL списком ссылок нельзя,
+  нужен пост-компиляционный скан метаданных.
+  <https://learn.microsoft.com/en-us/dotnet/api/system.io.file>
+
+## Торговые марки: почему нужно другое публичное имя (ADR-008)
+
+- «PICO» — действующая регистрация Qingdao Pico Technology / ByteDance: US reg. 7614540
+  (декабрь 2024), классы 9 и 28 — включая «video game consoles».
+  <https://tsdr.uspto.gov/statusview/sn97421610>
+- «SHARP» — Sharp Corporation, портфель Class 9 (компьютеры/софт); делала игровые
+  компьютеры (X68000, Twin Famicom).
+- Lexaloffle в FAQ просит писать автору перед использованием имени/лого PICO-8;
+  палитра и шрифт PICO-8 — официально CC-0.
+  <https://www.lexaloffle.com/pico-8.php?page=faq>
+- Клонировать API-поверхность (spr/map/btn) безопасно: Google v. Oracle (2021) +
+  десятилетие открытых реимплементаций PICO-8 (fake-08, picolove и др.) без единой
+  претензии Lexaloffle.
+
+## Контент: что можно портировать (ROADMAP M4/M7)
+
+- Картриджи с BBS Lexaloffle: по умолчанию все права защищены, опциональный тег —
+  CC BY-NC-SA (некоммерческая) → в чужую консоль без разрешения автора нельзя.
+- Celeste Classic: код C#-порта (Classic.cs в NoelFB/Celeste) — MIT с 2018; имя «Celeste»
+  и арт лицензией не покрыты — нужно разрешение Noel Berry (исторически даёт).
+  <https://github.com/NoelFB/Celeste>
+- Poom — MIT. 8-bit Panda (TIC-80) — Apache-2.0. Демо TIC-80 — MIT. 2048 — MIT.
+- **Никогда не делать тетрис-клон**: Tetris Holding v. Xio (D.N.J. 2012) — проигран даже
+  переименованный клон; Tetris Company активно шлёт DMCA.
+- Имена Sokoban, Boulder Dash, Lode Runner — зарегистрированные марки; механики свободны
+  под другими названиями.
+
+## Платформы (ROADMAP M7–M8, решение по iOS)
+
+- Apple (ревизия 13.11.2025): guideline 4.7 сужен до HTML5/JS мини-игр + «retro game
+  console and PC emulator apps can offer to download games»; 2.5.2 — образовательное
+  исключение (код виден и редактируем). Прецеденты в App Store: Pythonista, Continuous
+  (C# IDE с Roslyn + Mono-интерпретатором). Ревью дискреционно — iOS только стретч.
+  <https://developer.apple.com/app-store/review/guidelines/>
+- Google Play: код в VM/интерпретаторе с непрямым доступом к API явно допущен политикой
+  Device and Network Abuse (устоявшаяся трактовка для IL/интерпретаторов).
+- MonoGame 3.8.5 (15.07.2026): ARM64-пакеты «для Raspberry Pi 4/5», DesktopVK — новая
+  платформа первого выпуска. <https://monogame.net/blog/2026-07-15-3.8.5-release-2026/>
+- Vulkan на Raspberry Pi CM4: v3dv конформен 1.2 (Mesa 22.2), 1.3 (Mesa 24.3).
+
+## Спрос (README «Чем проект НЕ является», ROADMAP M10)
+
+- «PICO-16» просят с 2017 (треды BBS по ~7–11 ответов); zep: «спроектировал PICO-16,
+  чтобы напомнить себе не делать его». Picotron нишу «ограниченной 16-битки» не закрыл
+  (это «фэнтези-рабочая-станция»).
+- Реалистичный первый год новой консоли соло-разработчика: сотни скачиваний,
+  10–50 авторов картриджей. Джем вскоре после запуска — главный рабочий приём
+  бутстрапа библиотеки игр (WASM-4: первый джем 43 игры почти без призов).

@@ -3,7 +3,10 @@
     <OutputType>Exe</OutputType>
   </PropertyGroup>
   <ItemGroup>
-    <PackageReference Include="MonoGame.Framework.DesktopGL" Version="3.8.*" />
+    <!-- Pinned to 3.8.5 (organizer decision D6): a floating 3.8.* silently changes the
+         graphics stack under a milestone that is supposed to be reproducible. -->
+    <PackageReference Include="MonoGame.Framework.DesktopGL" Version="3.8.5" />
+    <ProjectReference Include="..\Quarp.CartKit\Quarp.CartKit.csproj" />
     <ProjectReference Include="..\Quarp.Core\Quarp.Core.csproj" />
   </ItemGroup>
 </Project>

@@ -1,0 +1,146 @@
+namespace Quarp.Api;
+
+/// <summary>
+/// The full QUARP-8 cartridge-facing surface (SPEC-8 §8; signatures are draft until
+/// API-8.md is ratified at M4). Implemented by the console core; cartridges call it
+/// through the <see cref="Cartridge"/> convenience wrappers.
+/// Colors are indices 0-15 (visible palette); <see cref="Pal(byte, byte)"/> can point
+/// a slot at a secret counterpart (16-31).
+/// Every call is soft: out-of-range coordinates, sizes and indices draw nothing or read
+/// zero instead of throwing.
+/// </summary>
+public interface IConsoleApi
+{
+    // --- graphics ---
+
+    /// <summary>Fills the whole screen with a color slot, ignoring camera and clip but honoring Pal.</summary>
+    void Cls(byte color = 0);
+
+    /// <summary>Draws one pixel; camera and clip apply, off-screen writes are dropped.</summary>
+    void Pset(int x, int y, byte color);
+
+    /// <summary>
+    /// Reads a framebuffer pixel: the master color index 0-31 actually stored there, i.e. after
+    /// Pal remapping. Camera applies; anything off-screen reads 0.
+    /// </summary>
+    byte Pget(int x, int y);
+
+    /// <summary>Bresenham line, both endpoints included. Coordinates are clamped to the Fix range +/-32768.</summary>
+    void Line(int x0, int y0, int x1, int y1, byte color);
+
+    /// <summary>Rectangle outline, width/height in pixels; a non-positive size draws nothing.</summary>
+    void Rect(int x, int y, int width, int height, byte color);
+
+    /// <summary>Filled rectangle, width/height in pixels; a non-positive size draws nothing.</summary>
+    void RectFill(int x, int y, int width, int height, byte color);
+
+    /// <summary>
+    /// Midpoint circle outline; radius 0 is a single pixel, a negative radius draws nothing.
+    /// Center and radius are clamped to the Fix range +/-32768.
+    /// </summary>
+    void Circ(int centerX, int centerY, int radius, byte color);
+
+    /// <summary>
+    /// Filled midpoint circle; radius 0 is a single pixel, a negative radius draws nothing.
+    /// Center and radius are clamped to the Fix range +/-32768.
+    /// </summary>
+    void CircFill(int centerX, int centerY, int radius, byte color);
+
+    /// <summary>
+    /// Draws sprite <paramref name="sprite"/> (0-255) at x, y, optionally as a block of
+    /// cellsWide x cellsHigh cells and mirrored. The block is clamped to the sheet, and sheet
+    /// colors marked by Palt stay transparent.
+    /// </summary>
+    void Spr(int sprite, int x, int y, int cellsWide = 1, int cellsHigh = 1, bool flipX = false, bool flipY = false);
+
+    /// <summary>
+    /// Draws a region of the map at screenX, screenY. Tile 0 is empty and never drawn; tiles
+    /// outside the 256x72 map are skipped. A non-zero flagFilter keeps only tiles whose sprite
+    /// has ALL of the filter's flag bits.
+    /// </summary>
+    void Map(int cellX, int cellY, int screenX, int screenY, int cellsWide, int cellsHigh, byte flagFilter = 0);
+
+    /// <summary>Tile index at a map cell; cells outside the 256x72 map read 0.</summary>
+    byte Mget(int cellX, int cellY);
+
+    /// <summary>Writes a tile index into a map cell; cells outside the map are ignored.</summary>
+    void Mset(int cellX, int cellY, byte tile);
+
+    /// <summary>Reads sprite flag bit 0-7; an unknown sprite or flag reads false.</summary>
+    bool Fget(int sprite, int flag);
+
+    /// <summary>Sets sprite flag bit 0-7; an unknown sprite or flag is ignored.</summary>
+    void Fset(int sprite, int flag, bool value);
+
+    /// <summary>Reads a sprite-sheet pixel (color 0-15); outside the 128x128 sheet reads 0.</summary>
+    byte Sget(int x, int y);
+
+    /// <summary>Writes a sprite-sheet pixel (color masked to 0-15); outside the sheet it is ignored.</summary>
+    void Sset(int x, int y, byte color);
+
+    /// <summary>
+    /// Draws text with the 4x6 system font. Returns the x coordinate after the last glyph
+    /// (decided: yes, API-8 §reviewed). '\n' starts a new line at the original x; characters
+    /// outside ASCII 32-126 draw a hollow box.
+    /// </summary>
+    int Print(string text, int x, int y, byte color);
+
+    /// <summary>Shifts every later draw call by -x, -y; calling it without arguments recenters on the origin.</summary>
+    void Camera(int x = 0, int y = 0);
+
+    /// <summary>Limits drawing to a screen-space rectangle, intersected with the screen; an empty rectangle hides everything.</summary>
+    void Clip(int x, int y, int width, int height);
+
+    /// <summary>Removes the clip rectangle: drawing covers the whole screen again.</summary>
+    void Clip();
+
+    /// <summary>Points a visible slot (0-15) at any master color (0-31): darkness, night palettes, flashes.</summary>
+    void Pal(byte slot, byte color);
+
+    /// <summary>Resets all 16 slots to their own master colors.</summary>
+    void Pal();
+
+    /// <summary>Marks a sheet color transparent (or opaque) for Spr and Map; screen color 0 is transparent by default.</summary>
+    void Palt(byte color, bool transparent);
+
+    /// <summary>Resets transparency to the default: only color 0 is transparent (SPEC-8 §2).</summary>
+    void Palt();
+
+    // --- input (SPEC-8 §5: 2 players max) ---
+
+    /// <summary>True while the button is held on this tick; an unknown player reads false.</summary>
+    bool Btn(Button button, int player = 0);
+
+    /// <summary>True only on the tick the button went down (held now, not held on the previous tick).</summary>
+    bool Btnp(Button button, int player = 0);
+
+    // --- audio (M3; silent no-op stubs in M1) ---
+
+    /// <summary>Plays sound effect <paramref name="id"/>, on a free channel by default. Silent no-op until M3.</summary>
+    void Sfx(int id, int channel = -1);
+
+    /// <summary>Starts a music pattern, or stops music with the default -1. Silent no-op until M3.</summary>
+    void Music(int pattern = -1);
+
+    // --- deterministic random (xoshiro128**, seeded via splitmix64 — SPEC-8 §7) ---
+
+    /// <summary>Uniform Fix in [0, max); a max of 0 or less returns 0. Consumes exactly one RNG draw.</summary>
+    Fix Rnd(Fix max);
+
+    /// <summary>Uniform int in [0, maxExclusive); a bound of 0 or less returns 0. Consumes exactly one RNG draw.</summary>
+    int RndInt(int maxExclusive);
+
+    /// <summary>Reseeds the RNG; the same seed always replays the same sequence (part of the simulation).</summary>
+    void Srand(int seed);
+
+    // --- persistence (64 slots; second simulation input, snapshotted by replays) ---
+
+    /// <summary>Reads persistent slot 0-63 (0 when never written); an out-of-range slot reads 0.</summary>
+    Fix Dget(int slot);
+
+    /// <summary>Writes persistent slot 0-63; an out-of-range slot is ignored. The shell saves it to disk.</summary>
+    void Dset(int slot, Fix value);
+
+    /// <summary>Ticks elapsed since Init (tick 0). 60 per game second.</summary>
+    int Ticks { get; }
+}

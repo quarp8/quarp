@@ -1,12 +1,22 @@
 using System.Globalization;
+using Quarp.Core.Audio;
 
 namespace Quarp.Core;
 
 /// <summary>
-/// The one framebuffer fingerprint in Quarp: FNV-1a 64, printed as exactly 16 lowercase hex
-/// digits. Everything that quotes a frame hash — <c>quarp sim</c>, <c>quarp replay record</c>,
-/// <c>quarp replay play</c>, the golden-master tests, the CI determinism jobs — goes through
-/// this type and nothing else.
+/// The one output fingerprint in Quarp: FNV-1a 64, printed as exactly 16 lowercase hex
+/// digits. Everything that quotes a frame or audio hash — <c>quarp sim</c>,
+/// <c>quarp replay record</c>, <c>quarp replay play</c>, the golden-master tests, the CI
+/// determinism jobs — goes through this type and nothing else.
+///
+/// <para><b>M3 added the second half of a tick.</b> A tick produces a frame and an
+/// <see cref="AudioBlock"/>, and both are hashed here, by the same digest and into the same
+/// 16-digit text form. The text of a <em>frame</em> hash is byte-for-byte what it was in M2 —
+/// same bytes in, same digest, same formatting — because the CI greps and every golden constant
+/// in the suite depend on it. What is new is only that a second thing can be hashed. Where the
+/// two hashes appear together, whoever prints them owes the reader a line shape that keeps the
+/// bare <c>^[0-9a-f]{16}$</c> line meaning "the final frame hash", which is what M1 and M2
+/// consumers already grep for.</para>
 ///
 /// <para><b>Why it lives in the core and why there is only one copy.</b> The M2 criterion is
 /// literally "the frame hashes match between architectures" (ROADMAP M2, REPLAY-FORMAT §6).
@@ -46,8 +56,17 @@ public static class FrameHash
     /// <summary>Digits in the text form — the width the CI matches on.</summary>
     public const int HexLength = 16;
 
+    /// <summary>
+    /// The digest of nothing: the seed a running digest starts from, and what
+    /// <see cref="Compute(ReadOnlySpan{byte})"/> returns for an empty span.
+    /// </summary>
+    public const ulong Empty = OffsetBasis;
+
     /// <summary>The framebuffer's hash as the 16-hex-digit line the CI greps for.</summary>
     public static string Of(Framebuffer framebuffer) => Format(Compute(framebuffer));
+
+    /// <summary>The tick's audio hash as a 16-hex-digit string, in the same form as a frame hash.</summary>
+    public static string Of(AudioBlock block) => Format(Compute(block));
 
     /// <summary>The bytes' hash as the 16-hex-digit line the CI greps for.</summary>
     public static string Of(ReadOnlySpan<byte> data) => Format(Compute(data));
@@ -57,6 +76,52 @@ public static class FrameHash
     {
         ArgumentNullException.ThrowIfNull(framebuffer);
         return Compute(framebuffer.Pixels);
+    }
+
+    /// <summary>The audio block's raw 64-bit hash, for callers that compare rather than print.</summary>
+    public static ulong Compute(AudioBlock block)
+    {
+        ArgumentNullException.ThrowIfNull(block);
+        return Compute((ReadOnlySpan<short>)block.Samples);
+    }
+
+    /// <summary>
+    /// Samples' raw 64-bit hash. Each sample is fed low byte first — the same little-endian
+    /// order <see cref="AudioBlock.CopyBytesTo"/> writes — so the digest of a block equals the
+    /// digest of the bytes a .wav of it would contain, on every architecture. Feeding the array
+    /// through <c>MemoryMarshal.AsBytes</c> instead would produce one answer on x64 and another
+    /// on a big-endian host, which is the precise failure the cross-architecture job exists to
+    /// catch and the last place anyone would look for it.
+    /// </summary>
+    public static ulong Compute(ReadOnlySpan<short> samples) => Combine(Empty, samples);
+
+    /// <summary>
+    /// Continues a running digest over one more tick's samples, so a whole run's PCM folds
+    /// into one number without ever holding more than a block of it.
+    ///
+    /// <para>This exists because sound has no equivalent of a frame you are allowed to skip.
+    /// A checkpoint every twenty ticks samples one frame in twenty and that is a fair probe of
+    /// a picture; doing the same to audio would leave nineteen blocks out of twenty compared
+    /// against nothing. The audio column of a checkpoint is therefore cumulative — every
+    /// sample the run has produced up to that tick — while the frame column stays
+    /// instantaneous. Both still name the tick where two machines first disagree.</para>
+    /// </summary>
+    public static ulong Combine(ulong hash, ReadOnlySpan<short> samples)
+    {
+        for (int i = 0; i < samples.Length; i++)
+        {
+            int sample = samples[i];
+            hash = unchecked((hash ^ (byte)(sample & 0xFF)) * Prime);
+            hash = unchecked((hash ^ (byte)((sample >> 8) & 0xFF)) * Prime);
+        }
+        return hash;
+    }
+
+    /// <summary>Continues a running digest over one more <see cref="AudioBlock"/>.</summary>
+    public static ulong Combine(ulong hash, AudioBlock block)
+    {
+        ArgumentNullException.ThrowIfNull(block);
+        return Combine(hash, (ReadOnlySpan<short>)block.Samples);
     }
 
     /// <summary>The bytes' raw 64-bit hash. Allocates nothing.</summary>

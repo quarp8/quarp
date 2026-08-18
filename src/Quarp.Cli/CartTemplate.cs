@@ -19,7 +19,7 @@ public static class CartTemplate
     /// The dev-only project that gives an author red squiggles while they type
     /// (M2 work order; API-8 §12). Opening the cartridge folder in VS Code or Rider loads
     /// this, which references <c>Quarp.Api</c> for IntelliSense and <c>Quarp.Analyzers</c>
-    /// for QRP1001-QRP1003 — the very rules <c>CartCompiler</c> enforces at build time.
+    /// for QRP1001-QRP1004 — the very rules <c>CartCompiler</c> enforces at build time.
     ///
     /// <para><c>{0}</c> is replaced with the absolute path of the folder holding the Quarp
     /// tools, separator included. Absolute rather than relative on purpose: a relative path
@@ -36,7 +36,7 @@ public static class CartTemplate
         <Project Sdk="Microsoft.NET.Sdk">
 
           <!-- Dev-only project: it exists so VS Code and Rider can show the Quarp determinism
-               diagnostics (QRP1001-QRP1003) while you type. It is NOT how the cartridge is
+               diagnostics (QRP1001-QRP1004) while you type. It is NOT how the cartridge is
                built - `quarp run` compiles src/**/*.cs itself - and it is NOT part of the
                .quarp8 package. The tool paths below are absolute and belong to this machine;
                after moving the cartridge or updating Quarp, regenerate this file. -->

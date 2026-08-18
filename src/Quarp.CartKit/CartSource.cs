@@ -70,8 +70,25 @@ public static class CartSource
         byte[] map = LoadFixedSize(ReadOptionalFile(root, "map.bin"), "map.bin", CartData.MapWidth * CartData.MapHeight);
         byte[] flags = LoadFixedSize(ReadOptionalFile(root, "flags.bin"), "flags.bin", CartData.FlagCount);
 
+        // A folder cart is the only shape where the audio *sources* can be present, so it is the
+        // only place that can catch the one confusing failure mode: an author edits sfx.txt,
+        // never runs the compiler, and hears nothing for reasons the console cannot explain.
+        RequireBuiltAudio(root, "sfx.txt", "sfx.bin");
+        RequireBuiltAudio(root, "music.txt", "music.bin");
+        byte[] sfx = LoadSfx(ReadOptionalFile(root, "sfx.bin"));
+        byte[] music = LoadMusic(ReadOptionalFile(root, "music.bin"));
+
         CodeBudget.Validate(sources);
-        return new CartData { Manifest = manifest, Sources = sources, Gfx = gfx, Map = map, Flags = flags };
+        return new CartData
+        {
+            Manifest = manifest,
+            Sources = sources,
+            Gfx = gfx,
+            Map = map,
+            Flags = flags,
+            Sfx = sfx,
+            Music = music,
+        };
     }
 
     public static CartData LoadPackage(string quarp8File)
@@ -106,6 +123,8 @@ public static class CartSource
             ZipArchiveEntry? gfxEntry = null;
             ZipArchiveEntry? mapEntry = null;
             ZipArchiveEntry? flagsEntry = null;
+            ZipArchiveEntry? sfxEntry = null;
+            ZipArchiveEntry? musicEntry = null;
             foreach (ZipArchiveEntry entry in zip.Entries)
             {
                 string name = entry.FullName.Replace('\\', '/');
@@ -126,6 +145,12 @@ public static class CartSource
                         break;
                     case "flags.bin":
                         flagsEntry = entry;
+                        break;
+                    case "sfx.bin":
+                        sfxEntry = entry;
+                        break;
+                    case "music.bin":
+                        musicEntry = entry;
                         break;
                     default:
                         if (name.StartsWith("src/", StringComparison.Ordinal)
@@ -163,9 +188,20 @@ public static class CartSource
             byte[] flags = LoadFixedSize(
                 flagsEntry is null ? null : ReadEntry(flagsEntry, "flags.bin"),
                 "flags.bin", CartData.FlagCount);
+            byte[] sfx = LoadSfx(sfxEntry is null ? null : ReadEntry(sfxEntry, "sfx.bin"));
+            byte[] music = LoadMusic(musicEntry is null ? null : ReadEntry(musicEntry, "music.bin"));
 
             CodeBudget.Validate(sources);
-            return new CartData { Manifest = manifest, Sources = sources, Gfx = gfx, Map = map, Flags = flags };
+            return new CartData
+            {
+                Manifest = manifest,
+                Sources = sources,
+                Gfx = gfx,
+                Map = map,
+                Flags = flags,
+                Sfx = sfx,
+                Music = music,
+            };
         }
     }
 
@@ -188,6 +224,33 @@ public static class CartSource
         pngBytes is null
             ? new byte[CartData.GfxWidth * CartData.GfxHeight]
             : PngDecoder.DecodeToPaletteIndices(pngBytes, CartData.GfxWidth, CartData.GfxHeight, "gfx.png");
+
+    /// <summary>
+    /// The SFX bank, header stripped and fully validated; absent means an all-zero bank, which
+    /// is 64 empty slots — silence is a valid cartridge, not a load error.
+    /// </summary>
+    private static byte[] LoadSfx(byte[]? bytes) =>
+        bytes is null ? AudioFormat.EmptySfxPayload() : AudioFormat.ParseSfxFile(bytes, "sfx.bin");
+
+    /// <summary>The music bank, same deal: absent means 64 empty patterns.</summary>
+    private static byte[] LoadMusic(byte[]? bytes) =>
+        bytes is null ? AudioFormat.EmptyMusicPayload() : AudioFormat.ParseMusicFile(bytes, "music.bin");
+
+    /// <summary>
+    /// Refuses a folder that has the audio source but not the compiled bank. The alternative —
+    /// loading silence — is the worst outcome available: the cart works, sounds wrong, and
+    /// nothing anywhere says why. The message names the command that fixes it.
+    /// </summary>
+    private static void RequireBuiltAudio(string root, string textName, string binaryName)
+    {
+        if (File.Exists(Path.Combine(root, textName)) && !File.Exists(Path.Combine(root, binaryName)))
+        {
+            string name = Path.GetFileName(root.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
+            throw new CartLoadException(
+                $"{root}: {textName} is present but {binaryName} is not — the console plays the compiled bank. "
+                + $"Run 'quarp audio build {(name.Length == 0 ? root : name)}' to build it.");
+        }
+    }
 
     private static byte[] LoadFixedSize(byte[]? bytes, string name, int expectedLength)
     {

@@ -14,9 +14,15 @@
 #     100 used to pass this workflow. The golden's 150 checkpoints are all distinct, and the
 #     job below asserts that — a golden that goes stale fails loudly instead of going quiet.
 #   * Every comparison below is over a *sequence* of checkpoints, never a single final hash.
-#     `--every N` makes quarp print `tick <n> <hash>` lines; a final hash cannot tell
+#     `--every N` makes quarp print `tick <n> <frame> <audio>` lines; a final hash cannot tell
 #     "identical the whole way" from "diverged at tick 40 and converged again", and a
 #     sequence names the tick where two architectures first disagree.
+#   * Since M3 a checkpoint carries **two** hashes and both are compared. The frame column is
+#     that tick's framebuffer; the audio column is a running digest over every 800-sample
+#     block the run has produced so far, because sound has no equivalent of a frame you may
+#     skip -- sampling audio one tick in twenty would leave 95% of the PCM unchecked while the
+#     report claimed it was covered. The bare `^[0-9a-f]{16}$` line still means the final
+#     *frame* hash and nothing else; the final audio digest is on its own `audio <hash>` line.
 #
 # Verified against current official documentation on 2026-08-17:
 #   * `ubuntu-24.04-arm` is the free Linux ARM64 label. arm64 hosted runners for public
@@ -70,6 +76,13 @@ env:
   #     proves anything. See the note at the top about 37c481f3e17fab02. ---
   SIM_TICKS: '600'
   SIM_EVERY: '100'
+
+  # FNV-1a 64 over N blocks of 800 zero samples each — the digest a run prints when nothing
+  # ever sounds. Pure functions of the tick count and of nothing else, so they never need
+  # re-measuring; they exist so "the cart went mute" cannot pass as "the hashes still match
+  # between architectures", which it otherwise would, on both architectures at once.
+  SILENT_AUDIO_GOLDEN: '220acbc2c817fb25'   # 3000 ticks
+  SILENT_AUDIO_SIM: '54738d7161a01b25'      # 600 ticks
 
   # Built once per job, then invoked directly. See the comment in the determinism job.
   QUARP_DLL: 'src/Quarp.Cli/bin/Release/net10.0/quarp.dll'
@@ -161,6 +174,15 @@ jobs:
       - name: Build the CLI
         run: dotnet build src/Quarp.Cli -c Release
 
+      - name: Audio banks are in sync with their text
+        # sfx.bin and music.bin are generated files that have to live in the repository (a
+        # .quarp8 must be packable without the tooling installed), and the only thing keeping
+        # a generated file honest is rebuilding it and comparing. Compilation is a pure
+        # function of the text, so this is a byte comparison and it holds on both
+        # architectures. It runs before the hashes so "someone edited sfx.txt and forgot to
+        # build" reports itself instead of surfacing as a PCM mismatch two steps later.
+        run: dotnet "$QUARP_DLL" audio build "$GOLDEN_CART" --check
+
       - name: Golden replay, round-trip and idle smoke test
         run: |
           set -euo pipefail
@@ -181,11 +203,13 @@ jobs:
 
           die() { echo "::error title=$1::$2"; exit 1; }
 
-          # quarp prints two shapes and the difference between them matters:
-          #   `tick <n> <hash>`  a checkpoint, one per --every N ticks;
-          #   `<hash>`           the final framebuffer hash, always the last line of stdout.
-          # Both are matched by shape, not by position, so a future banner line cannot
-          # silently become "the hash".
+          # quarp prints three shapes and the differences between them matter:
+          #   `tick <n> <frame> <audio>`  a checkpoint, one per --every N ticks;
+          #   `audio <hash>`              the run's final PCM digest;
+          #   `<hash>`                    the final framebuffer hash, last line of stdout.
+          # All are matched by shape, not by position, so a future banner line cannot silently
+          # become "the hash", and the audio digest deliberately does not match the bare-hash
+          # pattern every M1/M2 consumer already greps for.
           final_hash_of() {
             local file="$1" label="$2" value
             value="$(tr -d '\r' < "$file" | grep -Eo '^[0-9a-f]{16}$' | tail -n 1 || true)"
@@ -200,7 +224,23 @@ jobs:
             printf '%s\n' "$value"
           }
 
-          checkpoints_of() { tr -d '\r' < "$1" | grep -E '^tick [0-9]+ [0-9a-f]{16}$' || true; }
+          checkpoints_of() { tr -d '\r' < "$1" | grep -E '^tick [0-9]+ [0-9a-f]{16} [0-9a-f]{16}$' || true; }
+
+          # The final PCM digest, by the same "absent is not equal" rule as final_hash_of:
+          # a blank value would compare equal to another blank value and pass green.
+          audio_hash_of() {
+            local file="$1" label="$2" value
+            value="$(tr -d '\r' < "$file" | grep -Eo '^audio [0-9a-f]{16}$' | tail -n 1 | cut -d' ' -f2 || true)"
+            if [ -z "$value" ]; then
+              {
+                echo "::error title=No audio hash printed::${label} printed no PCM digest (expected a line 'audio <16 hex digits>')."
+                echo "--- command output ---"
+                cat "$file"
+              } >&2
+              return 1
+            fi
+            printf '%s\n' "$value"
+          }
 
           # ------------------------------------------------------------------
           # 1. THE PROOF: the committed golden replay of live gameplay, played twice.
@@ -222,6 +262,7 @@ jobs:
             die "Non-deterministic on one machine" "Two identical plays of the golden replay disagree on ${arch}. A cross-architecture mismatch later would be misdiagnosed as an architecture problem; fix this first."
           fi
           golden_final="$(final_hash_of "$out/golden-1.log" 'quarp replay play (golden)')"
+          golden_audio="$(audio_hash_of "$out/golden-1.log" 'quarp replay play (golden)')"
 
           # The golden has to keep having teeth, so two cheap assertions guard it:
           #   * the expected number of checkpoints — a shortened golden fails here rather
@@ -238,6 +279,14 @@ jobs:
             awk '{print $3}' "$out/golden-checkpoints.txt" | sort | uniq -d | head -n 5
             die "Golden replay is not live gameplay" "Only ${distinct} of ${count} golden checkpoints are distinct: the cartridge is repeating a frame, which is what a game-over screen looks like. Re-record the golden from ${GOLDEN_INPUT} — carts/snake/replays/README.md has the command."
           fi
+
+          # The audio column needs a different guard from the frame column. It is cumulative,
+          # so it changes on every tick even in dead silence and "all checkpoints distinct"
+          # would prove nothing whatever about sound. What does prove something is comparing it
+          # with the digest of the same number of *silent* blocks — a fixed number, since the
+          # samples are all zero — so a build where the banks quietly stopped reaching the
+          # console fails here instead of shipping a mute cartridge with a green tick.
+          [ "$golden_audio" != "$SILENT_AUDIO_GOLDEN" ] || die "The golden replay is silent" "Its PCM digest over ${GOLDEN_TICKS} ticks equals the digest of ${GOLDEN_TICKS} silent blocks (${SILENT_AUDIO_GOLDEN}). carts/snake has sfx.bin and music.bin and asks for both, so either the banks are not reaching the console or the APU produced nothing."
 
           # ------------------------------------------------------------------
           # 2. The golden must be reproducible from its input track, byte for byte, on this
@@ -262,6 +311,10 @@ jobs:
           if [ "$record_final" != "$golden_final" ]; then
             die "Recording and playback disagree" "On ${arch} recording the golden ends on ${record_final} but playing it back ends on ${golden_final} — the replay is not driving the simulation."
           fi
+          record_audio="$(audio_hash_of "$out/record.log" 'quarp replay record')"
+          if [ "$record_audio" != "$golden_audio" ]; then
+            die "Recording and playback disagree on sound" "On ${arch} recording the golden ends on PCM digest ${record_audio} but playing it back ends on ${golden_audio}. The frames agreed, so the divergence is in the APU or in what reaches it — a bank loaded after Boot rather than before would look exactly like this."
+          fi
           checkpoints_of "$out/record.log" > "$out/record-checkpoints.txt"
           if ! diff -u "$out/golden-checkpoints.txt" "$out/record-checkpoints.txt" > "$out/roundtrip-diff.txt"; then
             cat "$out/roundtrip-diff.txt"
@@ -277,6 +330,10 @@ jobs:
           sim1="$(final_hash_of "$out/sim-1.log" 'quarp sim (run 1)')"
           sim2="$(final_hash_of "$out/sim-2.log" 'quarp sim (run 2)')"
           [ "$sim1" = "$sim2" ] || die "Non-deterministic on one machine" "Two identical runs of quarp sim on ${arch} disagree: ${sim1} vs ${sim2}"
+          sim_audio1="$(audio_hash_of "$out/sim-1.log" 'quarp sim (run 1)')"
+          sim_audio2="$(audio_hash_of "$out/sim-2.log" 'quarp sim (run 2)')"
+          [ "$sim_audio1" = "$sim_audio2" ] || die "Non-deterministic sound on one machine" "Two identical runs of quarp sim on ${arch} produce different PCM: ${sim_audio1} vs ${sim_audio2}"
+          [ "$sim_audio1" != "$SILENT_AUDIO_SIM" ] || die "The idle sim is silent" "Its PCM digest over ${SIM_TICKS} ticks equals the digest of ${SIM_TICKS} silent blocks (${SILENT_AUDIO_SIM}); the snake starts its theme in Init, so silence here means the bank never arrived."
           checkpoints_of "$out/sim-1.log" > "$out/sim-checkpoints.txt"
 
           # ------------------------------------------------------------------
@@ -292,10 +349,12 @@ jobs:
             echo "golden_every=${GOLDEN_EVERY}"
             echo "golden_checkpoints=${count}"
             echo "golden_final=${golden_final}"
+            echo "golden_audio=${golden_audio}"
             echo "golden_sha256=${golden_sha}"
             echo "regen_sha256=${regen_sha}"
             echo "sim_ticks=${SIM_TICKS}"
             echo "sim_final=${sim1}"
+            echo "sim_audio=${sim_audio1}"
           } > "$out/hashes.env"
 
           echo "--- determinism report (${arch}) ---"
@@ -377,7 +436,7 @@ jobs:
               missing=1
             fi
           }
-          for field in arch sdk golden_ticks golden_every golden_checkpoints golden_final golden_sha256 regen_sha256 sim_final; do
+          for field in arch sdk golden_ticks golden_every golden_checkpoints golden_final golden_audio golden_sha256 regen_sha256 sim_final sim_audio; do
             need_var "$x64/hashes.env" "$field"
             need_var "$arm64/hashes.env" "$field"
           done
@@ -386,8 +445,11 @@ jobs:
           failed=0
 
           # --- 1. THE MILESTONE: the whole golden checkpoint sequence, not just its last line.
+          # Both columns at once: each line is `tick <n> <frame> <audio>`, so this single diff
+          # is the M2 criterion and the M3 one together, and the first differing line names the
+          # tick and says which of the two hashes moved.
           if diff -u "$x64/golden-checkpoints.txt" "$arm64/golden-checkpoints.txt" > golden.diff; then
-            echo "golden replay: $(wc -l < "$x64/golden-checkpoints.txt" | tr -d ' ') checkpoints identical on windows-x64 and linux-arm64."
+            echo "golden replay: $(wc -l < "$x64/golden-checkpoints.txt" | tr -d ' ') checkpoints identical on windows-x64 and linux-arm64, frame and PCM."
           else
             failed=1
             first="$(grep -E '^[-+]tick ' golden.diff | head -n 2 | tr '\n' ' ')"
@@ -405,7 +467,7 @@ jobs:
           fi
 
           # --- 3. Scalars, including the byte-level identity of the file each side recorded.
-          for field in golden_final golden_sha256 regen_sha256 sim_final golden_checkpoints; do
+          for field in golden_final golden_audio golden_sha256 regen_sha256 sim_final sim_audio golden_checkpoints; do
             a="$(val "$x64/hashes.env" "$field")"
             b="$(val "$arm64/hashes.env" "$field")"
             if [ "$a" != "$b" ]; then
@@ -428,7 +490,7 @@ jobs:
             echo "|---|---|---|---|"
             if [ -s golden.diff ]; then gv="**DIFFERENT**"; else gv="same"; fi
             echo "| golden checkpoint sequence | $(wc -l < "$x64/golden-checkpoints.txt" | tr -d ' ') lines | $(wc -l < "$arm64/golden-checkpoints.txt" | tr -d ' ') lines | ${gv} |"
-            for field in golden_final golden_sha256 regen_sha256 sim_final sdk; do
+            for field in golden_final golden_audio golden_sha256 regen_sha256 sim_final sim_audio sdk; do
               a="$(val "$x64/hashes.env" "$field")"
               b="$(val "$arm64/hashes.env" "$field")"
               if [ "$a" = "$b" ]; then verdict="same"; else verdict="**DIFFERENT**"; fi
@@ -445,7 +507,7 @@ jobs:
             cat "$arm64/hashes.env"
             exit 1
           fi
-          echo "Framebuffer hashes agree between windows-x64 and linux-arm64, checkpoint by checkpoint."
+          echo "Framebuffer and PCM hashes agree between windows-x64 and linux-arm64, checkpoint by checkpoint."
 
       - name: Build the CLI
         run: dotnet build src/Quarp.Cli -c Release
@@ -468,7 +530,7 @@ jobs:
           # artifact. The determinism job also asserts they equal the committed golden on
           # both sides; that equality is part of the proof, not a gap in it.
           dotnet "$QUARP_DLL" replay play "$qrpr" --cart "$GOLDEN_CART" --every "$GOLDEN_EVERY" > foreign.log
-          tr -d '\r' < foreign.log | grep -E '^tick [0-9]+ [0-9a-f]{16}$' > foreign-checkpoints.txt || true
+          tr -d '\r' < foreign.log | grep -E '^tick [0-9]+ [0-9a-f]{16} [0-9a-f]{16}$' > foreign-checkpoints.txt || true
           if [ ! -s foreign-checkpoints.txt ]; then
             echo "::error title=No checkpoints printed::quarp replay play printed no checkpoint lines on arm64."
             cat foreign.log
@@ -476,7 +538,7 @@ jobs:
           fi
 
           if ! diff -u "$expected" foreign-checkpoints.txt > foreign.diff; then
-            echo "::error title=Replay is not portable across architectures::A replay recorded on windows-x64 does not reproduce the same frames on linux-arm64. This is the M2 milestone criterion."
+            echo "::error title=Replay is not portable across architectures::A replay recorded on windows-x64 does not reproduce the same frames and sound on linux-arm64. This is the M2 milestone criterion, and since M3 the PCM half of it."
             cat foreign.diff
             exit 1
           fi
@@ -486,5 +548,5 @@ jobs:
           {
             echo "### Milestone criterion"
             echo
-            echo "Replay recorded on **windows-x64**, played back on **linux-arm64**: all ${lines} checkpoints identical, ending on \`$(tail -n 1 foreign-checkpoints.txt | awk '{print $3}')\`."
+            echo "Replay recorded on **windows-x64**, played back on **linux-arm64**: all ${lines} checkpoints identical, frame and PCM, ending on frame \`$(tail -n 1 foreign-checkpoints.txt | awk '{print $3}')\` / audio \`$(tail -n 1 foreign-checkpoints.txt | awk '{print $4}')\`."
           } >> "$GITHUB_STEP_SUMMARY"

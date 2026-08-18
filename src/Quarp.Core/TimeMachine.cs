@@ -47,13 +47,15 @@ public sealed class TimeMachine
         ReplayLog log,
         byte[]? sheet = null,
         byte[]? map = null,
-        byte[]? flags = null)
+        byte[]? flags = null,
+        byte[]? sfx = null,
+        byte[]? music = null)
     {
         ArgumentNullException.ThrowIfNull(profile);
         ArgumentNullException.ThrowIfNull(cart);
         ArgumentNullException.ThrowIfNull(header);
         ArgumentNullException.ThrowIfNull(log);
-        _console = new VirtualConsole(profile, sheet, map, flags);
+        _console = new VirtualConsole(profile, sheet, map, flags, sfx, music);
         _cart = cart;
         _header = header;
         _log = log;
@@ -248,17 +250,33 @@ public sealed class TimeMachine
     /// this again with the previous cartridge instance — its ALC is still alive at that point,
     /// and the same replay puts the old code back exactly where it was.
     /// </summary>
-    public RebuildResult Rebuild(Cartridge newCart) => RebuildCore(newCart, replaceAssets: false, null, null, null);
+    public RebuildResult Rebuild(Cartridge newCart) =>
+        RebuildCore(newCart, replaceAssets: false, null, null, null, null, null);
 
     /// <summary>
-    /// <see cref="Rebuild(Cartridge)"/> with new assets too — the author edited gfx.png or the
-    /// map, not just the code. The assets become the new boot image, so the resimulation and
-    /// every later rewind start from them.
+    /// <see cref="Rebuild(Cartridge)"/> with new assets too — the author edited gfx.png, the
+    /// map or the sound, not just the code. Sheet, map and flags become the new boot image, so
+    /// the resimulation and every later rewind start from them; the audio banks are read-only
+    /// to a profile-8 cartridge and so need no boot image, only to be in place before the
+    /// resimulation runs.
     /// </summary>
-    public RebuildResult Rebuild(Cartridge newCart, byte[]? sheet, byte[]? map, byte[]? flags) =>
-        RebuildCore(newCart, replaceAssets: true, sheet, map, flags);
+    public RebuildResult Rebuild(
+        Cartridge newCart,
+        byte[]? sheet,
+        byte[]? map,
+        byte[]? flags,
+        byte[]? sfx = null,
+        byte[]? music = null) =>
+        RebuildCore(newCart, replaceAssets: true, sheet, map, flags, sfx, music);
 
-    private RebuildResult RebuildCore(Cartridge newCart, bool replaceAssets, byte[]? sheet, byte[]? map, byte[]? flags)
+    private RebuildResult RebuildCore(
+        Cartridge newCart,
+        bool replaceAssets,
+        byte[]? sheet,
+        byte[]? map,
+        byte[]? flags,
+        byte[]? sfx,
+        byte[]? music)
     {
         ArgumentNullException.ThrowIfNull(newCart);
         // Where the player was. The log can be one tick ahead of the console when the old code
@@ -269,6 +287,10 @@ public sealed class TimeMachine
         if (replaceAssets)
         {
             _console.LoadAssets(sheet, map, flags);
+            // Before Boot, never after: the resimulation below plays the whole session again,
+            // and a bank loaded afterwards would mean the run that produced the current tick
+            // was scored against the old sound.
+            _console.LoadAudio(sfx, music);
         }
         try
         {

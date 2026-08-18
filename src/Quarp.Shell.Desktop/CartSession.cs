@@ -3,6 +3,7 @@ using System.Diagnostics;
 using Quarp.Api;
 using Quarp.CartKit;
 using Quarp.Core;
+using Quarp.Core.Audio;
 
 namespace Quarp.Shell.Desktop;
 
@@ -63,6 +64,8 @@ public sealed class CartSession : IDisposable
     private byte[] _gfx;
     private byte[] _map;
     private byte[] _flags;
+    private byte[] _sfx;
+    private byte[] _music;
 
     /// <summary>Non-null while a saved replay is being watched; it shadows the live session.</summary>
     private TimeMachine? _playback;
@@ -110,6 +113,8 @@ public sealed class CartSession : IDisposable
         _gfx = data.Gfx;
         _map = data.Map;
         _flags = data.Flags;
+        _sfx = data.Sfx;
+        _music = data.Music;
         _progressCallback = OnResimulationProgress;   // cached once: it runs inside the seek loop
         machine.Progress = _progressCallback;
         machine.ProgressInterval = ProgressIntervalTicks;
@@ -154,6 +159,24 @@ public sealed class CartSession : IDisposable
     public Action? PresentFrame { get; set; }
 
     /// <summary>
+    /// Called with the console's <see cref="AudioBlock"/> after each tick that moves the
+    /// session forward in real time — live play, fast-forward, single-step and replay
+    /// playback. The block is the console's own array and is overwritten by the next tick, so
+    /// the sink must copy what it wants.
+    ///
+    /// <para>Deliberately <b>not</b> called during a rewind or any other resimulation. A seek
+    /// re-runs the session from tick 0 and generates one block per tick of it; playing those
+    /// would be minutes of sound in a few milliseconds, and only the last block belongs to the
+    /// tick the player lands on. Rewinding is silent, which is also what a tape does when it
+    /// is being wound rather than played.</para>
+    ///
+    /// <para>The sink cannot influence the simulation: it is handed a block that has already
+    /// been rendered, and nothing it returns is read. That is the boundary that lets PCM into
+    /// the golden master — the sound card must never be able to pull a tick.</para>
+    /// </summary>
+    public Action<AudioBlock>? AudioSink { get; set; }
+
+    /// <summary>
     /// Loads, compiles and starts a cartridge from a folder or a .quarp8 file.
     /// Load and compile failures throw <see cref="CartLoadException"/> (the caller exits);
     /// a crash inside the cartridge's Init starts the session paused with the banner up,
@@ -193,7 +216,8 @@ public sealed class CartSession : IDisposable
             int[] persistent = ReadSaveFile(savePath);
             var header = new ReplayHeader(identity, seed: 0, persistent);
             var machine = new TimeMachine(
-                ConsoleProfile.Profile8, host.Cartridge, header, new ReplayLog(), data.Gfx, data.Map, data.Flags);
+                ConsoleProfile.Profile8, host.Cartridge, header, new ReplayLog(),
+                data.Gfx, data.Map, data.Flags, data.Sfx, data.Music);
 
             var session = new CartSession(fullPath, savePath, watcher, machine, host, data, identity)
             {
@@ -325,22 +349,39 @@ public sealed class CartSession : IDisposable
             {
                 // Watching a replay: step through the recorded input, never the live pad.
                 // Running out of recording is the end of the film, not an error.
-                if (machine.ReplayForward(ticks) == 0)
+                for (int i = 0; i < ticks; i++)
                 {
-                    _paused = true;
+                    if (machine.ReplayForward(1) == 0)
+                    {
+                        _paused = true;
+                        return;
+                    }
+                    PublishAudio(machine);
                 }
                 return;
             }
             // One polled snapshot feeds every tick of the frame. At x8 that means the same
             // buttons are recorded eight times — faithful to what the simulation actually
             // saw, which is the only thing a replay is allowed to claim.
-            machine.Advance(ticks, input);
+            //
+            // A tick at a time rather than Advance(ticks, input) so the audio sink sees every
+            // block: the console keeps one, and a frame that ran two ticks would otherwise
+            // lose one. The work is identical — Advance(n) is this loop with the counter
+            // inside it.
+            for (int i = 0; i < ticks; i++)
+            {
+                machine.Advance(1, input);
+                PublishAudio(machine);
+            }
         }
         catch (Exception e)
         {
             Crash(e);
         }
     }
+
+    /// <summary>Hands the tick's block to the shell, if anything is listening.</summary>
+    private void PublishAudio(TimeMachine machine) => AudioSink?.Invoke(machine.Console.AudioBlock);
 
     private void Rewind(int ticks)
     {
@@ -390,10 +431,12 @@ public sealed class CartSession : IDisposable
                 // than branching the timeline on a keypress.
                 machine.ReplayForward(1);
                 _crashed = false;
+                PublishAudio(machine);
             }
             else if (_playback is null)
             {
                 machine.Advance(1, default);
+                PublishAudio(machine);
             }
             else
             {
@@ -506,7 +549,7 @@ public sealed class CartSession : IDisposable
         RebuildResult rebuild;
         try
         {
-            rebuild = _machine.Rebuild(newHost.Cartridge, data.Gfx, data.Map, data.Flags);
+            rebuild = _machine.Rebuild(newHost.Cartridge, data.Gfx, data.Map, data.Flags, data.Sfx, data.Music);
         }
         finally
         {
@@ -571,6 +614,8 @@ public sealed class CartSession : IDisposable
         _gfx = data.Gfx;
         _map = data.Map;
         _flags = data.Flags;
+        _sfx = data.Sfx;
+        _music = data.Music;
         Name = data.Manifest.Name;
     }
 
@@ -721,7 +766,7 @@ public sealed class CartSession : IDisposable
             // and re-runs Init, which is why leaving playback has to put the live session back
             // together rather than simply dropping the reference — see StopPlayback.
             var playback = new TimeMachine(
-                ConsoleProfile.Profile8, _host.Cartridge, header, log, _gfx, _map, _flags)
+                ConsoleProfile.Profile8, _host.Cartridge, header, log, _gfx, _map, _flags, _sfx, _music)
             {
                 Progress = _progressCallback,
                 ProgressInterval = ProgressIntervalTicks,

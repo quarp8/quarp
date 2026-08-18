@@ -160,6 +160,13 @@ switch (command)
         }
     }
 
+    case "audio":
+    {
+        // `audio` is a group like `replay`: AudioBuildCommand owns its own subcommand
+        // dispatch, argument errors and exit codes (CartKit work order, deliverable 4).
+        return AudioBuildCommand.Invoke(args.Length > 1 ? args[1..] : Array.Empty<string>());
+    }
+
     case "bench":
     {
         if (args.Length < 2)
@@ -198,8 +205,11 @@ switch (command)
         Console.WriteLine("                               record a headless replay for CI and goldens");
         Console.WriteLine("  quarp replay play <file>.qrpr [--cart <path>] [--every N]");
         Console.WriteLine("                               reproduce a replay, print the final framebuffer hash");
-        Console.WriteLine("  --every N on any of the three also prints 'tick <n> <hash>' checkpoint lines,");
-        Console.WriteLine("  which is what the cross-architecture CI comparison reads.");
+        Console.WriteLine("  --every N on any of the three above also prints checkpoint lines");
+        Console.WriteLine("  'tick <n> <frame-hash> <audio-hash>', which is what the cross-architecture");
+        Console.WriteLine("  CI comparison reads; the audio column covers every block, not just this tick.");
+        Console.WriteLine("  quarp audio build <cart> [--check]");
+        Console.WriteLine("                               compile sfx.txt/music.txt into sfx.bin/music.bin");
         Console.WriteLine("  quarp bench <cart> --ticks N  measure play and resimulation speed (rewind cost)");
         Console.WriteLine("  quarp pattern <file>         write the test pattern as a .bmp image");
         Console.WriteLine();
@@ -229,17 +239,24 @@ static int RunSim(string path, int ticks, int every)
         using var host = CartHost.Load(result.AssemblyBytes);
         // Persistent memory deliberately starts zeroed and save.dat is neither read nor
         // written: the hash must depend on the cart alone, not on this machine's saves.
-        var console = new VirtualConsole(ConsoleProfile.Profile8, data.Gfx, data.Map, data.Flags);
+        var console = new VirtualConsole(
+            ConsoleProfile.Profile8, data.Gfx, data.Map, data.Flags, data.Sfx, data.Music);
         console.AttachCart(host.Cartridge);
+        // AttachCart runs Init as tick 0 and produces neither a frame nor a block, so the
+        // digest starts empty and covers ticks 1..N — the same ticks the frames come from.
+        ulong audio = FrameHash.Empty;
         for (int i = 0; i < ticks; i++)
         {
             console.Tick(default);
+            audio = FrameHash.Combine(audio, console.AudioBlock);
             if (Checkpoint.IsDue(i + 1, every, ticks))
             {
-                Console.WriteLine(Checkpoint.Line(i + 1, console.Framebuffer));
+                Console.WriteLine(Checkpoint.Line(i + 1, console.Framebuffer, audio));
             }
         }
-        // The last line of stdout stays the bare 16-hex-digit final hash, checkpoints or not.
+        Console.WriteLine(Checkpoint.AudioLine(audio));
+        // The last line of stdout stays the bare 16-hex-digit final frame hash, checkpoints
+        // or not: every M1/M2 consumer greps ^[0-9a-f]{16}$ for exactly this.
         Console.WriteLine(FrameHash.Of(console.Framebuffer));
         return 0;
     }
@@ -291,7 +308,7 @@ static int CreateNewCart(string folder)
     {
         Console.WriteLine(
             $"  {CartTemplate.DevFolder}/{CartTemplate.DevProjectFile} — dev-only, gives your editor the "
-            + "QRP1001-QRP1003 diagnostics");
+            + "QRP1001-QRP1004 diagnostics");
     }
     Console.WriteLine($"  quarp run {folder}");
     return 0;

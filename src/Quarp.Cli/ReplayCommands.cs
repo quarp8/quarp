@@ -34,7 +34,8 @@ public static class ReplayCommands
         + "  entries and '#' starts a comment. A track that keeps a cartridge alive for\n"
         + "  thousands of ticks runs to hundreds of entries and does not belong on a\n"
         + "  command line -- carts/snake/replays/golden.input is one.\n"
-        + "  --every N additionally prints a 'tick <n> <hash>' checkpoint line every N\n"
+        + "  --every N additionally prints a 'tick <n> <frame> <audio>' checkpoint\n"
+        + "  line every N\n"
         + "  ticks; the bare final hash is still the last line of stdout.";
 
     /// <summary>The seed and persistent snapshot every headless run starts from.</summary>
@@ -112,12 +113,14 @@ public static class ReplayCommands
             // With no script this is empty input for the whole run, and the RLE encoder
             // collapses it to a single 4-byte record — exactly the 306-byte file
             // REPLAY-FORMAT §9 describes. With one, the buttons change on the named ticks.
+            ulong audio = FrameHash.Empty;
             for (int tick = 0; tick < ticks; tick++)
             {
                 session.Machine.Advance(inputs.At(tick));
+                audio = FrameHash.Combine(audio, session.Machine.Console.AudioBlock);
                 if (Checkpoint.IsDue(tick + 1, every, ticks))
                 {
-                    Console.WriteLine(Checkpoint.Line(tick + 1, session.Machine.Framebuffer));
+                    Console.WriteLine(Checkpoint.Line(tick + 1, session.Machine.Framebuffer, audio));
                 }
             }
 
@@ -136,7 +139,9 @@ public static class ReplayCommands
                 $"Recorded {session.Machine.Log.TickCount} ticks of {session.Name} "
                 + $"({session.Machine.Log.RunCount} runs, {size} bytes) -> {outPath}");
             Console.WriteLine($"cart {CartIdentity.ToHex(session.Identity)}");
-            // Same shape `quarp sim` prints, so a recording can be checked without replaying it.
+            // Same shape `quarp sim` prints, so a recording can be checked without replaying it:
+            // the labelled audio digest of the whole run, then the bare final frame hash.
+            Console.WriteLine(Checkpoint.AudioLine(audio));
             Console.WriteLine(FrameHash.Of(session.Machine.Framebuffer));
             return 0;
         });
@@ -214,27 +219,32 @@ public static class ReplayCommands
                 Console.Error.WriteLine("quarp:           playing anyway; frames may differ.");
             }
 
+            // One tick per call, not one chunk per call: the audio digest has to see every
+            // block, and ReplayForward draws every tick either way, so this costs nothing but
+            // the loop. Checkpoints still land on exactly the ticks --every asks for.
             int played = 0;
+            ulong audio = FrameHash.Empty;
             while (played < log.TickCount)
             {
-                int chunk = every > 0 ? Math.Min(every, log.TickCount - played) : log.TickCount - played;
-                int ran = session.Machine.ReplayForward(chunk);
-                if (ran == 0)
+                if (session.Machine.ReplayForward(1) == 0)
                 {
                     break;
                 }
-                played += ran;
-                if (every > 0)
+                played++;
+                audio = FrameHash.Combine(audio, session.Machine.Console.AudioBlock);
+                if (Checkpoint.IsDue(played, every, log.TickCount))
                 {
                     // Labelled, and emitted for the final tick as well, so the sequence is a
                     // complete description of the run: CI compares the whole block between
                     // architectures and a mismatch names the tick it happened on.
-                    Console.WriteLine(Checkpoint.Line(played, session.Machine.Framebuffer));
+                    Console.WriteLine(Checkpoint.Line(played, session.Machine.Framebuffer, audio));
                 }
             }
 
             // The contract with CI: the last line of stdout is the final framebuffer hash,
-            // 16 lowercase hex digits, exactly as `quarp sim` prints it.
+            // 16 lowercase hex digits, exactly as `quarp sim` prints it. The run's audio
+            // digest goes on the labelled line above it, never bare.
+            Console.WriteLine(Checkpoint.AudioLine(audio));
             Console.WriteLine(FrameHash.Of(session.Machine.Framebuffer));
             return 0;
         });
@@ -484,7 +494,9 @@ public static class ReplayCommands
                     log ?? new ReplayLog(),
                     data.Gfx,
                     data.Map,
-                    data.Flags);
+                    data.Flags,
+                    data.Sfx,
+                    data.Music);
                 machine.Boot();
                 return new Session(host, machine, identity, data.Manifest.Name);
             }

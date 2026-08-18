@@ -7,6 +7,8 @@ namespace Snake;
 /// Play field is 16x8 cells of 8px (screen rows 1-8); row 0 is the score HUD.
 /// The snake speeds up with every apple; the best score persists in Dget/Dset slot 0.
 /// Drawn with primitives only — no gfx.png.
+/// Sound (M3): a blip on the apple, a noise thud on death, and a four-pattern theme that
+/// loops on channels 2-3 — see sfx.txt and music.txt next to this file.
 /// </summary>
 public sealed class SnakeGame : Cartridge
 {
@@ -26,6 +28,14 @@ public sealed class SnakeGame : Cartridge
     private const int MinStepInterval = 3;      // fastest speed, reached one apple at a time
     private const int ScoreFlashTicks = 12;
     private const int BestScoreSlot = 0;
+
+    // --- sound (sfx.txt / music.txt in this folder; rebuild with `quarp audio build`) ---
+    // Every one of these is asked for from Update or Init, never from Draw: Sfx and Music
+    // write chip state, Draw runs on the frame clock and not at all during a rewind, and
+    // QRP1004 rejects the call outright if it ever moves.
+    private const int SfxApple = 0;
+    private const int SfxDeath = 1;
+    private const int MusicTheme = 0;
 
     // --- colors (work order: bg 0, snake 7/23, apple 10, HUD 3) ---
     private const byte ColBg = 0;
@@ -148,6 +158,7 @@ public sealed class SnakeGame : Cartridge
         _score = 0;
         _scoreFlash = 0;
         SpawnApple();
+        Music(MusicTheme);                      // restarts the song on every new run
     }
 
     private void UpdatePlaying()
@@ -235,6 +246,7 @@ public sealed class SnakeGame : Cartridge
         {
             _score++;
             _scoreFlash = ScoreFlashTicks;
+            Sfx(SfxApple);
             if (_stepInterval > MinStepInterval)
             {
                 _stepInterval--;
@@ -292,6 +304,13 @@ public sealed class SnakeGame : Cartridge
     {
         _state = state;
         _scoreFlash = 0;
+        // The song stops first so the thud lands in silence rather than on top of a bass note.
+        Music();
+        if (state == GameState.GameOver)
+        {
+            Sfx(SfxDeath);
+        }
+
         if (_score > _best)
         {
             _best = _score;

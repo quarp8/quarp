@@ -54,6 +54,8 @@
 - [CODESTYLE.md](docs/CODESTYLE.md) — стиль кода и правила разработки
 - [DECISIONS.md](docs/DECISIONS.md) — журнал принятых решений (ADR)
 - [RESEARCH.md](docs/RESEARCH.md) — сводка исследования ниши (август 2026), на которую опираются решения
+- [REPLAY-FORMAT.md](docs/REPLAY-FORMAT.md) — формат реплея `.qrpr` и то, что сравнивает CI между архитектурами
+- [AUDIO-FORMAT.md](docs/AUDIO-FORMAT.md) — формат банков `sfx.bin`/`music.bin` и авторский текст `sfx.txt`/`music.txt`
 
 ## Чем проект НЕ является
 

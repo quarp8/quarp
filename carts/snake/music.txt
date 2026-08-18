@@ -1,0 +1,12 @@
+# Snake — the background theme. Bass on channel 2, lead on channel 3; channels 0
+# and 1 are deliberately empty so the apple and death effects always have a free
+# voice and never have to steal one from the song (docs/AUDIO-FORMAT.md §6).
+#
+# Four patterns of 64 ticks: bass alone, then three with the lead over it.
+#
+#  P  ch0 ch1 ch2 ch3   flags
+
+   0   --  --  02  --   loop-start
+   1   --  --  02  04
+   2   --  --  03  05
+   3   --  --  03  04   loop-end

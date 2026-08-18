@@ -114,12 +114,30 @@ public interface IConsoleApi
     /// <summary>True only on the tick the button went down (held now, not held on the previous tick).</summary>
     bool Btnp(Button button, int player = 0);
 
-    // --- audio (M3; silent no-op stubs in M1) ---
+    // --- audio (SPEC-8 §4: 4 channels, 64 SFX slots, 64 music patterns) ---
 
-    /// <summary>Plays sound effect <paramref name="id"/>, on a free channel by default. Silent no-op until M3.</summary>
+    /// <summary>
+    /// Plays sound effect <paramref name="id"/> (0-63) from the cartridge's SFX bank.
+    /// <paramref name="channel"/> 0-3 plays on that channel, cutting off whatever was there;
+    /// -1, the default, picks the lowest channel that is idle, failing that the lowest one the
+    /// music is using (the music takes it back at its next pattern), and failing that plays
+    /// nothing — all four channels are already busy with the game's own sounds.
+    /// An id outside 0-63, a channel outside -1..3 and an empty slot are silent no-ops.
+    /// <para><b>Changes simulation state.</b> Call it from Update or Init, never from Draw:
+    /// audio is part of what a replay reproduces, so a sound started while drawing would make
+    /// a rewind diverge exactly the way a stray Rnd would (SPEC-8 §7; analyzer rule QRP1004).</para>
+    /// </summary>
     void Sfx(int id, int channel = -1);
 
-    /// <summary>Starts a music pattern, or stops music with the default -1. Silent no-op until M3.</summary>
+    /// <summary>
+    /// Starts music pattern <paramref name="pattern"/> (0-63); a negative value — including the
+    /// default — stops the music, and 64 or more does nothing. Each of the pattern's four
+    /// channels plays on the chip channel of the same number, except one the cartridge's own
+    /// <see cref="Sfx"/> is holding, which the music picks up at its next pattern. Patterns run
+    /// in index order until one carries a stop or loop flag, or index 63 ends.
+    /// <para><b>Changes simulation state</b>, exactly as <see cref="Sfx"/> does, and for the
+    /// same reason must not be called from Draw.</para>
+    /// </summary>
     void Music(int pattern = -1);
 
     // --- deterministic random (xoshiro128**, seeded via splitmix64 — SPEC-8 §7) ---

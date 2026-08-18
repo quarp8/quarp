@@ -10,8 +10,9 @@ namespace Quarp.Analyzers;
 /// <c>Quarp.Core.VirtualConsole</c>, not copied from a work order. The test is one question:
 /// <em>does this call change something a resimulation from tick 0 has to reproduce?</em>
 /// SPEC-8 §7 names that state — the RNG, the sprite sheet, the map, sprite flags and the
-/// 64 slots of persistent memory — and the seven members below are the whole of what writes
-/// to it:
+/// 64 slots of persistent memory — and since M3 the sound chip, whose PCM the
+/// cross-architecture CI job compares block by block. The nine members below are the whole of
+/// what writes to it:
 /// <list type="table">
 ///   <item><term><c>Rnd</c>, <c>RndInt</c></term><description>consume one xoshiro128** draw
 ///     each (<c>VirtualConsole.NextRandom</c> advances <c>_rng0.._rng3</c>), and the RNG
@@ -23,7 +24,14 @@ namespace Quarp.Analyzers;
 ///   <item><term><c>Fset</c></term><description>writes sprite flags, which also steer
 ///     <c>Map</c>'s flag filter;</description></item>
 ///   <item><term><c>Dset</c></term><description>writes persistent memory — the second
-///     external input of the simulation (REPLAY-FORMAT §2).</description></item>
+///     external input of the simulation (REPLAY-FORMAT §2);</description></item>
+///   <item><term><c>Sfx</c>, <c>Music</c></term><description>start a sound, which is to say
+///     they write channel and sequencer state inside <c>Quarp.Core.Audio.Apu</c>. Added in M3
+///     (organizer decision, M3 work order §"Решения организатора"). Draw runs once per
+///     <em>frame</em> while Update runs once per <em>tick</em>, and a rewind resimulates
+///     ticks without drawing at all — so a sound started from Draw plays a different number
+///     of times on every run, and the PCM hash diverges exactly the way an RNG draw from Draw
+///     would diverge the frame hash.</description></item>
 /// </list>
 ///
 /// Everything else on the interface stays legal in <c>Draw</c> on purpose:
@@ -36,9 +44,6 @@ namespace Quarp.Analyzers;
 ///     <c>Draw</c> is the documented idiom (<c>carts/snake</c> does exactly that);</item>
 ///   <item>every read — <c>Pget</c>, <c>Mget</c>, <c>Fget</c>, <c>Sget</c>, <c>Dget</c>,
 ///     <c>Btn</c>, <c>Btnp</c>, <c>Ticks</c> — writes nothing;</item>
-///   <item><c>Sfx</c> and <c>Music</c> are silent no-ops until M3 and address the audio
-///     mixer, which is not resimulated state in v1. See the note in
-///     <see cref="DrawPurityAnalyzer"/> for why that has to be revisited when audio lands.</item>
 /// </list>
 /// </summary>
 internal sealed class MutatingConsoleApi
@@ -48,12 +53,12 @@ internal sealed class MutatingConsoleApi
 
     /// <summary>
     /// The member names, and also the pre-filter: an invocation whose callee is not spelled
-    /// with one of these seven names cannot bind to a mutating member, and skipping it costs
+    /// with one of these nine names cannot bind to a mutating member, and skipping it costs
     /// one string comparison instead of a symbol lookup.
     /// </summary>
     private static readonly string[] MemberNames =
     {
-        "Rnd", "RndInt", "Srand", "Sset", "Mset", "Fset", "Dset",
+        "Rnd", "RndInt", "Srand", "Sset", "Mset", "Fset", "Dset", "Sfx", "Music",
     };
 
     private readonly ImmutableHashSet<ISymbol> _members;
@@ -61,7 +66,7 @@ internal sealed class MutatingConsoleApi
     private MutatingConsoleApi(ImmutableHashSet<ISymbol> members) => _members = members;
 
     /// <summary>
-    /// Resolves the seven members on both types that expose them — the interface and the
+    /// Resolves the nine members on both types that expose them — the interface and the
     /// <c>Cartridge</c> base class whose protected wrappers are what cartridge code actually
     /// writes — or <c>null</c> when neither type is in the compilation.
     /// Every overload of every name is taken, so adding one later needs no change here.

@@ -22,6 +22,12 @@ namespace Quarp.CartKit;
 ///   <item>the <b>decoded</b> assets — the 128x128 index sheet, the map and the flags — not
 ///     the bytes of <c>gfx.png</c>: a PNG re-saved by another optimizer with the same pixels
 ///     must give the same identity, because the simulation sees pixels, not chunks;</item>
+///   <item>the <b>audio banks</b>, on the same terms and for the same reason as the frame:
+///     since M3 the synthesizer's PCM is part of the golden master, so a cartridge whose SFX
+///     changed is a different cartridge. What is hashed is the payload
+///     (docs/AUDIO-FORMAT.md §2, §4), not the file: the 8-byte container header carries the
+///     format version, not music, and an absent <c>sfx.bin</c> must hash exactly like a bank
+///     whose 64 slots are all empty — those are the same cartridge to a listener;</item>
 ///   <item><c>profile</c> from the manifest: 8 versus 16 changes everything.</item>
 /// </list>
 ///
@@ -57,10 +63,15 @@ public static class CartIdentity
 
     /// <summary>
     /// Tag mixed in first, so that a future change to what is hashed (or how it is framed)
-    /// cannot silently collide with a v1 digest. Bumping this string invalidates every
+    /// cannot silently collide with an earlier digest. Bumping this string invalidates every
     /// recorded identity on purpose.
+    ///
+    /// <para>Bumped to /2 in M3, when the audio banks joined the hash. Recorded identities from
+    /// M2 stop matching, which is the honest answer: those replays were taken from a console
+    /// that could not make a sound, and identity mismatch is a warning by design
+    /// (REPLAY-FORMAT §5), so no replay stops playing.</para>
     /// </summary>
-    private const string DomainTag = "quarp-cart-identity/1\n";
+    private const string DomainTag = "quarp-cart-identity/2\n";
 
     private static readonly byte[] ZeroIdentity = new byte[Size];
 
@@ -97,6 +108,8 @@ public static class CartIdentity
         AppendBlock(hash, cart.Gfx);
         AppendBlock(hash, cart.Map);
         AppendBlock(hash, cart.Flags);
+        AppendBlock(hash, cart.Sfx);
+        AppendBlock(hash, cart.Music);
 
         byte[] digest = hash.GetHashAndReset();
         if (digest.Length != Size)

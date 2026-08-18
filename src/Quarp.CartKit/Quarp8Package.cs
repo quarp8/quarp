@@ -4,10 +4,10 @@ namespace Quarp.CartKit;
 
 /// <summary>
 /// Writes .quarp8 packages: a zip of the cart folder layout (manifest.json, src/**/*.cs,
-/// gfx.png, map.bin, flags.bin, cover.png), fully validated before writing — manifest,
-/// code budget, gfx palette, asset sizes — and size-capped after (SPEC-8 §6: the packed
-/// file is at most 128 KB). Entry timestamps are fixed so identical input folders pack
-/// into identical bytes.
+/// gfx.png, map.bin, flags.bin, sfx.bin, music.bin, cover.png), fully validated before
+/// writing — manifest, code budget, gfx palette, asset sizes, audio banks — and size-capped
+/// after (SPEC-8 §6: the packed file is at most 128 KB). Entry timestamps are fixed so
+/// identical input folders pack into identical bytes.
 /// </summary>
 public static class Quarp8Package
 {
@@ -52,6 +52,10 @@ public static class Quarp8Package
             AddOptionalFile(zip, root, "gfx.png");
             AddOptionalFile(zip, root, "map.bin");
             AddOptionalFile(zip, root, "flags.bin");
+            // The compiled banks only: sfx.txt and music.txt are sources, like a .aseprite next
+            // to gfx.png, and SPEC-8 §6 lists exactly what a package contains.
+            AddOptionalFile(zip, root, "sfx.bin");
+            AddOptionalFile(zip, root, "music.bin");
             AddOptionalFile(zip, root, "cover.png");
         }
 

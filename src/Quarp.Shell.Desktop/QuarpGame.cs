@@ -22,6 +22,12 @@ namespace Quarp.Shell.Desktop;
 /// nothing else — that frame is the golden master the CI hashes. The pause and speed
 /// indicators live in <see cref="ShellOverlay"/>, a second texture blended on top at the same
 /// scale, so nothing the shell says about time can ever reach the framebuffer.</para>
+///
+/// <para><b>Sound (M3).</b> Each tick's 800 samples go straight from the console to
+/// <see cref="AudioOutput"/>, which keeps two or three blocks queued on the device. The
+/// direction of that arrow is the whole design: ticks produce audio, audio never asks for a
+/// tick, and a machine with no sound card changes nothing about what the simulation
+/// computes.</para>
 /// </summary>
 public sealed class QuarpGame : Game
 {
@@ -36,6 +42,7 @@ public sealed class QuarpGame : Game
     private SpriteBatch _spriteBatch = null!;
     private Texture2D _screenTexture = null!;
     private ShellOverlay _overlay = null!;
+    private AudioOutput? _audio;
 
     private TimeSpeed _lastSpeed = TimeSpeed.At(TimeSpeed.NormalIndex);
     private bool _lastPaused;
@@ -119,6 +126,16 @@ public sealed class QuarpGame : Game
         _spriteBatch = new SpriteBatch(GraphicsDevice);
         _screenTexture = new Texture2D(GraphicsDevice, _profile.Width, _profile.Height);
         _overlay = new ShellOverlay(GraphicsDevice, _profile.Width, _profile.Height);
+
+        // Opened here rather than in the constructor: the audio device belongs to a running
+        // Game, and an unavailable one is reported by AudioOutput rather than thrown.
+        _audio = new AudioOutput();
+        if (_session is not null)
+        {
+            // Cached once — this delegate is invoked on every tick, including eight times a
+            // frame at x8.
+            _session.AudioSink = _audio.Submit;
+        }
     }
 
     protected override void Update(GameTime gameTime)
@@ -162,6 +179,10 @@ public sealed class QuarpGame : Game
             : _accumulator.Advance(gameTime.ElapsedGameTime.Ticks, speed);
 
         _session.Update(ticks, InputMapper.Read(keyboard), rewinding);
+
+        // Once a frame, whatever the simulation did: tops the device queue up with silence so
+        // a pause, a rewind or a stalled machine is quiet instead of a source running dry.
+        _audio?.EndFrame();
         base.Update(gameTime);
     }
 
@@ -227,7 +248,31 @@ public sealed class QuarpGame : Game
     protected override void OnExiting(object sender, ExitingEventArgs args)
     {
         _session?.SaveNow();
+        ReportAudio();
         base.OnExiting(sender, args);
+    }
+
+    /// <summary>
+    /// Prints what the session's sound actually cost, so the latency figure in
+    /// ARCHITECTURE §2 is something anyone can reproduce by playing for a minute and
+    /// quitting, rather than a number someone once wrote down. Depth at submit is the
+    /// measurement; the wait it implies is that depth in 16.667 ms blocks, minus however much
+    /// of the head block has already played — which no MonoGame API reports, so it is given
+    /// as a range and not as a false decimal.
+    /// </summary>
+    private void ReportAudio()
+    {
+        if (_audio is null || !_audio.IsAvailable || _audio.MeanDepthAtSubmit < 0)
+        {
+            return;
+        }
+        double depth = _audio.MeanDepthAtSubmit;
+        Console.WriteLine(
+            $"[quarp] audio: queue {depth:F2} blocks at submit "
+            + $"({(depth - 1) * AudioQueue.BlockMilliseconds:F1}-{depth * AudioQueue.BlockMilliseconds:F1} ms "
+            + $"before the device starts it, plus the driver's own buffer), "
+            + $"{_audio.Submitted} blocks submitted, {_audio.Dropped} dropped, "
+            + $"{_audio.Padded} padded with silence.");
     }
 
     protected override void Dispose(bool disposing)
@@ -236,6 +281,7 @@ public sealed class QuarpGame : Game
         {
             _session?.Dispose();
             _overlay?.Dispose();
+            _audio?.Dispose();
         }
         base.Dispose(disposing);
     }

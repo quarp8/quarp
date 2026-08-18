@@ -35,11 +35,10 @@ namespace Quarp.Analyzers;
 /// analyzer just computed. The analyzer is the enforcement point, which is why it also runs
 /// inside <c>CartCompiler</c> and not only in the author's editor.</para>
 ///
-/// <para>Revisit when audio lands in M3: <c>Sfx</c> and <c>Music</c> are silent no-ops in v1
-/// and address the mixer rather than simulation state, so they are not banned here. Once
-/// they drive a PCM stream that CI compares between architectures, playing a sound from
-/// <c>Draw</c> becomes the same class of bug and belongs in
-/// <see cref="MutatingConsoleApi"/>.</para>
+/// <para>Audio landed in M3, and with it <c>Sfx</c> and <c>Music</c> joined the banned list in
+/// <see cref="MutatingConsoleApi"/>. They now drive a PCM stream the cross-architecture CI job
+/// compares block by block, and Draw is not resimulated — so starting a sound there is the
+/// same class of bug as drawing a random number, and it is caught the same way.</para>
 /// </summary>
 [DiagnosticAnalyzer(LanguageNames.CSharp)]
 public sealed class DrawPurityAnalyzer : DiagnosticAnalyzer

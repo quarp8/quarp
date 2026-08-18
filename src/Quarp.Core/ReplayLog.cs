@@ -1,4 +1,5 @@
 using System.Buffers.Binary;
+using Quarp.Api;
 
 namespace Quarp.Core;
 
@@ -37,6 +38,15 @@ public sealed class ReplayLog
 
     /// <summary>Ticks a single run can cover before a new one starts — the u16 repeat field's ceiling.</summary>
     public const int MaxRepeat = ushort.MaxValue;
+
+    /// <summary>
+    /// The bits a v1 button mask is allowed to set: one per <see cref="Button"/>, which today
+    /// means bits 0 to <see cref="Button.Start"/> and a reserved bit 7.
+    /// Derived from the enum instead of spelled out, so an eighth button cannot quietly
+    /// disagree with the file format — adding one widens this constant, the reserved bit
+    /// disappears, and that is a format version bump, not a patch (REPLAY-FORMAT §3, §7).
+    /// </summary>
+    public const byte KnownButtons = (1 << ((int)Button.Start + 1)) - 1;
 
     /// <summary>
     /// Ceiling on a log's length. The file's tick count is a u32, so it can name more ticks
@@ -310,7 +320,8 @@ public sealed class ReplayLog
 
     /// <summary>
     /// Parses a whole .qrpr image. Rejects a bad magic, an unknown version, a truncated body,
-    /// a run that overruns the declared tick count, and trailing bytes after the last run.
+    /// a mask that names a button this build does not have, a run that overruns the declared
+    /// tick count, and trailing bytes after the last run.
     /// </summary>
     public static ReplayLog FromBytes(ReadOnlySpan<byte> data, out ReplayHeader header)
     {
@@ -423,15 +434,26 @@ public sealed class ReplayLog
 
     /// <summary>
     /// Appends a run straight from the file. Runs are kept exactly as recorded — adjacent runs
-    /// with equal input are legal (that is what the 65535 ceiling produces) and are not merged,
-    /// so read-then-write is byte-identical.
+    /// with equal input are legal (that is what the 65535 ceiling produces, REPLAY-FORMAT §3)
+    /// and are not merged, so read-then-write is byte-identical.
     /// </summary>
     private void AppendRun(ReadOnlySpan<byte> source, int declaredTicks)
     {
+        byte player0 = source[0];
+        byte player1 = source[1];
         ushort repeat = BinaryPrimitives.ReadUInt16LittleEndian(source[2..]);
         if (repeat == 0)
         {
             throw new ReplayFormatException($"Replay run {_runCount} has a repeat count of 0.");
+        }
+        if (((player0 | player1) & ~KnownButtons) != 0)
+        {
+            // Bit 7 is reserved for an eighth button (REPLAY-FORMAT §3). Reading it as "nothing
+            // held" would look harmless today and replay somebody else's game wrongly the day
+            // the bit means something, so the file is refused while the refusal is still cheap.
+            throw new ReplayFormatException(
+                $"Replay run {_runCount} names a button this build does not have: masks "
+                + $"0x{player0:x2} and 0x{player1:x2}, only 0x{KnownButtons:x2} is defined.");
         }
         if (repeat > declaredTicks - _tickCount)
         {
@@ -446,8 +468,8 @@ public sealed class ReplayLog
         _runs[_runCount++] = new Run
         {
             StartTick = _tickCount,
-            Player0 = source[0],
-            Player1 = source[1],
+            Player0 = player0,
+            Player1 = player1,
             Repeat = repeat,
         };
         _tickCount += repeat;

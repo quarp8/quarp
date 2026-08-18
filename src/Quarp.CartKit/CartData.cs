@@ -26,4 +26,22 @@ public sealed class CartData
 
     /// <summary>Sprite flags: 8 flag bits per sprite, 256 sprites.</summary>
     public required byte[] Flags { get; init; }
+
+    /// <summary>
+    /// The SFX bank as the console consumes it: <see cref="AudioFormat.SfxPayloadSize"/> bytes,
+    /// 64 slot headers followed by 64 x 32 step words, with the file header of <c>sfx.bin</c>
+    /// already stripped and every field already validated (docs/AUDIO-FORMAT.md §2).
+    ///
+    /// <para>Not <c>required</c>, unlike the graphics: the default is an all-zero bank, which is
+    /// exactly "64 empty slots" — a cart without audio is silent, not broken, and every existing
+    /// construction site keeps meaning what it meant.</para>
+    /// </summary>
+    public byte[] Sfx { get; init; } = AudioFormat.EmptySfxPayload();
+
+    /// <summary>
+    /// The music bank as the console consumes it: <see cref="AudioFormat.MusicPayloadSize"/> bytes,
+    /// 64 x 4 channel bytes followed by 64 pattern flag bytes (docs/AUDIO-FORMAT.md §4). All-zero
+    /// means every pattern is empty, i.e. no music.
+    /// </summary>
+    public byte[] Music { get; init; } = AudioFormat.EmptyMusicPayload();
 }

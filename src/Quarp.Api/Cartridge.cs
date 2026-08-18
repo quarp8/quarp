@@ -117,12 +117,22 @@ public abstract class Cartridge
     /// <summary>True only on the tick the button went down — the one to use for menus and turns.</summary>
     protected bool Btnp(Button button, int player = 0) => Q.Btnp(button, player);
 
-    // --- audio (M3 stubs) ---
+    // --- audio (SPEC-8 §4) ---
 
-    /// <summary>Plays a sound effect, on a free channel by default. Silent no-op until M3.</summary>
+    /// <summary>
+    /// Plays sound effect 0-63. The default channel of -1 takes the lowest idle channel, else
+    /// the lowest one the music is using, else plays nothing. Out-of-range ids, out-of-range
+    /// channels and empty slots are silent.
+    /// <para>Changes simulation state: use it in Update or Init, never in Draw, or replays and
+    /// rewind diverge on sound (SPEC-8 §7).</para>
+    /// </summary>
     protected void Sfx(int id, int channel = -1) => Q.Sfx(id, channel);
 
-    /// <summary>Starts a music pattern, or stops music with the default -1. Silent no-op until M3.</summary>
+    /// <summary>
+    /// Starts music pattern 0-63, or stops the music with the default -1. Pattern channel N
+    /// plays on chip channel N, yielding to a sound effect already holding it.
+    /// <para>Changes simulation state: use it in Update or Init, never in Draw.</para>
+    /// </summary>
     protected void Music(int pattern = -1) => Q.Music(pattern);
 
     // --- random / persistence / time ---

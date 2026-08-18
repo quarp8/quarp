@@ -1,13 +1,15 @@
 using Quarp.Api;
+using Quarp.Core.Audio;
 
 namespace Quarp.Core;
 
 /// <summary>
-/// The QUARP-8 virtual console: owns every piece of simulation state — framebuffer, sprite
-/// sheet, map, sprite flags, camera/clip, palette remaps, RNG, input, tick counter and
-/// persistent memory — and implements the whole cartridge-facing API.
-/// Deterministic by construction: one <see cref="InputState"/> in per tick, framebuffer out;
-/// no clocks, no files, no allocations in the tick path (ARCHITECTURE §2, CODESTYLE).
+/// The QUARP-8 virtual console: owns every piece of simulation state — framebuffer, sound
+/// chip, sprite sheet, map, sprite flags, camera/clip, palette remaps, RNG, input, tick counter
+/// and persistent memory — and implements the whole cartridge-facing API.
+/// Deterministic by construction: one <see cref="InputState"/> in per tick, a framebuffer and
+/// an <see cref="AudioBlock"/> out; no clocks, no files, no allocations in the tick path
+/// (ARCHITECTURE §2, CODESTYLE).
 /// Cartridge exceptions are never swallowed — they propagate to the caller (the shell
 /// decides what to show).
 /// Drawing model: camera offset first, then clip rectangle, then palette remap; every
@@ -16,6 +18,10 @@ namespace Quarp.Core;
 /// contributes is the ability to be put back exactly as it started — <see cref="ResetAssets"/>,
 /// <see cref="LoadPersistent"/> and the seed on <see cref="AttachCart"/> restore all three
 /// simulation inputs — and <see cref="TickUpdateOnly"/>, a tick whose frame nobody needs.
+/// <para>Sound is simulation state, not presentation: the <see cref="Apu"/> resets with the
+/// console and is advanced from the shared tick path, so <see cref="TickUpdateOnly"/> — the
+/// tick a rewind runs thousands of — produces exactly the audio a drawn tick would have. If it
+/// did not, a rewound game would come back in the right place playing the wrong note.</para>
 /// </summary>
 public sealed class VirtualConsole : IConsoleApi
 {
@@ -50,6 +56,11 @@ public sealed class VirtualConsole : IConsoleApi
     private readonly bool[] _palt = new bool[Palette.VisibleCount];
     private readonly int[] _persistent = new int[PersistentSlots];
 
+    // The sound chip. Its bank is cartridge data (no boot image needed — nothing can write it
+    // from a cartridge), its channels and sequencers are simulation state and reset with
+    // everything else.
+    private readonly Apu _apu = new();
+
     private int _cameraX;
     private int _cameraY;
     private int _clipX0;
@@ -72,6 +83,21 @@ public sealed class VirtualConsole : IConsoleApi
 
     public Framebuffer Framebuffer { get; }
 
+    /// <summary>
+    /// The sound chip. Exposed so a shell can read <see cref="Audio.Apu.Block"/> after a tick
+    /// and so tests can inspect channels; cartridges reach it only through <see cref="Sfx"/>
+    /// and <see cref="Music"/>. Do not call <see cref="Audio.Apu.RenderTick"/> on it — the
+    /// console does that, once per tick, from the path both tick methods share.
+    /// </summary>
+    public Apu Apu => _apu;
+
+    /// <summary>
+    /// The audio the last tick produced: exactly 800 samples of 16-bit mono PCM, the sound
+    /// counterpart of <see cref="Framebuffer"/>. Its identity never changes, so a shell caches
+    /// it once. Before the first tick, and after any reset, it is silence.
+    /// </summary>
+    public AudioBlock AudioBlock => _apu.Block;
+
     /// <summary>Set when Dset actually changes a slot; the shell clears it after writing save.dat.</summary>
     public bool PersistentDirty { get; set; }
 
@@ -81,9 +107,16 @@ public sealed class VirtualConsole : IConsoleApi
     /// <summary>
     /// Creates a console with optional cartridge assets, copied in defensively:
     /// sheet 128x128 bytes (color indices 0-15), map 256x72 bytes (row-major tiles),
-    /// flags 256 bytes. Missing assets stay zeroed.
+    /// flags 256 bytes, and the two audio payloads (see <see cref="LoadAudio"/>).
+    /// Missing assets stay zeroed, which for audio means a silent bank.
     /// </summary>
-    public VirtualConsole(ConsoleProfile profile, byte[]? sheet = null, byte[]? map = null, byte[]? flags = null)
+    public VirtualConsole(
+        ConsoleProfile profile,
+        byte[]? sheet = null,
+        byte[]? map = null,
+        byte[]? flags = null,
+        byte[]? sfx = null,
+        byte[]? music = null)
     {
         Profile = profile;
         Framebuffer = new Framebuffer(profile);
@@ -91,6 +124,7 @@ public sealed class VirtualConsole : IConsoleApi
         _height = Framebuffer.Height;
         _pixels = Framebuffer.Pixels;
         LoadAssets(sheet, map, flags);
+        LoadAudio(sfx, music);
         ResetRuntimeState(0);
     }
 
@@ -111,6 +145,30 @@ public sealed class VirtualConsole : IConsoleApi
         CopyAsset(flags, _flagsImage);
         ResetAssets();
     }
+
+    /// <summary>
+    /// Replaces the cartridge's sound data from the two header-stripped payloads the cartridge
+    /// pipeline produces — <c>sfx.bin</c>'s 4352 bytes and <c>music.bin</c>'s 320
+    /// (docs/AUDIO-FORMAT.md; <see cref="AudioBank.LoadSfxPayload"/> documents the layout).
+    /// A null or empty payload means an empty bank, so a cartridge without sound is silent
+    /// rather than broken. Anything currently playing stops.
+    ///
+    /// <para>Unlike sheet, map and flags this needs no boot image: profile 8 gives a cartridge
+    /// no way to write its own sound data, so the bank cannot drift during a run and a
+    /// resimulation reads the same bytes the original run did.</para>
+    /// </summary>
+    public void LoadAudio(byte[]? sfx, byte[]? music)
+    {
+        _apu.LoadSfxPayload(sfx);
+        _apu.LoadMusicPayload(music);
+    }
+
+    /// <summary>
+    /// Replaces the cartridge's sound data with an already-decoded bank, copied in defensively.
+    /// The structured door into the same room as <see cref="LoadAudio(byte[], byte[])"/> — for
+    /// tests and tools that build a bank in memory instead of parsing one.
+    /// </summary>
+    public void LoadAudio(AudioBank? bank) => _apu.LoadBank(bank);
 
     /// <summary>
     /// Restores sheet, map and flags to the assets last loaded, undoing every Sset/Mset/Fset the
@@ -163,13 +221,14 @@ public sealed class VirtualConsole : IConsoleApi
     }
 
     /// <summary>
-    /// Advances the simulation one tick: Update, then Draw (SPEC-8 §7).
+    /// Advances the simulation one tick: Update, then the tick's audio, then Draw (SPEC-8 §7).
     /// Cartridge exceptions propagate untouched — the shell pauses and reports them.
     /// </summary>
     public void Tick(InputState input)
     {
         Cartridge cart = BeginTick(input);
         cart.Update();
+        _apu.RenderTick();
         cart.Draw();
     }
 
@@ -178,11 +237,17 @@ public sealed class VirtualConsole : IConsoleApi
     /// <see cref="Tick"/> moves it — Draw changes nothing a later tick can observe (SPEC-8 §7) —
     /// but the framebuffer is left alone. This is what makes rewinding affordable: a seek
     /// resimulates thousands of ticks this way and draws only the frame someone will look at.
+    /// <para>Audio is <em>not</em> skipped here. The frame of a tick nobody watches can be
+    /// skipped because nothing reads it back; the audio of that tick cannot, because the chip's
+    /// phase accumulators, envelopes and noise register carry into the next tick. Both tick
+    /// methods therefore render sound through the same call in the same place, which is also
+    /// the reason there is no second, cheaper synthesis path to disagree with the first.</para>
     /// </summary>
     public void TickUpdateOnly(InputState input)
     {
         Cartridge cart = BeginTick(input);
         cart.Update();
+        _apu.RenderTick();
     }
 
     /// <summary>Shared tick prologue: rotate input, count the tick, hand back the live cartridge.</summary>
@@ -203,6 +268,7 @@ public sealed class VirtualConsole : IConsoleApi
         Pal();
         Palt();
         Srand(seed);
+        _apu.Reset();
         _input = default;
         _previous = default;
         _ticks = 0;
@@ -748,15 +814,22 @@ public sealed class VirtualConsole : IConsoleApi
     public bool Btnp(Button button, int player = 0) =>
         _input.IsDown(player, button) && !_previous.IsDown(player, button);
 
-    // --- audio (M3; silent no-op stubs in M1 by design) ---
+    // --- audio (SPEC-8 §4; the chip itself is Quarp.Core.Audio.Apu) ---
 
-    public void Sfx(int id, int channel = -1)
-    {
-    }
+    /// <summary>
+    /// Starts SFX <paramref name="id"/> (0-63). <paramref name="channel"/> 0-3 takes that
+    /// channel outright; -1, the default, picks the lowest idle channel, else the lowest one
+    /// the music is using, else does nothing. Out-of-range arguments and empty slots are
+    /// silent no-ops. Simulation state, so never from Draw (QRP1004).
+    /// </summary>
+    public void Sfx(int id, int channel = -1) => _apu.PlaySfx(id, channel);
 
-    public void Music(int pattern = -1)
-    {
-    }
+    /// <summary>
+    /// Starts music pattern <paramref name="pattern"/> (0-63); a negative pattern — including
+    /// the default — stops the music, and 64 or more is a no-op. Simulation state, so never
+    /// from Draw (QRP1004).
+    /// </summary>
+    public void Music(int pattern = -1) => _apu.PlayMusic(pattern);
 
     // --- deterministic random ---
 

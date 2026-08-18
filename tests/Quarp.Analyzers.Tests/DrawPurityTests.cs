@@ -5,7 +5,7 @@ namespace Quarp.Analyzers.Tests;
 /// <summary>
 /// QRP1004 — a state-mutating console call reached from <c>Draw</c>.
 ///
-/// The two halves of this file matter equally. The first proves the rule fires on the seven
+/// The two halves of this file matter equally. The first proves the rule fires on the nine
 /// members that write simulation state, directly and through Draw-only helpers; the second
 /// proves it stays quiet on the code cartridges are actually made of — drawing, reads,
 /// helpers shared with <c>Update</c>, and the engine's own source. A determinism rule that
@@ -18,7 +18,7 @@ public sealed class DrawPurityTests
     private static Task VerifyManyAsync(params string[] sources) =>
         CartVerifier.VerifyManyAsync<DrawPurityAnalyzer>(sources);
 
-    // --- fires: the seven mutating members, written straight into Draw ---
+    // --- fires: the nine mutating members, written straight into Draw ---
 
     /// <summary>The realistic case: a sparkle drawn with Rnd advances the RNG, which is simulation state.</summary>
     [Fact]
@@ -364,13 +364,49 @@ public sealed class DrawPurityTests
             }
         """));
 
-    /// <summary>The audio stubs are not simulation state in v1 — see the note in DrawPurityAnalyzer about M3.</summary>
+    /// <summary>
+    /// Inverted in M3. This asserted the opposite for two milestones, while Sfx and Music were
+    /// no-ops. They now write channel and sequencer state inside the APU, and Draw runs once
+    /// per frame on a clock that has nothing to do with ticks — at 30 fps it runs half as
+    /// often, during a rewind it does not run at all. A beep started here plays a different
+    /// number of times on every run and the PCM hash the CI compares stops matching.
+    /// </summary>
     [Fact]
-    public Task AudioCallsInDrawAreFine() => VerifyAsync(CartVerifier.Cart("""
+    public Task AudioCallsInDrawAreRejected() => VerifyAsync(CartVerifier.Cart("""
             public override void Draw()
             {
-                Sfx(0);
-                Music(1);
+                {|QRP1004:Sfx|}(0);
+                {|QRP1004:Music|}(1);
+            }
+        """));
+
+    /// <summary>The other half: sound asked for on the tick path is exactly where it belongs.</summary>
+    [Fact]
+    public Task AudioCallsInUpdateAndInitAreFine() => VerifyAsync(CartVerifier.Cart("""
+            public override void Init()
+            {
+                Music(0);
+            }
+
+            public override void Update()
+            {
+                Sfx(3);
+                Sfx(4, 2);
+                Music();
+            }
+        """));
+
+    /// <summary>Through a Draw-only helper, like every other mutating call.</summary>
+    [Fact]
+    public Task AudioCallInADrawOnlyHelperIsRejected() => VerifyAsync(CartVerifier.Cart("""
+            public override void Draw()
+            {
+                Chime();
+            }
+
+            private void Chime()
+            {
+                {|QRP1004:Sfx|}(1);
             }
         """));
 

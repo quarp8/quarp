@@ -2,7 +2,7 @@ namespace Quarp.CartKit;
 
 /// <summary>
 /// Watches a cartridge folder for edits — manifest.json, src/**/*.cs, gfx.png, map.bin,
-/// flags.bin — and turns bursts of FileSystemWatcher events into one debounced reload flag
+/// flags.bin, sfx.bin, music.bin — and turns bursts of FileSystemWatcher events into one debounced reload flag
 /// (150 ms, M1 work order). No callbacks into engine threads: the shell polls
 /// <see cref="ConsumeReloadRequest"/> once per frame on its main thread and performs
 /// the rebuild itself. The .cs suffix filter keeps editor temp files (atomic-save
@@ -96,10 +96,15 @@ public sealed class CartWatcher : IDisposable
         }
         // manifest.json belongs here too: it is a load-time input (name, author, profile)
         // and a cart that fails to load because of it must recover the moment it is fixed.
+        // The compiled banks, not sfx.txt/music.txt: the console loads the binaries, so a reload
+        // is due when `quarp audio build` produces new ones — reacting to the text would reload
+        // on every keystroke of an editor that autosaves and change nothing that plays.
         return string.Equals(relative, "manifest.json", StringComparison.OrdinalIgnoreCase)
             || string.Equals(relative, "gfx.png", StringComparison.OrdinalIgnoreCase)
             || string.Equals(relative, "map.bin", StringComparison.OrdinalIgnoreCase)
-            || string.Equals(relative, "flags.bin", StringComparison.OrdinalIgnoreCase);
+            || string.Equals(relative, "flags.bin", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(relative, "sfx.bin", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(relative, "music.bin", StringComparison.OrdinalIgnoreCase);
     }
 
     private void Mark()

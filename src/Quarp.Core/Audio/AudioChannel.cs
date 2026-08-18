@@ -38,8 +38,10 @@ internal struct AudioChannel
     /// <summary>
     /// Ticks since the SFX started, masked to stay well inside <c>int</c> forever. Vibrato and
     /// arpeggio run off this rather than off <see cref="StepTick"/>, so they stay continuous
-    /// when a step boundary passes underneath them. The mask is a multiple of both their
-    /// periods, so even the wrap is seamless.
+    /// when a step boundary passes underneath them. The mask spans a power of two, which is a
+    /// multiple of the vibrato period and of an arpeggio over four or two sounding steps, so
+    /// for those the wrap is seamless; an arpeggio over three steps takes one step at the wrap,
+    /// identically on every machine, 77 hours into a single uninterrupted sound.
     /// </summary>
     public int Age;
 

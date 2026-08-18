@@ -13,7 +13,13 @@ namespace Quarp.Core.Audio;
 ///
 /// <para><b>Volume 0 is a rest</b>, not "quiet": there is no separate note-off, because a step
 /// that plays nothing is exactly a step at volume 0. That is also why <c>default</c> is
-/// silence, which makes an all-zero sfx bank mean "no sound" without a special case anywhere.</para>
+/// silence, which makes an all-zero sfx bank mean "no sound" without a special case anywhere.
+/// A rest makes no sound of its own whatever the other fields hold, but it is not inert: the
+/// channel keeps running through it, its <see cref="Note"/> is where a following
+/// <see cref="NoteEffect.Slide"/> slides <em>from</em>, and the phase advances at that note's
+/// frequency. Since <c>sfx.bin</c> spells a rest one way only — the zero word, whose note is 0
+/// — that "from" is C2 and is the same on every machine. An arpeggio, by contrast, skips
+/// rests outright (<see cref="Apu"/>).</para>
 ///
 /// <para>The constructor clamps instead of throwing. Steps arrive from a cartridge file, that
 /// is to say from an untrusted source, and the console answers bad data by doing something

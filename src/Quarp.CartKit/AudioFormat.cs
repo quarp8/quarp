@@ -130,6 +130,10 @@ public static class AudioFormat
     /// "reserved for later" in the sense of a field a future version may quietly start using —
     /// it exists so that a bank written by a newer Quarp fails loudly here instead of playing
     /// a wrong note (the same argument as bit 7 of a replay's button mask).
+    ///
+    /// <para>This is the bit layout and nothing else: it will happily pack a note at volume 0,
+    /// which is <b>not</b> a word a bank may contain. A silent step has exactly one spelling,
+    /// the zero word, and <see cref="ValidateSfxPayload"/> is where that is enforced.</para>
     /// </summary>
     public static ushort PackStep(int note, int wave, int volume, int effect)
     {
@@ -210,7 +214,11 @@ public static class AudioFormat
     public static byte PatternFlags(ReadOnlySpan<byte> musicPayload, int pattern) =>
         musicPayload[MusicChannelTableSize + pattern];
 
-    /// <summary>True when no channel plays in this pattern — the end of a song.</summary>
+    /// <summary>
+    /// True when no channel plays in this pattern. That is a bar of rest, not the end of the
+    /// song: the sequencer holds it for <c>Apu.MinPatternTicks</c> and moves on, and what ends a
+    /// song is <see cref="PatternFlagStop"/> or running off the end of the 64 patterns.
+    /// </summary>
     public static bool PatternIsEmpty(ReadOnlySpan<byte> musicPayload, int pattern)
     {
         for (int channel = 0; channel < MusicChannelCount; channel++)
@@ -280,6 +288,13 @@ public static class AudioFormat
     /// Every rule a slot table and a step table have to obey. All of them are cheap, and all of
     /// them exist because the payload reaches a synthesizer that runs 60 times a second and must
     /// not be checking ranges there: what the APU reads has already been proven to be in range.
+    ///
+    /// <para>Two of the rules are about <b>canonical encoding</b> rather than range: a step the
+    /// slot does not play, and a step at volume 0, must both be the zero word. Neither can be
+    /// heard, so neither may be free to differ — the same rule music.bin applies to a silent
+    /// channel that still remembers a slot, and for the same three reasons: byte-comparing two
+    /// banks stays meaningful, a cartridge's identity stops depending on inaudible edits, and a
+    /// rest has one spelling instead of 8192.</para>
     /// </summary>
     public static void ValidateSfxPayload(ReadOnlySpan<byte> payload, string sourceName)
     {
@@ -338,6 +353,7 @@ public static class AudioFormat
 
         for (int slot = 0; slot < SfxSlotCount; slot++)
         {
+            int length = SlotLength(payload, slot);
             for (int step = 0; step < SfxStepCount; step++)
             {
                 ushort word = Step(payload, slot, step);
@@ -360,6 +376,28 @@ public static class AudioFormat
                     throw new CartLoadException(
                         $"{sourceName}: slot {slot} step {step}: effect {effect}, profile 8 defines "
                         + $"0..{EffectCount - 1} (word 0x{word:x4}).");
+                }
+                if (word == 0)
+                {
+                    continue;
+                }
+                // The two canonicity rules, and the same argument the music bank makes about a
+                // silent channel that still remembers a slot: a field nobody can hear must not be
+                // able to change the bytes. Two banks that sound alike would otherwise compare
+                // unequal, and a cartridge's identity — hence every replay recorded against it —
+                // would move when an author edited something inaudible.
+                if (step >= length)
+                {
+                    throw new CartLoadException(
+                        $"{sourceName}: slot {slot} step {step}: the slot plays {length} step(s), so this step is "
+                        + $"never heard and must be the zero word (word 0x{word:x4}).");
+                }
+                if (Volume(word) == 0)
+                {
+                    throw new CartLoadException(
+                        $"{sourceName}: slot {slot} step {step}: volume 0 silences the step, so a rest is the zero "
+                        + $"word and nothing else (word 0x{word:x4} still names note {Note(word)}, wave {wave}, "
+                        + $"effect {effect}).");
                 }
             }
         }

@@ -36,6 +36,13 @@ public sealed class CartHost : IDisposable
     /// Loads a compiled cartridge assembly (bytes from <see cref="CartCompiler"/>, embedded
     /// PDB inside) and instantiates its single Cartridge subclass. Zero or more than one
     /// subclass is a <see cref="CartLoadException"/>.
+    ///
+    /// <para>One stream, no symbol stream, on purpose. The PDB is <em>inside</em> these bytes
+    /// (<c>DebugInformationFormat.Embedded</c>), so the runtime finds the symbols in the image it
+    /// was handed and cart stack traces keep their file and line — measured. The trap to remember
+    /// before "improving" this: emit a separate portable PDB instead, and this same call loses
+    /// line numbers silently, with nothing failing to say that the M1 milestone criterion just
+    /// went away.</para>
     /// </summary>
     public static CartHost Load(byte[] assemblyBytes)
     {

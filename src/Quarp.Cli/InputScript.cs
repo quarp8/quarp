@@ -1,3 +1,4 @@
+using System.Globalization;
 using Quarp.Api;
 using Quarp.Core;
 
@@ -79,7 +80,13 @@ public sealed class InputScript
             {
                 throw new FormatException($"input entry '{entry}' has no ':' — write it as tick:buttons.");
             }
-            if (!int.TryParse(entry.AsSpan(0, colon), out int tick) || tick < 0)
+            // Invariant and NumberStyles.None, like every other number this tool reads
+            // (SPEC-8 §7): a track file is an input of a reproduction, so the tick it names has
+            // to mean the same integer on the machine that records the replay and on the one
+            // that plays it back. The strict style also keeps "60 " and "+60" out of a format
+            // whose only legal tick is a run of digits.
+            if (!int.TryParse(entry.AsSpan(0, colon), NumberStyles.None, CultureInfo.InvariantCulture, out int tick)
+                || tick < 0)
             {
                 throw new FormatException($"input entry '{entry}' does not start with a tick number.");
             }

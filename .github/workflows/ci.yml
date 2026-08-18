@@ -77,12 +77,23 @@ env:
   SIM_TICKS: '600'
   SIM_EVERY: '100'
 
-  # FNV-1a 64 over N blocks of 800 zero samples each — the digest a run prints when nothing
-  # ever sounds. Pure functions of the tick count and of nothing else, so they never need
-  # re-measuring; they exist so "the cart went mute" cannot pass as "the hashes still match
-  # between architectures", which it otherwise would, on both architectures at once.
-  SILENT_AUDIO_GOLDEN: '220acbc2c817fb25'   # 3000 ticks
-  SILENT_AUDIO_SIM: '54738d7161a01b25'      # 600 ticks
+  # There is deliberately no SILENT_AUDIO_* constant here any more. The digest a run prints when
+  # nothing ever sounds — FNV-1a 64 over N blocks of 800 zero samples — is what the two "the cart
+  # went mute" checks below compare against, and it is a pure function of the tick count. Written
+  # down, it is correct for exactly one value of GOLDEN_TICKS and one of SIM_TICKS: change either
+  # number above and the constant stays behind, the check degenerates into "two unrelated hashes
+  # differ", and *that* passes forever, including on the day the banks stop reaching the console.
+  # The determinism job derives both values from GOLDEN_TICKS and SIM_TICKS with
+  # `quarp audio silence --ticks N`, which folds the real APU's real blocks through the same
+  # FrameHash a real run uses, so there is no second copy of the formula to drift out of step.
+
+  # The one silence value that is still written down, because it is not a measurement: the
+  # digest of *nothing*, which is FrameHash.Empty, which is the FNV-1a 64 offset basis. It is a
+  # property of the hash function and of no tick count whatever, so unlike SILENT_AUDIO_* it
+  # cannot fall out of date when the numbers above move — it changes only if the project changes
+  # its hash, which re-pins every golden in the repository on the same day. The determinism job
+  # uses it to check that `quarp audio silence` starts its fold from the right seed.
+  FNV_EMPTY: 'cbf29ce484222325'
 
   # Built once per job, then invoked directly. See the comment in the determinism job.
   QUARP_DLL: 'src/Quarp.Cli/bin/Release/net10.0/quarp.dll'
@@ -242,6 +253,44 @@ jobs:
             printf '%s\n' "$value"
           }
 
+          # The digest of a run of N ticks in which nothing ever sounds — derived here, never
+          # written down. Both mute checks below compare a real run's PCM against it, and a
+          # pasted constant would be right for one tick count and silently wrong for every
+          # other, because "the two hashes differ" is exactly what a *passing* mute check looks
+          # like. `quarp audio silence` runs the real APU with an empty bank and folds its
+          # blocks through the same FrameHash the console does, so this is the same arithmetic
+          # a real run performs and not a second copy of it.
+          silent_audio_of() {
+            # Two statements, not one: `local a=$1 b=$a` expands every word before it assigns
+            # any of them, so b would be empty — and under `set -u`, unset.
+            local ticks="$1"
+            local file="$out/silence-${ticks}.log"
+            if ! run_quarp audio silence --ticks "$ticks" > "$file"; then
+              cat "$file" >&2
+              echo "::error title=quarp audio silence failed::Computing the silent digest for ${ticks} ticks exited non-zero on ${arch}." >&2
+              return 1
+            fi
+            audio_hash_of "$file" "quarp audio silence --ticks ${ticks}"
+          }
+          silent_golden="$(silent_audio_of "$GOLDEN_TICKS")"
+          silent_sim="$(silent_audio_of "$SIM_TICKS")"
+          echo "silence: ${GOLDEN_TICKS} ticks -> ${silent_golden}, ${SIM_TICKS} ticks -> ${silent_sim}"
+
+          # ...and the derivation has to actually depend on the tick count. A command that
+          # ignored --ticks would hand both mute checks the same number; each would still be
+          # comparing a real digest against something, and both would pass forever.
+          if [ "$GOLDEN_TICKS" != "$SIM_TICKS" ] && [ "$silent_golden" = "$silent_sim" ]; then
+            die "quarp audio silence ignores --ticks" "It printed ${silent_golden} for both ${GOLDEN_TICKS} and ${SIM_TICKS} ticks, so the two mute checks below would both be comparing against the same constant."
+          fi
+
+          # ...and it has to start its fold from the right seed, which the check above cannot
+          # see: a command that folded one block too many, or seeded its digest with zero
+          # instead of the basis, still varies with --ticks and still looks entirely plausible.
+          # Zero ticks folds nothing, so the only correct answer is FrameHash.Empty — see the
+          # FNV_EMPTY comment in env: for why writing *that* one down cannot rot.
+          silent_zero="$(silent_audio_of 0)"
+          [ "$silent_zero" = "$FNV_EMPTY" ] || die "quarp audio silence disagrees with FrameHash" "Over zero ticks it printed ${silent_zero}, but folding no blocks at all must give FrameHash.Empty (${FNV_EMPTY}). The two derived digests below come from the same code, so they are wrong by the same amount, and each mute check would then be comparing a real digest against a number no real run can ever produce — which passes."
+
           # ------------------------------------------------------------------
           # 1. THE PROOF: the committed golden replay of live gameplay, played twice.
           # ------------------------------------------------------------------
@@ -286,7 +335,7 @@ jobs:
           # with the digest of the same number of *silent* blocks — a fixed number, since the
           # samples are all zero — so a build where the banks quietly stopped reaching the
           # console fails here instead of shipping a mute cartridge with a green tick.
-          [ "$golden_audio" != "$SILENT_AUDIO_GOLDEN" ] || die "The golden replay is silent" "Its PCM digest over ${GOLDEN_TICKS} ticks equals the digest of ${GOLDEN_TICKS} silent blocks (${SILENT_AUDIO_GOLDEN}). carts/snake has sfx.bin and music.bin and asks for both, so either the banks are not reaching the console or the APU produced nothing."
+          [ "$golden_audio" != "$silent_golden" ] || die "The golden replay is silent" "Its PCM digest over ${GOLDEN_TICKS} ticks equals the digest of ${GOLDEN_TICKS} silent blocks (${silent_golden}). carts/snake has sfx.bin and music.bin and asks for both, so either the banks are not reaching the console or the APU produced nothing."
 
           # ------------------------------------------------------------------
           # 2. The golden must be reproducible from its input track, byte for byte, on this
@@ -333,7 +382,7 @@ jobs:
           sim_audio1="$(audio_hash_of "$out/sim-1.log" 'quarp sim (run 1)')"
           sim_audio2="$(audio_hash_of "$out/sim-2.log" 'quarp sim (run 2)')"
           [ "$sim_audio1" = "$sim_audio2" ] || die "Non-deterministic sound on one machine" "Two identical runs of quarp sim on ${arch} produce different PCM: ${sim_audio1} vs ${sim_audio2}"
-          [ "$sim_audio1" != "$SILENT_AUDIO_SIM" ] || die "The idle sim is silent" "Its PCM digest over ${SIM_TICKS} ticks equals the digest of ${SIM_TICKS} silent blocks (${SILENT_AUDIO_SIM}); the snake starts its theme in Init, so silence here means the bank never arrived."
+          [ "$sim_audio1" != "$silent_sim" ] || die "The idle sim is silent" "Its PCM digest over ${SIM_TICKS} ticks equals the digest of ${SIM_TICKS} silent blocks (${silent_sim}); the snake starts its theme in Init, so silence here means the bank never arrived."
           checkpoints_of "$out/sim-1.log" > "$out/sim-checkpoints.txt"
 
           # ------------------------------------------------------------------
@@ -355,6 +404,10 @@ jobs:
             echo "sim_ticks=${SIM_TICKS}"
             echo "sim_final=${sim1}"
             echo "sim_audio=${sim_audio1}"
+            # Recorded next to the digests they guard, so the report shows what "not mute" was
+            # measured against instead of asking the reader to trust that it was measured.
+            echo "silent_golden=${silent_golden}"
+            echo "silent_sim=${silent_sim}"
           } > "$out/hashes.env"
 
           echo "--- determinism report (${arch}) ---"

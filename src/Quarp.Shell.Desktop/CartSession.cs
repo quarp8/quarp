@@ -76,6 +76,17 @@ public sealed class CartSession : IDisposable
 
     private bool _crashed;
     private bool _paused;
+
+    /// <summary>Armed <c>--break-at</c> target, cleared the moment it fires. Null = run freely.</summary>
+    private int? _breakAt;
+
+    /// <summary>True while the session is standing on the tick a <c>--break-at</c> stopped it at.</summary>
+    private bool _atBreak;
+
+    /// <summary>The tick the break stopped on, and the number the author asked for — for the overlay.</summary>
+    private int _breakStoppedAtTick = -1;
+    private int _breakRequested = -1;
+
     private int _speedIndex = TimeSpeed.NormalIndex;
     private long _lastSaveTick;
     private long _reloadRetryTick; // 0 = no retry armed.
@@ -91,8 +102,8 @@ public sealed class CartSession : IDisposable
     private long _flashUntilMs;
 
     /// <summary>Everything <see cref="RefreshStatus"/> reads, so an unchanged frame formats nothing.</summary>
-    private (bool Crashed, bool Paused, int Speed, int Tick, string? Replay, string? Flash, bool InPlayback)
-        _statusSignature = (false, false, -1, -1, null, null, false);
+    private (bool Crashed, bool Paused, int Speed, int Tick, string? Replay, string? Flash, bool InPlayback, bool AtBreak)
+        _statusSignature = (false, false, -1, -1, null, null, false, false);
 
     private CartSession(
         string cartPath,
@@ -141,6 +152,36 @@ public sealed class CartSession : IDisposable
 
     /// <summary>True when the simulation is not advancing on its own: paused, crashed, or rewinding.</summary>
     public bool IsPaused => _paused || _crashed;
+
+    /// <summary>
+    /// <c>quarp run &lt;cart&gt; --break-at N</c>: the tick whose <c>Update</c> the session must
+    /// stop <b>before</b>, or null to run freely. Set once, before the first
+    /// <see cref="Update(int, InputState, bool)"/>; it disarms itself when it fires.
+    ///
+    /// <para><b>Which instant this names.</b> The console counts a tick before running it
+    /// (<c>Ticks</c> is already N inside tick N's <c>Update</c>), so "before tick N's Update" is
+    /// the state after N-1 ticks and <see cref="Tick"/> reads N-1 at the break. That is
+    /// deliberate: it is the same instant a conditional breakpoint <c>Ticks == N</c> stops at,
+    /// so the two ways of reaching a moment agree instead of being one tick apart. Pressing
+    /// <c>.</c> runs tick N and shows what it drew.</para>
+    ///
+    /// <para><b>N = 0.</b> Tick 0 is <c>Init</c>, which has no <c>Update</c> at all (API-8 §2), so
+    /// <c>--break-at 0</c> and <c>--break-at 1</c> name the same instant: paused at tick 0, Init
+    /// done, no <c>Update</c> run yet. Negative values are clamped to 0; the CLI rejects them
+    /// earlier anyway.</para>
+    ///
+    /// <para>Nothing about this reaches the simulation. It only decides how many ticks a frame is
+    /// allowed to spend, which is the same knob pause and the speed ladder turn — so a run that
+    /// breaks at N lands on exactly the state a run that did not break passed through.</para>
+    /// </summary>
+    public int? BreakAt
+    {
+        get => _breakAt;
+        set => _breakAt = value is int tick ? Math.Max(0, tick) : (int?)null;
+    }
+
+    /// <summary>True while the session sits on the tick <see cref="BreakAt"/> stopped it at.</summary>
+    public bool IsAtBreak => _atBreak;
 
     /// <summary>
     /// What the shell's overlay should say, or null for nothing. A cached string, rebuilt only
@@ -318,11 +359,68 @@ public sealed class CartSession : IDisposable
         }
         else if (!IsPaused && ticks > 0)
         {
-            RunForward(ticks, input);
+            // The break trims the frame's budget rather than watching for the tick to go past:
+            // a frame at x8, or a test frame worth a thousand ticks, must land on the break and
+            // not overshoot it by up to a frame's worth of simulation.
+            int allowed = TicksUntilBreak(ticks);
+            if (allowed > 0)
+            {
+                RunForward(allowed, input);
+            }
         }
+        FireBreakIfArrived();
 
         SaveIfDirty(force: false);
         RefreshStatus();
+    }
+
+    /// <summary>
+    /// The tick <see cref="BreakAt"/> stops the console on: one before the tick it names, because
+    /// the console counts a tick before running it. Tick 0 is <c>Init</c>, so 0 and 1 collapse
+    /// onto the same instant.
+    /// </summary>
+    private static int BreakStopTick(int breakAt) => Math.Max(0, breakAt - 1);
+
+    /// <summary>
+    /// How many of the frame's <paramref name="ticks"/> the live session may actually spend
+    /// before it must stand still and wait at the break.
+    /// </summary>
+    private int TicksUntilBreak(int ticks)
+    {
+        if (_breakAt is not int breakAt || _playback is not null)
+        {
+            return ticks;   // No break armed, or a replay is on screen — the break is the live session's.
+        }
+        int remaining = BreakStopTick(breakAt) - _machine.Tick;
+        return remaining <= 0 ? 0 : Math.Min(ticks, remaining);
+    }
+
+    /// <summary>
+    /// Trips the pause once the live session has reached the break, disarms it (a break is a
+    /// one-shot: pressing Space means "carry on", not "stop again in a frame") and says so on
+    /// stdout, because the interesting number — which tick is about to run — is not something a
+    /// six-character overlay can spell out.
+    /// </summary>
+    private void FireBreakIfArrived()
+    {
+        if (_breakAt is not int breakAt || _playback is not null || _crashed)
+        {
+            return;
+        }
+        if (_machine.Tick < BreakStopTick(breakAt))
+        {
+            return;
+        }
+        _breakAt = null;
+        _atBreak = true;
+        _breakRequested = breakAt;
+        _breakStoppedAtTick = _machine.Tick;
+        _paused = true;
+        Console.WriteLine(
+            $"[quarp] --break-at {breakAt}: paused before Update of tick {breakAt} — the console stands at "
+            + $"tick {_machine.Tick}"
+            + (breakAt <= 1 ? " (tick 0 is Init, which has no Update). " : ". ")
+            + "Press . to run that tick, Space to resume, Backspace to rewind.");
     }
 
     /// <summary>Writes save.dat immediately if there are unsaved Dset changes.</summary>
@@ -924,9 +1022,16 @@ public sealed class CartSession : IDisposable
             flash = null;
         }
 
+        // Standing at the break lasts exactly as long as the pause it caused and the tick it
+        // stopped on: resume, step, rewind or Home and the overlay goes back to saying PAUSE.
+        if (_atBreak && (!_paused || Tick != _breakStoppedAtTick || _playback is not null))
+        {
+            _atBreak = false;
+        }
+
         // Cheap comparison first: everything the line is built from, packed into a value.
         // Only a real change pays for the formatting.
-        var signature = (_crashed, _paused, _speedIndex, Tick, _playbackName, flash, _playback is not null);
+        var signature = (_crashed, _paused, _speedIndex, Tick, _playbackName, flash, _playback is not null, _atBreak);
         if (signature == _statusSignature)
         {
             return;
@@ -942,6 +1047,12 @@ public sealed class CartSession : IDisposable
         {
             next = $"REPLAY {_playbackName} {Tick}/{_playback.Log.TickCount}"
                 + (_paused ? " PAUSE" : Speed.IsNormal ? "" : " " + Speed.Label);
+        }
+        else if (_atBreak)
+        {
+            // The number the author typed, not the tick the console stands on: the whole point
+            // of the flag is "the tick I asked about has not run yet".
+            next = $"BREAK @{_breakRequested}";
         }
         else if (_paused)
         {

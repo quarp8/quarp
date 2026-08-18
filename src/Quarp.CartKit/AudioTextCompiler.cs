@@ -339,6 +339,17 @@ public static class AudioTextCompiler
                 throw Error(sourceName, line,
                     $"unknown effect '{tokens[4]}' (expected {string.Join(", ", EffectNames)}; '-' is no effect).");
             }
+            if (volume == 0)
+            {
+                // Volume 0 silences the step whatever else is written, so the bank stores one
+                // word for it and one only (docs/AUDIO-FORMAT.md §3). Compiling this row into
+                // that word would quietly drop the note — and quietly change the sound, since a
+                // rest's note is where the next slide starts. So it is refused instead, at the
+                // line the author can see, exactly as a flat or an unknown wave is.
+                throw Error(sourceName, line,
+                    $"volume 0 is a rest, and a rest is written '{tokens[0]} ---': the bank keeps no note, wave or "
+                    + "effect for a step nobody hears, so a silenced note has to lose them here too.");
+            }
             word = AudioFormat.PackStep(note, wave, volume, effect);
         }
         else

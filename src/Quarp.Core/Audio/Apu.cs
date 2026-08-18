@@ -60,8 +60,24 @@ public sealed class Apu
     /// <summary>Ticks between arpeggio note changes: 2, i.e. 30 changes a second.</summary>
     public const int ArpeggioTicksPerNote = 2;
 
+    /// <summary>
+    /// Steps an arpeggio cycles over: the aligned group of four the current step falls into.
+    /// Four is the tracker convention rather than a number of ours — PICO-8 spells its two
+    /// arpeggio effects "iterate over groups of 4 notes", and a chord that changed shape
+    /// depending on where in the slot it was written would be a dialect nobody else speaks.
+    /// </summary>
+    public const int ArpeggioGroup = 4;
+
     /// <summary>The value <see cref="CurrentPattern"/> holds while music is stopped.</summary>
     public const int NoPattern = -1;
+
+    /// <summary>
+    /// The <c>id</c> that silences a channel instead of starting a sound: -1, as in
+    /// <c>Sfx(-1, 2)</c> (API-8 §5). Only this one value stops; -2 and below stay silent
+    /// no-ops, because PICO-8 spends -2 on "release the sound from its loop" and a console
+    /// that answered every negative number the same way could never add that later.
+    /// </summary>
+    public const int StopSfx = -1;
 
     // Waveforms are generated at +/-32768 and scaled by (wave * amplitude) >> 15.
     private const int WaveShift = 15;
@@ -71,9 +87,13 @@ public sealed class Apu
     private const uint Duty25 = 0x4000_0000u;
     private const uint Duty50 = 0x8000_0000u;
 
-    // Age is masked with this so it can never overflow. 0x00FFFFFF is a multiple of both the
-    // vibrato period (8 ticks) and the arpeggio period (8 ticks), so the wrap — after 77 hours
-    // of one continuous sound — does not even produce a click.
+    // Age is masked with this so it can never overflow. 0x00FFFFFF + 1 is 2^24, a multiple of
+    // the vibrato period (8 ticks) and of an arpeggio cycle over four or two sounding steps
+    // (8 and 4 ticks), so for those the wrap — after 77 hours of one continuous sound — does
+    // not even produce a click. A cycle over three sounding steps has a period of 6 and does
+    // step once at the wrap; it is the same step on every machine, and buying seamlessness for
+    // that one case would cost a modulo in the tick path for a sound nobody will hold for
+    // three days.
     private const int AgeMask = 0x00FF_FFFF;
 
     /// <summary>
@@ -190,13 +210,26 @@ public sealed class Apu
     ///     "quietest" is a policy nobody can.</item>
     /// </list>
     ///
+    /// <para><b>Id <see cref="StopSfx"/> does the opposite</b>: it silences
+    /// <paramref name="channel"/>, or all four when that is -1 as well — see
+    /// <see cref="StopChannel"/>.</para>
+    ///
     /// <para>Out of range is silence, never an exception, like the rest of the cartridge
-    /// surface: an <paramref name="id"/> outside 0-63, a <paramref name="channel"/> outside
-    /// -1..3, and an empty slot (length 0) all do nothing.</para>
+    /// surface: an <paramref name="id"/> of -2 or below or of 64 or above, a
+    /// <paramref name="channel"/> outside -1..3, and an empty slot (length 0) all do nothing.</para>
     /// </summary>
     public void PlaySfx(int id, int channel = -1)
     {
-        if ((uint)id >= AudioBank.SfxCount || channel < -1 || channel >= ChannelCount)
+        if (channel < -1 || channel >= ChannelCount)
+        {
+            return;
+        }
+        if (id == StopSfx)
+        {
+            StopChannel(channel);
+            return;
+        }
+        if ((uint)id >= AudioBank.SfxCount)
         {
             return;
         }
@@ -210,6 +243,39 @@ public sealed class Apu
             return;
         }
         StartSfx(ref _channels[target], id, fromMusic: false);
+    }
+
+    /// <summary>
+    /// Silences one channel (0-3), or all four when <paramref name="channel"/> is -1. This is
+    /// what <c>Sfx(-1, channel)</c> reaches (API-8 §5), and it changes simulation state exactly
+    /// as <see cref="PlaySfx"/> does — a rewind reproduces it because the call comes from
+    /// <c>Update</c>, which resimulation re-runs.
+    ///
+    /// <para>The channel is silenced whoever filled it. A voice the music sequencer was driving
+    /// goes quiet now and comes back at the next pattern, the same way it does when the
+    /// cartridge takes that channel for a sound of its own — one rule, not two. Stopping every
+    /// channel is <b>not</b> the same as stopping the music: <see cref="PlayMusic"/> with a
+    /// negative pattern is what ends a song, and a song still playing refills its voices at its
+    /// next pattern.</para>
+    ///
+    /// <para>Anything outside -1..3 does nothing, like every other out-of-range argument on this
+    /// surface.</para>
+    /// </summary>
+    public void StopChannel(int channel)
+    {
+        if (channel < -1 || channel >= ChannelCount)
+        {
+            return;
+        }
+        if (channel >= 0)
+        {
+            _channels[channel].Stop();
+            return;
+        }
+        for (int i = 0; i < _channels.Length; i++)
+        {
+            _channels[i].Stop();
+        }
     }
 
     /// <summary>
@@ -442,14 +508,62 @@ public sealed class Apu
             case NoteEffect.Drop:
                 return (pitch * (speed - t)) / speed;
             case NoteEffect.Arpeggio:
-                // The aligned group of four steps this step belongs to, one note every two
-                // ticks: a chord on one channel, the oldest trick in tracker music.
-                return NoteTable.ToPitch(
-                    slot[(channel.Step & ~3) + ((channel.Age / ArpeggioTicksPerNote) & 3)].Note);
+                return ArpeggioPitch(slot, in channel, pitch);
             default:
                 return pitch;
         }
     }
+
+    /// <summary>
+    /// Arpeggio: the aligned group of <see cref="ArpeggioGroup"/> steps the current step falls
+    /// into, one note every <see cref="ArpeggioTicksPerNote"/> ticks — a chord played on one
+    /// channel, the oldest trick in tracker music.
+    ///
+    /// <para><b>Only the steps that sound take part.</b> A step at volume 0 is a rest and has no
+    /// note to lend: written canonically it is the zero word, whose note is 0, so until M4 a
+    /// pause inside the group came out as a C-2 thump in the middle of the chord. Steps at or
+    /// past <see cref="SfxSlot.Length"/> are skipped for the same reason — the slot does not
+    /// play them, so they cannot be heard through the back door of an arpeggio either, and that
+    /// is what lets <c>sfx.bin</c> require them to be zero (docs/AUDIO-FORMAT.md §2).</para>
+    ///
+    /// <para>The cycle therefore runs over the sounding steps of the group, in order, and when
+    /// the current step is the only one that sounds the effect is a no-op: a chord of one note
+    /// is that note, not that note stuttering against three rests.</para>
+    /// </summary>
+    private static int ArpeggioPitch(SfxSlot slot, in AudioChannel channel, int pitch)
+    {
+        int group = channel.Step & ~(ArpeggioGroup - 1);
+        int sounding = 0;
+        for (int i = 0; i < ArpeggioGroup; i++)
+        {
+            if (StepSounds(slot, group + i))
+            {
+                sounding++;
+            }
+        }
+        if (sounding <= 1)
+        {
+            return pitch;
+        }
+
+        int index = (channel.Age / ArpeggioTicksPerNote) % sounding;
+        for (int i = 0; i < ArpeggioGroup; i++)
+        {
+            if (!StepSounds(slot, group + i))
+            {
+                continue;
+            }
+            if (index == 0)
+            {
+                return NoteTable.ToPitch(slot[group + i].Note);
+            }
+            index--;
+        }
+        return pitch;   // Unreachable: the loop above counted at least two sounding steps.
+    }
+
+    /// <summary>True when a step of a slot is played and is not a rest — the two ways a step can have no note.</summary>
+    private static bool StepSounds(SfxSlot slot, int step) => step < slot.Length && slot[step].Volume != 0;
 
     /// <summary>The amplitude a step sounds at on this tick, 0..<see cref="PeakAmplitude"/>.</summary>
     private static int Amplitude(SfxSlot slot, in AudioChannel channel, SfxStep step)
@@ -545,6 +659,17 @@ public sealed class Apu
     /// music misses that voice for this pattern and picks it up at the next one, which is how
     /// a theme ducks under a sound effect without either of them being scheduled against the
     /// other.
+    ///
+    /// <para><b>How long the pattern lasts: the longest of its active slots, and never less
+    /// than <see cref="MinPatternTicks"/>.</b> The longest rather than the shortest, so a voice
+    /// is never cut off mid-phrase by a shorter one beside it; short slots simply fall silent
+    /// and wait, which is what a tracker does when one channel's instrument ends early. The
+    /// length counts every active slot of the pattern, <em>including</em> a voice this call
+    /// skipped because the cartridge holds that channel — song timing must not depend on what
+    /// sound effects the game happened to be playing, or a rewound run could turn its patterns
+    /// over at different ticks. A pattern with nothing active is a rest of exactly
+    /// <see cref="MinPatternTicks"/> ticks and then the song goes on: silence is a section, not
+    /// the end of the piece, which is what the <see cref="MusicFlags.Stop"/> flag is for.</para>
     /// </summary>
     private void StartPattern(int index)
     {

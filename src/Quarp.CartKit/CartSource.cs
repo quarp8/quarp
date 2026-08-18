@@ -57,7 +57,11 @@ public static class CartSource
         foreach (string file in files)
         {
             string relative = "src/" + Path.GetRelativePath(srcDir, file).Replace('\\', '/');
-            sources.Add(new CartSourceFile(relative, File.ReadAllText(file)));
+            // The third field is the absolute path of the file — rooted because `root` is, and
+            // present only here: this is the one cartridge shape whose sources exist on disk, so
+            // it is the one shape a debugger can bind a breakpoint in (M4 Р1). It takes no part
+            // in identity or the code budget; see CartSourceFile.
+            sources.Add(new CartSourceFile(relative, File.ReadAllText(file), file));
         }
         // Sort by the cart-relative path with '/' — the very key LoadPackage sorts by.
         // Sorting the OS paths instead compares '\' (0x5C) where the package compares
@@ -177,6 +181,10 @@ public static class CartSource
             foreach (ZipArchiveEntry entry in sourceEntries)
             {
                 string name = entry.FullName.Replace('\\', '/');
+                // No disk path: the sources live inside the zip. Source-level debugging is a
+                // folder-cart feature and unpacking to a temp folder to fake one is explicitly
+                // out of scope (M4 Р1) — a made-up path would only make the debugger bind a
+                // breakpoint to a file the author is not editing.
                 sources.Add(new CartSourceFile(name, DecodeUtf8(ReadEntry(entry, name))));
             }
             SortByRelativePath(sources);   // Same key as LoadFolder — see the note there.

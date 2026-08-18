@@ -47,8 +47,13 @@ public sealed class QuarpGame : Game
     private TimeSpeed _lastSpeed = TimeSpeed.At(TimeSpeed.NormalIndex);
     private bool _lastPaused;
 
-    /// <summary>Pattern mode when <paramref name="cartPath"/> is null; cart mode otherwise.</summary>
-    public QuarpGame(string? cartPath = null)
+    /// <summary>
+    /// Pattern mode when <paramref name="cartPath"/> is null; cart mode otherwise.
+    /// <paramref name="breakAtTick"/> is <c>--break-at N</c>: the session pauses before that
+    /// tick's <c>Update</c> and waits there. It is ignored in pattern mode, which has no
+    /// simulation to stop — the CLI rejects that combination before it gets here.
+    /// </summary>
+    public QuarpGame(string? cartPath = null, int? breakAtTick = null)
     {
         StartCompilerWarmUp();
 
@@ -61,6 +66,7 @@ public sealed class QuarpGame : Game
         else
         {
             _session = CartSession.Start(cartPath);
+            _session.BreakAt = breakAtTick;
             // Lets a long resimulation repaint the window from inside its progress callback
             // instead of freezing it (ARCHITECTURE §4). Cached once — it is called in a loop.
             _session.PresentFrame = PresentCurrentFrame;

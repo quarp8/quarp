@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Globalization;
 using Quarp.CartKit;
 using Quarp.Core;
 
@@ -66,11 +67,14 @@ public static class ReplayCommands
                     scriptFile = args[++i];
                     break;
                 case "--every" when i + 1 < args.Length
-                    && int.TryParse(args[i + 1], out int parsedEvery) && parsedEvery > 0:
+                    && int.TryParse(args[i + 1], NumberStyles.None, CultureInfo.InvariantCulture, out int parsedEvery)
+                    && parsedEvery > 0:
                     every = parsedEvery;
                     i++;
                     break;
-                case "--ticks" when i + 1 < args.Length && int.TryParse(args[i + 1], out int parsed) && parsed >= 0:
+                case "--ticks" when i + 1 < args.Length
+                    && int.TryParse(args[i + 1], NumberStyles.None, CultureInfo.InvariantCulture, out int parsed)
+                    && parsed >= 0:
                     ticks = parsed;
                     i++;
                     break;
@@ -161,7 +165,9 @@ public static class ReplayCommands
                 case "--cart" when i + 1 < args.Length:
                     cartPath = args[++i];
                     break;
-                case "--every" when i + 1 < args.Length && int.TryParse(args[i + 1], out int parsed) && parsed > 0:
+                case "--every" when i + 1 < args.Length
+                    && int.TryParse(args[i + 1], NumberStyles.None, CultureInfo.InvariantCulture, out int parsed)
+                    && parsed > 0:
                     every = parsed;
                     i++;
                     break;
@@ -262,7 +268,9 @@ public static class ReplayCommands
         {
             switch (args[i])
             {
-                case "--ticks" when i + 1 < args.Length && int.TryParse(args[i + 1], out int parsed) && parsed > 0:
+                case "--ticks" when i + 1 < args.Length
+                    && int.TryParse(args[i + 1], NumberStyles.None, CultureInfo.InvariantCulture, out int parsed)
+                    && parsed > 0:
                     ticks = parsed;
                     i++;
                     break;

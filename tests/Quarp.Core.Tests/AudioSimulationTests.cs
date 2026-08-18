@@ -219,6 +219,126 @@ public class AudioSimulationTests
         public override void Draw() => Cls(3);
     }
 
+    /// <summary>
+    /// Starts two voices, silences one channel at tick 20 and all of them at tick 40 — or does
+    /// none of that, which is the control every assertion below is measured against.
+    /// </summary>
+    private sealed class StoppingCart : Cartridge
+    {
+        private readonly bool _stops;
+
+        public StoppingCart(bool stops = true) => _stops = stops;
+
+        public override void Update()
+        {
+            if (Ticks == 1)
+            {
+                Sfx(2, 0);
+                Sfx(2, 1);
+            }
+            if (!_stops)
+            {
+                return;
+            }
+            if (Ticks == 20)
+            {
+                Sfx(-1, 0);      // one voice
+            }
+            if (Ticks == 40)
+            {
+                Sfx(-1);         // and now the rest of them
+            }
+        }
+
+        public override void Draw() => Cls(2);
+    }
+
+    private static List<ulong> RunStopping(bool stops, bool draw)
+    {
+        VirtualConsole console = Console();
+        console.AttachCart(new StoppingCart(stops));
+        var audio = new List<ulong>();
+        for (int i = 0; i < 60; i++)
+        {
+            if (draw)
+            {
+                console.Tick(default);
+            }
+            else
+            {
+                console.TickUpdateOnly(default);
+            }
+            audio.Add(FrameHash.Compute(console.AudioBlock));
+        }
+        return audio;
+    }
+
+    [Fact]
+    public void StoppingAChannelIsSimulationStateLikeStartingOne()
+    {
+        // Sfx(-1, ch) changes what the chip will render for the rest of the run, so it has to be
+        // as invisible to Draw as Sfx(id) is: a rewind resimulates with Draw suppressed, and a
+        // stop that only happened on drawn ticks would come back as a sound that never ended.
+        List<ulong> drawn = RunStopping(stops: true, draw: true);
+        Assert.Equal(drawn, RunStopping(stops: true, draw: false));
+
+        // Negative control 1: the stops are audible at all, so the equality above is not the
+        // equality of two runs that never made a sound.
+        List<ulong> unstopped = RunStopping(stops: false, draw: true);
+        Assert.NotEqual(drawn, unstopped);
+
+        // Negative control 2: the silence after tick 40 is the stop's doing and not the sound
+        // simply running out — the same tick still sounds on the cartridge that never stops.
+        ulong silence = FrameHash.Compute(new AudioBlock());
+        Assert.Equal(silence, drawn[44]);          // tick 45
+        Assert.NotEqual(silence, unstopped[44]);
+        Assert.NotEqual(drawn[24], unstopped[24]); // tick 25: one voice short, not yet silent
+        Assert.NotEqual(silence, drawn[24]);
+    }
+
+    [Fact]
+    public void ARewindLandsOnTheSameSoundAfterAChannelWasStopped()
+    {
+        // The rewind path of ADR-006: SeekTo cold-boots and resimulates from tick 0 with Draw
+        // suppressed. Tick 30 is downstream of the stop at tick 20, so this compares a landing
+        // that carries one.
+        ulong straight = FrameHash.Compute(Straight(30, stops: true).Console.AudioBlock);
+
+        TimeMachine rewound = Machine(stops: true);
+        rewound.Advance(60, default);
+        rewound.SeekTo(30);
+        Assert.Equal(30, rewound.Tick);
+        Assert.Equal(straight, FrameHash.Compute(rewound.Console.AudioBlock));
+
+        // Negative control: the same landing on a cartridge that never stops anything must not
+        // match, or the comparison above would hold whether or not the stop was reproduced.
+        Assert.NotEqual(straight, FrameHash.Compute(Straight(30, stops: false).Console.AudioBlock));
+
+        static TimeMachine Straight(int ticks, bool stops)
+        {
+            TimeMachine machine = Machine(stops);
+            machine.Advance(ticks, default);
+            return machine;
+        }
+
+        static TimeMachine Machine(bool stops)
+        {
+            // Through the constructor's payloads rather than through LoadAudio(bank), so the
+            // session is built the way a real replay session is built — and so the bank is in
+            // place before the cold boot SeekTo performs, exactly as it is for a .quarp8.
+            AudioBank bank = Bank();
+            var machine = new TimeMachine(
+                ConsoleProfile.Profile8,
+                new StoppingCart(stops),
+                new ReplayHeader(ReplayHeader.UnknownIdentity, seed: 0, ReadOnlySpan<int>.Empty),
+                new ReplayLog(),
+                sfx: SfxPayload(bank),
+                music: MusicPayload(bank));
+            machine.Boot();
+            return machine;
+        }
+    }
+
     [Fact]
     public void ACartridgeWithNoAudioBankIsSilentRatherThanBroken()
     {

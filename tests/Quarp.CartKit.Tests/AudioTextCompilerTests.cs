@@ -274,6 +274,23 @@ public class AudioTextCompilerTests
     }
 
     [Fact]
+    public void VolumeZeroInANoteRowIsRefusedBecauseARestHasOneSpelling()
+    {
+        // The bank stores a rest as the zero word and nothing else (§3), so this row could only
+        // compile by throwing the note away — and that would change the sound quietly, since a
+        // rest's note is where the next slide starts. Refused at the line, like a flat.
+        var e = SfxFails("sfx 0\n  00 C-4 tri 0 -\n");
+        Assert.StartsWith("sfx.txt:2:", e.Message);
+        Assert.Contains("---", e.Message);
+
+        // Control: the rest that row was trying to be, and the same note one volume step up.
+        byte[] payload = CompileSfx("sfx 0\n  00 ---\n  01 C-4 tri 1 -\n");
+        Assert.Equal(0, AudioFormat.Step(payload, 0, 0));
+        Assert.Equal(1, AudioFormat.Volume(AudioFormat.Step(payload, 0, 1)));
+        Assert.Equal(2, AudioFormat.SlotLength(payload, 0));
+    }
+
+    [Fact]
     public void OutOfOrderStepsAreRefused()
     {
         var e = SfxFails("sfx 0\n  00 C-4 tri 3 -\n  05 C-4 tri 3 -\n  03 C-4 tri 3 -\n");

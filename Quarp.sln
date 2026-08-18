@@ -27,6 +27,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Quarp.Analyzers.Tests", "te
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Quarp.Shell.Desktop.Tests", "tests\Quarp.Shell.Desktop.Tests\Quarp.Shell.Desktop.Tests.csproj", "{593C21CF-01D2-4625-A9E8-1A67141FA108}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Quarp.Cli.Tests", "tests\Quarp.Cli.Tests\Quarp.Cli.Tests.csproj", "{BD8FE8D1-3253-45A8-89BD-0B77A14318D7}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -157,6 +159,18 @@ Global
 		{593C21CF-01D2-4625-A9E8-1A67141FA108}.Release|x64.Build.0 = Release|Any CPU
 		{593C21CF-01D2-4625-A9E8-1A67141FA108}.Release|x86.ActiveCfg = Release|Any CPU
 		{593C21CF-01D2-4625-A9E8-1A67141FA108}.Release|x86.Build.0 = Release|Any CPU
+		{BD8FE8D1-3253-45A8-89BD-0B77A14318D7}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{BD8FE8D1-3253-45A8-89BD-0B77A14318D7}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{BD8FE8D1-3253-45A8-89BD-0B77A14318D7}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{BD8FE8D1-3253-45A8-89BD-0B77A14318D7}.Debug|x64.Build.0 = Debug|Any CPU
+		{BD8FE8D1-3253-45A8-89BD-0B77A14318D7}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{BD8FE8D1-3253-45A8-89BD-0B77A14318D7}.Debug|x86.Build.0 = Debug|Any CPU
+		{BD8FE8D1-3253-45A8-89BD-0B77A14318D7}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{BD8FE8D1-3253-45A8-89BD-0B77A14318D7}.Release|Any CPU.Build.0 = Release|Any CPU
+		{BD8FE8D1-3253-45A8-89BD-0B77A14318D7}.Release|x64.ActiveCfg = Release|Any CPU
+		{BD8FE8D1-3253-45A8-89BD-0B77A14318D7}.Release|x64.Build.0 = Release|Any CPU
+		{BD8FE8D1-3253-45A8-89BD-0B77A14318D7}.Release|x86.ActiveCfg = Release|Any CPU
+		{BD8FE8D1-3253-45A8-89BD-0B77A14318D7}.Release|x86.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
@@ -172,5 +186,6 @@ Global
 		{8A838C6D-49EB-4317-8FCA-2E1266B0440A} = {827E0CD3-B72D-47B6-A68D-7590B98EB39B}
 		{B5D7102E-1E95-40A8-836D-6AF477C6B8A3} = {0AB3BF05-4346-4AA6-1389-037BE0695223}
 		{593C21CF-01D2-4625-A9E8-1A67141FA108} = {0AB3BF05-4346-4AA6-1389-037BE0695223}
+		{BD8FE8D1-3253-45A8-89BD-0B77A14318D7} = {0AB3BF05-4346-4AA6-1389-037BE0695223}
 	EndGlobalSection
 EndGlobal

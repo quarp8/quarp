@@ -91,7 +91,11 @@ public sealed class SfxSlot
     /// <summary>
     /// The slot's steps. Reading past the end gives <see cref="SfxStep.Rest"/> and writing past
     /// the end is ignored, so a loader that miscounts produces silence rather than a crash.
-    /// Steps at or beyond <see cref="Length"/> are stored but never played.
+    /// Steps at or beyond <see cref="Length"/> are stored but never played — not by the
+    /// sequencer, and not through an arpeggio group that overhangs the end either
+    /// (<see cref="Apu"/>). That is what lets <c>sfx.bin</c> insist they are zero: bytes that
+    /// cannot be heard must not be able to change a cartridge's identity
+    /// (docs/AUDIO-FORMAT.md §2).
     /// </summary>
     public SfxStep this[int step]
     {

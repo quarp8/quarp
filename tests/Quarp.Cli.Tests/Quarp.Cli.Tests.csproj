@@ -1,0 +1,29 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+  <ItemGroup>
+    <!-- Same versions as the other test projects: one restore graph, no surprise upgrades. -->
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.12.0" />
+    <PackageReference Include="xunit" Version="2.9.2" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2" />
+  </ItemGroup>
+  <ItemGroup>
+    <!-- The tool itself. Until M4 no test project referenced it, so everything the CLI owns
+         alone - the `quarp new` template, the argument parsing, the silent-PCM digest CI
+         compares every run against - was untestable by construction, and at least two of those
+         had a copy in a test file standing in for the real thing.
+
+         Referencing an OutputType=Exe project is deliberate and is not a workaround: a test
+         project may reference an executable, the compiler treats it as an ordinary assembly
+         reference, and MSBuild copies the apphost (quarp.exe) and its runtimeconfig/deps next
+         to the test assembly. That apphost is what CliProcess runs, which is how the parts
+         living in Program.cs's top-level statements (`quarp new`, the break-at parser) get
+         tested at all. The alternative, moving CartTemplate and AudioSilenceCommand into a
+         library so a test could see them, would reshape the product to suit the test runner. -->
+    <ProjectReference Include="..\..\src\Quarp.Cli\Quarp.Cli.csproj" />
+    <!-- FrameHash and the APU, which the silence digest is expressed in. Transitive through the
+         CLI, named here for the same reason the other test projects name theirs. -->
+    <ProjectReference Include="..\..\src\Quarp.Core\Quarp.Core.csproj" />
+  </ItemGroup>
+</Project>

@@ -44,6 +44,16 @@ namespace Quarp.CartKit;
 /// <see cref="OptimizationLevel.Debug"/>. Carts are at most 64 KB of code, so the
 /// micro-performance of optimized IL is irrelevant next to the milestone criterion that
 /// a cart exception shows an accurate line number.
+///
+/// <para>M4 stage 1 adds the other half of that: a breakpoint set in the author's editor has to
+/// actually bind. A debugger binds one only when the PDB's document (a) names a file it can
+/// open and (b) records a checksum equal to the hash of that file's bytes. Emitting the debug
+/// format was never the problem — both halves of the contract were broken, each on its own
+/// sufficient. They are fixed by <see cref="ReadSourceText"/> (checksum over the bytes on disk
+/// rather than over an in-memory string plus a BOM that is not in the file) and by the
+/// <see cref="SourceFileResolver"/> installed for folder cartridges (absolute document path).
+/// Neither touches the cartridge's identity, its code budget, or the text of a diagnostic; both
+/// are inert for a <c>.quarp8</c> package, whose sources have no files to point at.</para>
 /// </summary>
 public static class CartCompiler
 {
@@ -71,6 +81,15 @@ public static class CartCompiler
 
     /// <summary>Roslyn's id for "an analyzer threw"; an analyzer bug must never read as a cartridge bug.</summary>
     private const string AnalyzerFailureId = "AD0001";
+
+    /// <summary>
+    /// How two cartridge disk paths are compared (see <see cref="CartRootOf"/>). Windows compares
+    /// case-insensitively and Linux does not; getting this wrong would silently drop the debug
+    /// root of a cart whose folder is spelled in another case, which is exactly the kind of thing
+    /// that gets reported as "debugging is flaky".
+    /// </summary>
+    private static readonly StringComparison DiskPathComparison =
+        OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
 
     // Namespaces whose entire subtree is banned in cart code (SPEC-8 §7, ARCHITECTURE §3).
     private static readonly string[] BannedNamespacePrefixes =
@@ -159,10 +178,12 @@ public static class CartCompiler
         var trees = new SyntaxTree[sources.Count];
         for (int i = 0; i < sources.Count; i++)
         {
-            // An explicit encoding is required for the embedded portable PDB;
-            // the relative path becomes the file name in diagnostics and stack traces.
+            // The tree keeps the cart-relative path: it is what diagnostics print, what stack
+            // traces print for an in-memory cart, and what the cartridge identity is computed
+            // from. The debugger's copy of the path is a separate mechanism — the source
+            // reference resolver below — precisely so that changing it changes only the PDB.
             trees[i] = CSharpSyntaxTree.ParseText(
-                SourceText.From(sources[i].Text, Encoding.UTF8),
+                ReadSourceText(sources[i]),
                 parseOptions,
                 path: sources[i].RelativePath);
         }
@@ -172,6 +193,15 @@ public static class CartCompiler
             optimizationLevel: OptimizationLevel.Debug,   // D4: accurate stack-trace lines beat micro-perf on a 64 KB cart
             allowUnsafe: false,
             deterministic: true);
+        if (FindCartRoot(sources) is string cartRoot)
+        {
+            // Turns the document path in the PDB from "src/main.cs" into
+            // "<cart>/src/main.cs" and nothing else: diagnostics still say "src/main.cs(7,17)".
+            // Half the breakpoint contract — the debugger has to find the file before it can
+            // compare it (M4 Р1).
+            options = options.WithSourceReferenceResolver(
+                new SourceFileResolver(ImmutableArray<string>.Empty, cartRoot));
+        }
         var compilation = CSharpCompilation.Create(assemblyName, trees, References, options);
 
         using var peStream = new MemoryStream();
@@ -212,6 +242,117 @@ public static class CartCompiler
         return violations.Count > 0
             ? CartCompileResult.Failed(violations, warnings)
             : CartCompileResult.Ok(assemblyBytes, warnings);
+    }
+
+    // --- the breakpoint contract: where the text comes from, where the document points ---
+
+    /// <summary>
+    /// The text handed to Roslyn — and, the part this method exists for, the checksum stored
+    /// beside it in the PDB.
+    ///
+    /// <para>A debugger binds a breakpoint only when the document checksum recorded in the PDB
+    /// equals the hash of the bytes of the file it opened (<c>requireExactSource</c>, on by
+    /// default in the VS Code C# extension). <c>SourceText.From(string, Encoding.UTF8)</c>
+    /// hashes the encoding's preamble followed by the UTF-8 bytes, and
+    /// <see cref="Encoding.UTF8"/> carries a three-byte preamble — so for an ordinary file with
+    /// no BOM (every source in this repository) the PDB recorded the hash of a file that does
+    /// not exist anywhere, and every breakpoint silently failed to bind. Reading the file as a
+    /// stream hashes the bytes on disk, which is the same question the debugger asks; measured,
+    /// it answers correctly for LF, for CRLF, and for a file that does have a BOM, where the
+    /// string form only ever worked by accident.</para>
+    ///
+    /// <para>The compiled text is still the cartridge's text, not the file's. If the two
+    /// disagree — the author saved between load and compile — the loaded text wins and the
+    /// checksum goes back to being the in-memory one, so the debugger refuses to bind instead
+    /// of stopping on the wrong line. That order is not negotiable: compiling bytes that
+    /// <see cref="CartIdentity"/> never saw would stamp a replay with the identity of code that
+    /// did not run, and a stale breakpoint is a far cheaper failure than a lying identity.</para>
+    /// </summary>
+    private static SourceText ReadSourceText(CartSourceFile source)
+    {
+        if (source.DiskPath is string diskPath)
+        {
+            try
+            {
+                using FileStream stream = File.OpenRead(diskPath);
+                SourceText fromDisk = SourceText.From(stream, Encoding.UTF8, SourceHashAlgorithm.Sha256);
+                if (string.Equals(fromDisk.ToString(), source.Text, StringComparison.Ordinal))
+                {
+                    return fromDisk;
+                }
+            }
+            catch (IOException)
+            {
+                // The file moved, vanished or is half-written by the editor: the loaded text is
+                // still perfectly compilable, it just loses the debugger's half of the deal.
+            }
+            catch (UnauthorizedAccessException)
+            {
+            }
+        }
+        // Sha256 explicitly: the Roslyn API defaults to Sha1, csc defaults to Sha256, and the
+        // debugger reads the algorithm out of the PDB either way — so this is a choice of
+        // strength, not of compatibility.
+        return SourceText.From(source.Text, Encoding.UTF8, SourceHashAlgorithm.Sha256);
+    }
+
+    /// <summary>
+    /// The absolute cartridge folder every source was read from, or null when this is not a
+    /// folder cartridge — a <c>.quarp8</c> package, an in-memory compilation, a file that has
+    /// since moved. Only a non-null answer gets a <see cref="SourceFileResolver"/>.
+    ///
+    /// <para>All or nothing on purpose. The resolver has exactly one base directory, so a
+    /// compilation whose sources come from two places has no right answer, and an absolute path
+    /// pointing at the wrong file is worse than an honest relative one. It also leaves every
+    /// in-memory compilation — <see cref="WarmUp"/>, the tests, a package cart — bit-for-bit on
+    /// the previous behaviour, including the <c>src/main.cs</c> that its stack traces print.</para>
+    /// </summary>
+    private static string? FindCartRoot(IReadOnlyList<CartSourceFile> sources)
+    {
+        string? root = null;
+        for (int i = 0; i < sources.Count; i++)
+        {
+            string? candidate = CartRootOf(sources[i]);
+            if (candidate is null)
+            {
+                return null;
+            }
+            if (root is null)
+            {
+                root = candidate;
+            }
+            else if (!string.Equals(root, candidate, DiskPathComparison))
+            {
+                return null;
+            }
+        }
+        return root;
+    }
+
+    /// <summary>
+    /// Strips the cart-relative path off the end of the absolute one — "C:\games\snake" out of
+    /// "C:\games\snake\src\ui\hud.cs" and "src/ui/hud.cs". A source whose two paths do not agree
+    /// on that tail, or whose file is not there any more, cannot be placed and says so with null
+    /// rather than guessing.
+    /// </summary>
+    private static string? CartRootOf(CartSourceFile source)
+    {
+        if (source.DiskPath is not string diskPath
+            || !Path.IsPathFullyQualified(diskPath)
+            || !File.Exists(diskPath))
+        {
+            return null;
+        }
+        string tail = source.RelativePath.Replace('/', Path.DirectorySeparatorChar);
+        string disk = diskPath.Replace(Path.AltDirectorySeparatorChar, Path.DirectorySeparatorChar);
+        if (disk.Length <= tail.Length || !disk.EndsWith(tail, DiskPathComparison))
+        {
+            return null;
+        }
+        // TrimEndingDirectorySeparator, not TrimEnd: a cart sitting at "C:\" must keep its
+        // backslash, because SourceFileResolver rejects a base directory that is not absolute.
+        string root = Path.TrimEndingDirectorySeparator(disk[..^tail.Length]);
+        return Path.IsPathFullyQualified(root) ? root : null;
     }
 
     // --- pass 0: the Roslyn analyzer, the same one the author's IDE runs ---

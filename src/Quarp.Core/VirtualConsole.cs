@@ -819,8 +819,11 @@ public sealed class VirtualConsole : IConsoleApi
     /// <summary>
     /// Starts SFX <paramref name="id"/> (0-63). <paramref name="channel"/> 0-3 takes that
     /// channel outright; -1, the default, picks the lowest idle channel, else the lowest one
-    /// the music is using, else does nothing. Out-of-range arguments and empty slots are
-    /// silent no-ops. Simulation state, so never from Draw (QRP1004).
+    /// the music is using, else does nothing. An <paramref name="id"/> of -1 stops instead of
+    /// starting: <c>Sfx(-1, 2)</c> silences channel 2 and <c>Sfx(-1)</c> silences all four,
+    /// leaving a playing song to refill its voices at its next pattern. Every other
+    /// out-of-range argument, -2 included, and every empty slot are silent no-ops.
+    /// Simulation state, so never from Draw (QRP1004).
     /// </summary>
     public void Sfx(int id, int channel = -1) => _apu.PlaySfx(id, channel);
 

@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text;
 using System.Text.Json;
 using Quarp.CartKit;
@@ -25,11 +26,53 @@ switch (command)
     case "run":
     {
         // No path: the palette test pattern; with a path: the cartridge, hot reload and all.
-        string? cartPath = args.Length > 1 ? args[1] : null;
+        // --break-at N is the debugger-free half of "debugging in time" (M4 work order, stage 1):
+        // the console catches up to tick N and pauses *before* that tick's Update, so the
+        // author can look at the state the buggy tick is about to be handed.
+        //
+        // Every number this tool reads off a command line goes through NumberStyles.None and
+        // CultureInfo.InvariantCulture — the same pair AudioSilenceCommand pins and the rule
+        // SPEC-8 §7 states: what a tick number means must not depend on the machine that typed
+        // it. NumberStyles.None is the strict half: no sign, no whitespace, no separators, so
+        // `--break-at +5` and `--break-at 1,000` fail here, naming the value, instead of being
+        // read as something the author did not write.
+        const string RunUsage = "usage: quarp run [path] [--break-at N]";
+        string? cartPath = null;
+        int? breakAt = null;
+        for (int i = 1; i < args.Length; i++)
+        {
+            if (args[i] == "--break-at")
+            {
+                if (i + 1 >= args.Length
+                    || !int.TryParse(args[i + 1], NumberStyles.None, CultureInfo.InvariantCulture, out int parsedBreak)
+                    || parsedBreak < 0)
+                {
+                    Console.Error.WriteLine($"quarp run: --break-at needs a tick number >= 0 ({RunUsage})");
+                    return 1;
+                }
+                breakAt = parsedBreak;
+                i++;
+            }
+            else if (cartPath is null && !args[i].StartsWith('-'))
+            {
+                cartPath = args[i];
+            }
+            else
+            {
+                Console.Error.WriteLine($"quarp run: unknown argument '{args[i]}' ({RunUsage})");
+                return 1;
+            }
+        }
+        if (breakAt is not null && cartPath is null)
+        {
+            // The test pattern has no simulation to stop, so this is a typo, not a request.
+            Console.Error.WriteLine($"quarp run: --break-at needs a cartridge to run ({RunUsage})");
+            return 1;
+        }
         QuarpGame game;
         try
         {
-            game = new QuarpGame(cartPath);
+            game = new QuarpGame(cartPath, breakAt);
         }
         catch (CartLoadException e)
         {
@@ -68,13 +111,16 @@ switch (command)
         int every = 0;
         for (int i = 2; i < args.Length; i++)
         {
-            if (args[i] == "--ticks" && i + 1 < args.Length && int.TryParse(args[i + 1], out int parsed) && parsed >= 0)
+            if (args[i] == "--ticks" && i + 1 < args.Length
+                && int.TryParse(args[i + 1], NumberStyles.None, CultureInfo.InvariantCulture, out int parsed)
+                && parsed >= 0)
             {
                 ticks = parsed;
                 i++;
             }
             else if (args[i] == "--every" && i + 1 < args.Length
-                && int.TryParse(args[i + 1], out int parsedEvery) && parsedEvery > 0)
+                && int.TryParse(args[i + 1], NumberStyles.None, CultureInfo.InvariantCulture, out int parsedEvery)
+                && parsedEvery > 0)
             {
                 every = parsedEvery;
                 i++;
@@ -162,9 +208,15 @@ switch (command)
 
     case "audio":
     {
-        // `audio` is a group like `replay`: AudioBuildCommand owns its own subcommand
-        // dispatch, argument errors and exit codes (CartKit work order, deliverable 4).
-        return AudioBuildCommand.Invoke(args.Length > 1 ? args[1..] : Array.Empty<string>());
+        // `audio` is a group like `replay`: each subcommand owns its own argument errors and
+        // exit codes (CartKit work order, deliverable 4). `silence` is the second one (M4 Р4.7):
+        // it prints the PCM digest of a run in which nothing ever sounds, so that the CI mute
+        // check derives that number from the real APU instead of carrying it as a constant that
+        // rots the moment a tick count moves.
+        string[] audioArgs = args.Length > 1 ? args[1..] : Array.Empty<string>();
+        return audioArgs.Length > 0 && audioArgs[0] == "silence"
+            ? AudioSilenceCommand.Invoke(audioArgs)
+            : AudioBuildCommand.Invoke(audioArgs);
     }
 
     case "bench":
@@ -196,7 +248,11 @@ switch (command)
         Console.WriteLine("usage:");
         Console.WriteLine("  quarp run [path]             open the console window (test pattern without a path,");
         Console.WriteLine("                               a cart folder or .quarp8 file with one)");
-        Console.WriteLine("  quarp new <folder>           create a cartridge template (manifest.json + src/main.cs)");
+        Console.WriteLine("  quarp run <path> --break-at N");
+        Console.WriteLine("                               same, but pause before Update of tick N and stay there");
+        Console.WriteLine("                               (docs/DEBUGGING.md — debugging in time)");
+        Console.WriteLine("  quarp new <folder>           create a cartridge template (manifest.json + src/main.cs,");
+        Console.WriteLine("                               .quarp/cart.csproj and .vscode for F5 debugging)");
         Console.WriteLine("  quarp pack <folder> [-o f]   pack a cart folder into a .quarp8 file");
         Console.WriteLine("  quarp sim <path> --ticks N [--every N]");
         Console.WriteLine("                               run N ticks headless, print the framebuffer FNV-1a hash");
@@ -210,6 +266,9 @@ switch (command)
         Console.WriteLine("  CI comparison reads; the audio column covers every block, not just this tick.");
         Console.WriteLine("  quarp audio build <cart> [--check]");
         Console.WriteLine("                               compile sfx.txt/music.txt into sfx.bin/music.bin");
+        Console.WriteLine("  quarp audio silence --ticks N");
+        Console.WriteLine("                               print the PCM digest of N ticks in which nothing sounds");
+        Console.WriteLine("                               (what CI compares a run against to catch a mute cart)");
         Console.WriteLine("  quarp bench <cart> --ticks N  measure play and resimulation speed (rewind cost)");
         Console.WriteLine("  quarp pattern <file>         write the test pattern as a .bmp image");
         Console.WriteLine();
@@ -303,12 +362,19 @@ static int CreateNewCart(string folder)
     File.WriteAllText(Path.Combine(root, "manifest.json"), manifest);
     File.WriteAllText(Path.Combine(root, "src", "main.cs"), CartTemplate.MainCs);
     bool devProject = WriteDevProject(root);
+    bool vsCode = WriteVsCodeFiles(root);
     Console.WriteLine($"Created cartridge '{name}' in {root}");
     if (devProject)
     {
         Console.WriteLine(
             $"  {CartTemplate.DevFolder}/{CartTemplate.DevProjectFile} — dev-only, gives your editor the "
             + "QRP1001-QRP1004 diagnostics");
+    }
+    if (vsCode)
+    {
+        Console.WriteLine(
+            $"  {CartTemplate.VsCodeFolder}/ — dev-only, open this folder in VS Code and press F5 to debug "
+            + "(docs/DEBUGGING.md)");
     }
     Console.WriteLine($"  quarp run {folder}");
     return 0;
@@ -342,6 +408,59 @@ static bool WriteDevProject(string root)
     Directory.CreateDirectory(devFolder);
     File.WriteAllText(
         Path.Combine(devFolder, CartTemplate.DevProjectFile),
-        string.Format(System.Globalization.CultureInfo.InvariantCulture, CartTemplate.DevProjectFormat, toolsDir));
+        string.Format(CultureInfo.InvariantCulture, CartTemplate.DevProjectFormat, toolsDir));
     return true;
+}
+
+/// <summary>
+/// Writes <c>.vscode/launch.json</c> and <c>.vscode/tasks.json</c> so that opening the cartridge
+/// folder in VS Code and pressing F5 runs the cart under the .NET debugger (ADR-019; M4 work
+/// order, stage 1). Dev-only in the same four senses <c>.quarp/</c> is: the loader globs
+/// <c>src/**/*.cs</c>, the packer writes only the named files, the watcher's filter is an
+/// allow-list, and the code budget never sees the folder.
+///
+/// <para>Skipped with a warning rather than a failure when the <c>quarp</c> executable cannot be
+/// located: a launch configuration pointing at nothing is worse than no launch configuration,
+/// and the cartridge itself is perfectly usable without one.</para>
+/// </summary>
+static bool WriteVsCodeFiles(string root)
+{
+    string? exePath = FindQuarpExecutable();
+    if (exePath is null)
+    {
+        Console.Error.WriteLine(
+            $"quarp: skipped {CartTemplate.VsCodeFolder}/ — could not find the quarp executable "
+            + $"in {AppContext.BaseDirectory}.");
+        return false;
+    }
+
+    // JSON, not string interpolation: a Windows path is backslashes all the way down and each
+    // one has to be escaped. Serialize gives back the quoted, escaped literal, so the token in
+    // the template carries its quotes and is replaced whole.
+    string quotedPath = JsonSerializer.Serialize(exePath);
+    string vsCodeFolder = Path.Combine(root, CartTemplate.VsCodeFolder);
+    Directory.CreateDirectory(vsCodeFolder);
+    File.WriteAllText(
+        Path.Combine(vsCodeFolder, CartTemplate.LaunchFile),
+        CartTemplate.LaunchJson.Replace(CartTemplate.ToolPathToken, quotedPath, StringComparison.Ordinal));
+    File.WriteAllText(
+        Path.Combine(vsCodeFolder, CartTemplate.TasksFile),
+        CartTemplate.TasksJson.Replace(CartTemplate.ToolPathToken, quotedPath, StringComparison.Ordinal));
+    return true;
+}
+
+/// <summary>
+/// The absolute path VS Code should launch. The apphost next to the tools is preferred over
+/// <see cref="Environment.ProcessPath"/> because that is the same folder the dev csproj already
+/// anchors on; the process path is the fallback for a layout where the apphost was not published.
+/// </summary>
+static string? FindQuarpExecutable()
+{
+    string beside = Path.Combine(AppContext.BaseDirectory, OperatingSystem.IsWindows() ? "quarp.exe" : "quarp");
+    if (File.Exists(beside))
+    {
+        return beside;
+    }
+    string? processPath = Environment.ProcessPath;
+    return processPath is not null && File.Exists(processPath) ? processPath : null;
 }

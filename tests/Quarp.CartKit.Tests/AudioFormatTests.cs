@@ -240,6 +240,67 @@ public class AudioFormatTests
     }
 
     [Fact]
+    public void RejectsASilentStepThatStillNamesANote()
+    {
+        byte[] payload = SamplePayload();
+        AudioFormat.ValidateSfxPayload(payload, "sfx.bin");    // control
+
+        // Volume 0 silences the step, so the note, wave and effect left in the word can never be
+        // heard — and what cannot be heard must not be free to change the bytes, exactly as with
+        // a music channel that is off but still remembers a slot. Otherwise two banks that sound
+        // identical compare unequal and the cartridge identity moves for an inaudible edit.
+        AudioFormat.WriteStep(payload, 0, 1,
+            AudioFormat.PackStep(52, AudioFormat.WavePulse50, 0, AudioFormat.EffectNone));
+        var e = Assert.Throws<CartLoadException>(() => AudioFormat.ValidateSfxPayload(payload, "sfx.bin"));
+        Assert.Contains("slot 0 step 1", e.Message);
+        Assert.Contains("volume 0", e.Message);
+
+        // Control the other way round: the canonical spelling of that same rest loads.
+        AudioFormat.WriteStep(payload, 0, 1, 0);
+        AudioFormat.ValidateSfxPayload(payload, "sfx.bin");
+    }
+
+    [Fact]
+    public void RejectsAStepTheSlotNeverPlays()
+    {
+        byte[] payload = SamplePayload();
+        AudioFormat.ValidateSfxPayload(payload, "sfx.bin");    // control
+
+        // Slot 0 plays three steps. Step 3 is stored and never heard — not by the sequencer and
+        // not through an arpeggio group either, since those are clipped to the slot's length —
+        // so it obeys the same canonicity rule.
+        AudioFormat.WriteStep(payload, 0, 3,
+            AudioFormat.PackStep(52, AudioFormat.WavePulse50, 5, AudioFormat.EffectNone));
+        var e = Assert.Throws<CartLoadException>(() => AudioFormat.ValidateSfxPayload(payload, "sfx.bin"));
+        Assert.Contains("slot 0 step 3", e.Message);
+
+        // An unused slot is the same rule with a length of zero: all 32 of its steps are dead.
+        AudioFormat.WriteStep(payload, 0, 3, 0);
+        AudioFormat.WriteStep(payload, 9, 0,
+            AudioFormat.PackStep(52, AudioFormat.WavePulse50, 5, AudioFormat.EffectNone));
+        var unused = Assert.Throws<CartLoadException>(() => AudioFormat.ValidateSfxPayload(payload, "sfx.bin"));
+        Assert.Contains("slot 9 step 0", unused.Message);
+
+        // Control: with both words back to zero the payload is legal again.
+        AudioFormat.WriteStep(payload, 9, 0, 0);
+        AudioFormat.ValidateSfxPayload(payload, "sfx.bin");
+    }
+
+    [Fact]
+    public void ARestInsideASlotIsLegalAndSurvivesTheFileRoundTrip()
+    {
+        // The other half of the two rules above: a rest written the one legal way is ordinary
+        // data, and a bank holding one goes through write and parse unchanged.
+        byte[] payload = SamplePayload();
+        AudioFormat.WriteSlotHeader(payload, 0, speed: 3, length: 4, loopStart: 0, loopEnd: 0);
+        AudioFormat.WriteStep(payload, 0, 3, 0);
+
+        byte[] file = AudioFormat.WriteSfxFile(payload);
+        Assert.Equal(payload, AudioFormat.ParseSfxFile(file, "sfx.bin"));
+        Assert.Equal(0, AudioFormat.Step(payload, 0, 3));
+    }
+
+    [Fact]
     public void RejectsAnEmptySlotThatIsNotEmpty()
     {
         byte[] payload = AudioFormat.EmptySfxPayload();

@@ -100,7 +100,7 @@ public class ApuTests
         Apu apu = ChipWith(Slot(), id: 5);
         apu.PlaySfx(0);   // slot 0 was never filled: length 0
         apu.PlaySfx(64);
-        apu.PlaySfx(-1);
+        apu.PlaySfx(-2);  // -1 is the stop id (see the stop tests); -2 and below stay no-ops
         Assert.False(apu.IsChannelBusy(0));
         apu.PlaySfx(5);   // the slot that does exist
         Assert.True(apu.IsChannelBusy(0));
@@ -392,6 +392,121 @@ public class ApuTests
         Assert.True(distinct.Count >= 3, $"arpeggio produced {distinct.Count} distinct pitches");
     }
 
+    [Fact]
+    public void ArpeggioSkipsARestInsideItsGroup()
+    {
+        // A rest is the zero word, so its note is 0 — C2, three octaves under this chord. Until
+        // M4 the arpeggio played it: ticks 2 and 3 came out at 2 sign changes, a thud in the
+        // middle of the chord. Now the cycle runs over the three sounding steps instead.
+        var slot = new SfxSlot { Speed = 16, Length = 4 };
+        slot[0] = new SfxStep(Note, Waveform.Pulse50, 7, NoteEffect.Arpeggio);        // A4
+        slot[1] = SfxStep.Rest;
+        slot[2] = new SfxStep(Note + 12, Waveform.Pulse50, 7, NoteEffect.Arpeggio);   // A5
+        slot[3] = new SfxStep(Note + 7, Waveform.Pulse50, 7, NoteEffect.Arpeggio);    // E5
+        Apu apu = ChipWith(slot);
+        apu.PlaySfx(0);
+
+        int[] changes = new int[8];
+        for (int tick = 0; tick < changes.Length; tick++)
+        {
+            apu.RenderTick();
+            changes[tick] = SignChanges(apu.Block);
+        }
+
+        // A4, the lowest note of the group, shows 14 crossings a block; the rest's C2 shows 2.
+        // The threshold sits in the gap, so the assertion fails loudly rather than by a hair.
+        Assert.All(changes, c => Assert.True(c >= 10,
+            $"a tick sounded at {c} crossings — the rest is being played as a note: {string.Join(", ", changes)}"));
+        // ...and it is still an arpeggio and not one held note.
+        Assert.True(changes.Distinct().Count() >= 3, $"the chord stopped moving: {string.Join(", ", changes)}");
+    }
+
+    [Fact]
+    public void ArpeggioOverAGroupWhereOnlyThisStepSoundsIsANoOp()
+    {
+        // A chord of one note is that note: the effect has to render exactly as no effect at all,
+        // not as one note stuttering against three rests.
+        var solo = new SfxSlot { Speed = 16, Length = 4 };
+        solo[0] = new SfxStep(Note, Waveform.Pulse50, 7, NoteEffect.Arpeggio);
+        var plain = new SfxSlot { Speed = 16, Length = 4 };
+        plain[0] = new SfxStep(Note, Waveform.Pulse50, 7);
+        Assert.Equal(Hashes(solo), Hashes(plain));
+
+        // The negative control: put one more sounding step in the group and the two part company,
+        // so the equality above is not the equality of two silences.
+        var chord = new SfxSlot { Speed = 16, Length = 4 };
+        chord[0] = new SfxStep(Note, Waveform.Pulse50, 7, NoteEffect.Arpeggio);
+        chord[2] = new SfxStep(Note + 7, Waveform.Pulse50, 7);
+        Assert.NotEqual(Hashes(chord), Hashes(plain));
+
+        static List<ulong> Hashes(SfxSlot slot)
+        {
+            Apu apu = ChipWith(slot);
+            apu.PlaySfx(0);
+            var hashes = new List<ulong>();
+            for (int tick = 0; tick < 8; tick++)
+            {
+                apu.RenderTick();
+                hashes.Add(FrameHash.Compute(apu.Block));
+            }
+            return hashes;
+        }
+    }
+
+    [Fact]
+    public void ArpeggioDoesNotReachPastTheSlotsLength()
+    {
+        // The group of four overhangs a three-step slot. Step 3 is stored — a hand-built bank may
+        // put anything there — but the slot does not play it, and an arpeggio must not be the back
+        // door it is heard through. That is exactly what lets sfx.bin insist such a step is zero.
+        var slot = new SfxSlot { Speed = 16, Length = 3 };
+        slot[0] = new SfxStep(Note, Waveform.Pulse50, 7, NoteEffect.Arpeggio);
+        slot[1] = new SfxStep(Note + 12, Waveform.Pulse50, 7, NoteEffect.Arpeggio);
+        slot[2] = new SfxStep(Note + 7, Waveform.Pulse50, 7, NoteEffect.Arpeggio);
+        slot[3] = new SfxStep(SfxStep.MaxNote, Waveform.Pulse50, 7);   // D#7, past the length
+        Apu apu = ChipWith(slot);
+        apu.PlaySfx(0);
+
+        int[] changes = new int[8];
+        for (int tick = 0; tick < changes.Length; tick++)
+        {
+            apu.RenderTick();
+            changes[tick] = SignChanges(apu.Block);
+        }
+
+        // The three playable notes top out at A5 (29 crossings); D#7 would show 82.
+        Assert.All(changes, c => Assert.True(c < 40,
+            $"a tick sounded at {c} crossings — step 3 is being heard: {string.Join(", ", changes)}"));
+        Assert.True(changes.Distinct().Count() >= 3, $"the chord stopped moving: {string.Join(", ", changes)}");
+    }
+
+    [Fact]
+    public void ARestIsSilentButNotInert()
+    {
+        // Volume 0 silences the step itself (VolumeZeroIsARestEvenWithEverythingElseSet above),
+        // yet the channel keeps running through it: the rest's note is where the next slide
+        // starts from. A rest is the zero word, so that note is 0 — C2 — and the slide climbs
+        // from there instead of holding the note before the rest.
+        Assert.InRange(FirstTickOfTheSlide(SfxStep.Rest), 1, 5);                              // C2
+        Assert.InRange(FirstTickOfTheSlide(new SfxStep(Note + 12, Waveform.Pulse50, 7)), 25, 33);  // A5
+
+        static int FirstTickOfTheSlide(SfxStep middle)
+        {
+            var slot = new SfxSlot { Speed = 8, Length = 3 };
+            slot[0] = new SfxStep(Note + 12, Waveform.Pulse50, 7);
+            slot[1] = middle;
+            slot[2] = new SfxStep(Note + 12, Waveform.Pulse50, 7, NoteEffect.Slide);
+            Apu apu = ChipWith(slot);
+            apu.PlaySfx(0);
+            for (int tick = 0; tick < 16; tick++)
+            {
+                apu.RenderTick();   // steps 0 and 1, eight ticks each
+            }
+            apu.RenderTick();       // the slide's first tick, where it is still at its origin
+            return SignChanges(apu.Block);
+        }
+    }
+
     // --- channel allocation ---
 
     [Fact]
@@ -434,6 +549,95 @@ public class ApuTests
         Assert.Equal(1, apu.ChannelSfx(2));
         apu.PlaySfx(2, 2);
         Assert.Equal(2, apu.ChannelSfx(2));
+    }
+
+    // --- stopping a channel (API-8 §5: Sfx(-1, channel)) ---
+
+    [Fact]
+    public void StoppingOneChannelLeavesTheOtherThreeSounding()
+    {
+        Apu apu = ChipWith(Slot(speed: 255, length: 32));
+        for (int channel = 0; channel < Apu.ChannelCount; channel++)
+        {
+            apu.PlaySfx(0, channel);
+        }
+        apu.RenderTick();
+        Assert.Equal(4 * Apu.PeakAmplitude, Peak(apu.Block));   // control: four voices are audible
+
+        apu.PlaySfx(Apu.StopSfx, 2);
+        Assert.False(apu.IsChannelBusy(2));
+        Assert.True(apu.IsChannelBusy(0));
+        Assert.True(apu.IsChannelBusy(1));
+        Assert.True(apu.IsChannelBusy(3));
+
+        // All four started the same slot on the same tick, so the survivors stay in step: the
+        // peak is exactly three voices, not "a bit quieter".
+        apu.RenderTick();
+        Assert.Equal(3 * Apu.PeakAmplitude, Peak(apu.Block));
+    }
+
+    [Fact]
+    public void StoppingWithoutNamingAChannelSilencesAllFour()
+    {
+        Apu apu = ChipWith(Slot(speed: 255, length: 32));
+        for (int channel = 0; channel < Apu.ChannelCount; channel++)
+        {
+            apu.PlaySfx(0, channel);
+        }
+
+        // Control: -2 is not the stop id — PICO-8 spends it on "release from the loop", so a
+        // console that stopped on every negative number could never grow that.
+        apu.PlaySfx(-2);
+        for (int channel = 0; channel < Apu.ChannelCount; channel++)
+        {
+            Assert.True(apu.IsChannelBusy(channel), $"channel {channel} was stopped by an id that is not -1");
+        }
+
+        apu.PlaySfx(Apu.StopSfx);   // channel defaults to -1: every channel
+        for (int channel = 0; channel < Apu.ChannelCount; channel++)
+        {
+            Assert.False(apu.IsChannelBusy(channel));
+        }
+        apu.RenderTick();
+        Assert.Equal(0, Peak(apu.Block));
+    }
+
+    [Fact]
+    public void StoppingAChannelOutOfRangeDoesNothing()
+    {
+        Apu apu = ChipWith(Slot(speed: 255, length: 32));
+        apu.PlaySfx(0, 1);
+        apu.PlaySfx(Apu.StopSfx, 4);
+        apu.PlaySfx(Apu.StopSfx, -2);
+        apu.StopChannel(4);
+        apu.StopChannel(-2);
+        Assert.True(apu.IsChannelBusy(1));
+
+        // Control: the same call inside the range does stop it.
+        apu.StopChannel(1);
+        Assert.False(apu.IsChannelBusy(1));
+    }
+
+    [Fact]
+    public void StoppingAVoiceTheMusicWasDrivingGivesItBackAtTheNextPattern()
+    {
+        var bank = new AudioBank();
+        bank.GetSfx(1).CopyFrom(Slot(speed: 1, length: 8));
+        bank.SetPattern(0, new MusicPattern(1, -1, -1, -1));
+        bank.SetPattern(1, new MusicPattern(1, -1, -1, -1, MusicFlags.Stop));
+        var apu = new Apu();
+        apu.LoadBank(bank);
+
+        apu.PlayMusic(0);
+        Assert.True(apu.IsChannelMusic(0));
+
+        apu.PlaySfx(Apu.StopSfx, 0);
+        Assert.False(apu.IsChannelBusy(0));
+        Assert.True(apu.IsMusicPlaying, "stopping a voice must not stop the song — that is Music(-1)");
+
+        RunTicks(apu, Apu.MinPatternTicks);
+        Assert.Equal(1, apu.CurrentPattern);
+        Assert.True(apu.IsChannelMusic(0), "the next pattern should have taken the voice back");
     }
 
     // --- music ---
@@ -577,6 +781,99 @@ public class ApuTests
         Assert.Equal(0, apu.CurrentPattern);
         apu.RenderTick();
         Assert.Equal(1, apu.CurrentPattern);
+    }
+
+    [Fact]
+    public void APatternLastsAsLongAsItsLongestVoiceAndNeverLessThanTheFloor()
+    {
+        // The longest, not the shortest and not "the lowest active channel's": a voice must not
+        // be cut off mid-phrase by a shorter one beside it. The short slot sits on the lower
+        // channel on purpose, so a chip that measured the pattern by channel 0 would turn it
+        // over at tick 32 and fail here.
+        var bank = new AudioBank();
+        bank.GetSfx(1).CopyFrom(Slot(speed: 8, length: 4));    // 32 ticks
+        bank.GetSfx(2).CopyFrom(Slot(speed: 8, length: 8));    // 64 ticks
+        bank.GetSfx(3).CopyFrom(Slot(speed: 1, length: 4));    //  4 ticks, well under the floor
+        bank.SetPattern(0, new MusicPattern(1, 2, -1, -1));
+        bank.SetPattern(1, new MusicPattern(3, -1, -1, -1));
+        var apu = new Apu();
+        apu.LoadBank(bank);
+
+        apu.PlayMusic(0);
+        RunTicks(apu, 63);
+        Assert.Equal(0, apu.CurrentPattern);
+        apu.RenderTick();
+        Assert.Equal(1, apu.CurrentPattern);
+
+        // And the floor: four ticks of sound still occupy a whole 32-tick section.
+        RunTicks(apu, Apu.MinPatternTicks - 1);
+        Assert.Equal(1, apu.CurrentPattern);
+        apu.RenderTick();
+        Assert.Equal(2, apu.CurrentPattern);
+    }
+
+    [Fact]
+    public void APatternsLengthDoesNotDependOnWhatTheCartridgeIsPlaying()
+    {
+        // The long voice is on a channel the cartridge is holding, so the music skips it — but
+        // the pattern still lasts as long as that voice would have. Song timing that moved with
+        // the game's sound effects would turn patterns over on different ticks in a rewound run,
+        // and the PCM hash would stop matching for a reason nobody could see.
+        var bank = new AudioBank();
+        bank.GetSfx(1).CopyFrom(Slot(speed: 8, length: 4));     // 32 ticks
+        bank.GetSfx(2).CopyFrom(Slot(speed: 8, length: 8));     // 64 ticks
+        bank.GetSfx(4).CopyFrom(Slot(speed: 255, length: 32));  // the cartridge's own long sound
+        bank.SetPattern(0, new MusicPattern(1, 2, -1, -1));
+        bank.SetPattern(1, new MusicPattern(1, -1, -1, -1, MusicFlags.Stop));
+        var apu = new Apu();
+        apu.LoadBank(bank);
+
+        apu.PlaySfx(4, 1);
+        apu.PlayMusic(0);
+        Assert.Equal(4, apu.ChannelSfx(1));      // the music did not get channel 1...
+
+        RunTicks(apu, 63);
+        Assert.Equal(0, apu.CurrentPattern);     // ...and still measured the pattern by it
+        apu.RenderTick();
+        Assert.Equal(1, apu.CurrentPattern);
+    }
+
+    [Fact]
+    public void AnEmptyPatternIsABarOfRestInTheMiddleOfASongRatherThanItsEnd()
+    {
+        // The document used to say an empty pattern ends the song. It does not: the song rests
+        // for one section and goes on, which is what makes "one bar of silence before the chorus"
+        // expressible at all. Ending a song is the stop flag's job, and it is checked below so
+        // that this test cannot pass by nothing ever ending.
+        var bank = new AudioBank();
+        bank.GetSfx(1).CopyFrom(Slot(speed: 8, length: 4));      // 32 ticks
+        bank.GetSfx(2).CopyFrom(Slot(speed: 255, length: 32));   // a long cartridge sound
+        bank.SetPattern(0, new MusicPattern(1, -1, -1, -1));
+        bank.SetPattern(1, default);                             // nothing plays in this one
+        bank.SetPattern(2, new MusicPattern(1, -1, -1, -1, MusicFlags.Stop));
+        var apu = new Apu();
+        apu.LoadBank(bank);
+
+        apu.PlaySfx(2, 3);          // the cartridge holds channel 3 the whole time
+        apu.PlayMusic(0);
+        Assert.True(apu.IsChannelMusic(0));
+
+        RunTicks(apu, Apu.MinPatternTicks);
+        Assert.Equal(1, apu.CurrentPattern);
+        Assert.True(apu.IsMusicPlaying, "an empty pattern is a rest, not the end of the song");
+        Assert.False(apu.IsChannelBusy(0));      // the music's voice rests through it...
+        Assert.Equal(2, apu.ChannelSfx(3));      // ...and the cartridge's sound is untouched
+
+        RunTicks(apu, Apu.MinPatternTicks);
+        Assert.Equal(2, apu.CurrentPattern);
+        Assert.True(apu.IsChannelMusic(0), "the song should have picked its voice back up");
+
+        // The negative control for the assertion above: this is what a song actually ending
+        // looks like, and it takes a flag to do it.
+        RunTicks(apu, Apu.MinPatternTicks);
+        Assert.False(apu.IsMusicPlaying);
+        Assert.Equal(Apu.NoPattern, apu.CurrentPattern);
+        Assert.Equal(2, apu.ChannelSfx(3));      // the cartridge's channel survives that too
     }
 
     // --- determinism ---

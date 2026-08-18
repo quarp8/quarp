@@ -11,6 +11,28 @@ namespace Quarp.Api;
 /// </summary>
 public interface IConsoleApi
 {
+    // --- screen (SPEC-8 §1) ---
+
+    /// <summary>
+    /// Screen width in pixels — 128 on QUARP-8. Read it instead of writing 128: the number is
+    /// a property of the console the cartridge is running on, and the console is chosen at run
+    /// time. A cartridge that lays itself out from this value moves with the hardware profile
+    /// it is handed; one that spells the number out is pinned to a screen it never checked for.
+    /// <para>Constant across a whole run — the framebuffer is allocated once, at construction —
+    /// so it is safe to cache in a field during <c>Init</c>, though there is no reason to.</para>
+    /// <para>A read, not a write: it changes nothing a resimulation has to reproduce, so it is
+    /// legal in <c>Draw</c> and, unlike <see cref="Sfx"/> or <see cref="Rnd"/>, invisible to
+    /// the determinism analyzer.</para>
+    /// </summary>
+    int ScreenWidth { get; }
+
+    /// <summary>
+    /// Screen height in pixels — 72 on QUARP-8. Same rules as <see cref="ScreenWidth"/>:
+    /// read it, never spell the number out. Bottom-anchored HUDs (<c>ScreenHeight - 8</c>) and
+    /// centered layouts (<c>ScreenHeight / 2</c>) are the places it earns its keep.
+    /// </summary>
+    int ScreenHeight { get; }
+
     // --- graphics ---
 
     /// <summary>Fills the whole screen with a color slot, ignoring camera and clip but honoring Pal.</summary>

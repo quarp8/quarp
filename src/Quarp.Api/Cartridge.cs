@@ -26,6 +26,25 @@ public abstract class Cartridge
     /// <summary>Draws the frame. Must not change game state, or replays and rewind break (SPEC-8 §7).</summary>
     public virtual void Draw() { }
 
+    // --- screen ---
+
+    /// <summary>
+    /// Screen width in pixels, read from the console the cartridge is attached to — 128 on
+    /// QUARP-8. Deliberately a property and not a <c>const</c>: a constant is baked into the
+    /// cartridge's IL at compile time, so a cart built against one screen size would keep
+    /// laying itself out for that size no matter which console later loaded it, and the whole
+    /// point of asking is to find out. Use it wherever the number 128 was about to be typed —
+    /// <c>ScreenWidth / 2</c> to center, <c>ScreenWidth - w</c> to right-align.
+    /// </summary>
+    protected int ScreenWidth => Q.ScreenWidth;
+
+    /// <summary>
+    /// Screen height in pixels, read from the console — 72 on QUARP-8, and a property for
+    /// exactly the reason <see cref="ScreenWidth"/> is. <c>ScreenHeight - 8</c> anchors a HUD
+    /// to the bottom edge on any profile; the literal 72 anchors it to one.
+    /// </summary>
+    protected int ScreenHeight => Q.ScreenHeight;
+
     // --- graphics ---
 
     /// <summary>Fills the whole screen with a color slot, ignoring camera and clip but honoring Pal.</summary>

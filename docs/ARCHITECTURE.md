@@ -102,7 +102,7 @@ Windows 11 x64, .NET SDK 10.0.100-rc.2, MonoGame.Framework.DesktopGL 3.8.5 (Open
 
 Путь от файла до работающей игры:
 
-1. Распаковать `*.quarp8` (zip) → `manifest.json`, `src/*.cs`, ассеты (включая банки
+1. Распаковать `*.quarp8` (zip) → `manifest.json`, `src/**/*.cs`, ассеты (включая банки
    звука `sfx.bin` и `music.bin` — раскладка в [AUDIO-FORMAT.md](AUDIO-FORMAT.md)).
 2. Проверить лимиты профиля (размер кода без comment trivia, размеры ассетов,
    точное соответствие `gfx.png` палитре).

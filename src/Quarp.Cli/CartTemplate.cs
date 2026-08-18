@@ -136,10 +136,15 @@ public static class CartTemplate
         """;
 
     /// <summary>
-    /// The task <see cref="LaunchJson"/> runs before launching: a compile check through the very
-    /// compiler <c>quarp run</c> uses, so the QRP1001-QRP1004 diagnostics and any C# error land
-    /// in the Problems panel before the window opens. <c>quarp sim --ticks 0</c> loads, compiles
-    /// and runs <c>Init</c>, then stops — no game loop, no window, nothing written to disk.
+    /// The task <see cref="LaunchJson"/> runs before launching: <c>quarp build</c>, which loads
+    /// the cartridge, compiles it with the very compiler <c>quarp run</c> uses, checks the code
+    /// budget and the generated banks, and stops — so every C# error and every QRP1001-QRP1004
+    /// diagnostic lands in the Problems panel before the window opens.
+    ///
+    /// <para>It replaces <c>quarp sim --ticks 0</c>, which stood in for a build command that did
+    /// not exist. That stand-in attached the cart to a console, and attaching runs <c>Init</c>:
+    /// the task that ran before every F5 executed the author's code and reported a startup crash
+    /// as a compilation failure. It also printed two hashes the task had no use for.</para>
     ///
     /// <para>The problem matcher is spelled out rather than borrowed from <c>$msCompile</c>:
     /// the exact line shape is ours (Roslyn's <c>Diagnostic.ToString()</c>,
@@ -158,15 +163,17 @@ public static class CartTemplate
             "version": "2.0.0",
             "tasks": [
                 {
-                    // Compile check with the same compiler `quarp run` uses: loads the cart,
-                    // compiles src/**/*.cs, runs Init and stops. No window, no save.dat, no
-                    // game loop. It still prints the two lines every headless run ends with -
-                    // the PCM digest and the framebuffer hash of a zero-tick run - which is
-                    // why "reveal": "silent" is set below: nothing here is worth a panel.
+                    // `quarp build` loads the cart, compiles src/**/*.cs with the same compiler
+                    // `quarp run` uses, checks the 64 KB code budget and the generated banks
+                    // (sfx.bin, music.bin, map.bin) against the text they came from, and stops.
+                    // No window, no save.dat, no hashes on stdout - and, unlike the
+                    // `sim --ticks 0` this replaced, not a single line of your cartridge's
+                    // Init or Update. A cart that crashes on startup is something you meet in
+                    // the debugger, not something that reports itself as a failed build.
                     "label": "quarp-build",
                     "type": "process",
                     "command": "__QUARP_EXE__",
-                    "args": ["sim", "${workspaceFolder}", "--ticks", "0"],
+                    "args": ["build", "${workspaceFolder}"],
                     "group": "build",
                     "presentation": {
                         "reveal": "silent",
@@ -203,8 +210,20 @@ public static class CartTemplate
 
         public sealed class MyCart : Cartridge
         {
-            private int _x = 60;
-            private int _y = 40;
+            private const int Size = 8;
+
+            private int _x;
+            private int _y;
+
+            public override void Init()
+            {
+                // Ask the console how big it is instead of writing 128 and 72 here. The numbers
+                // are properties, not constants, so the same cartridge fills whatever screen it
+                // is given — which is what lets a game be looked at on two resolutions without
+                // being edited (API-8, "ScreenWidth / ScreenHeight").
+                _x = (ScreenWidth - Size) / 2;
+                _y = (ScreenHeight - Size) / 2;
+            }
 
             public override void Update()
             {
@@ -230,9 +249,12 @@ public static class CartTemplate
             public override void Draw()
             {
                 Cls(0);
-                Print("HELLO QUARP-8", 38, 8, 3);
-                RectFill(_x, _y, 8, 8, 7);
+                // The built-in font is fixed-width 4x6, so a line is 4 * its length wide.
+                Print(Title, (ScreenWidth - Title.Length * 4) / 2, 8, 3);
+                RectFill(_x, _y, Size, Size, 7);
             }
+
+            private const string Title = "HELLO QUARP-8";
         }
         """;
 }

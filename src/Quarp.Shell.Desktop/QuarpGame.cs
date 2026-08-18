@@ -53,11 +53,18 @@ public sealed class QuarpGame : Game
     /// tick's <c>Update</c> and waits there. It is ignored in pattern mode, which has no
     /// simulation to stop — the CLI rejects that combination before it gets here.
     /// </summary>
-    public QuarpGame(string? cartPath = null, int? breakAtTick = null)
+    /// <param name="profile">
+    /// Which console to build. Null means <see cref="ConsoleProfile.Profile8"/>, the spec.
+    /// The only other value in M4 is the dev-only <see cref="ConsoleProfile.Profile8Wide"/>
+    /// behind <c>--profile 8w</c> (M4 work order, Р6): it exists so the 128x72 verdict can be
+    /// taken by looking at the same game on both screens rather than at thresholds on paper,
+    /// and it is deliberately not part of the spec, CI, or any golden.
+    /// </param>
+    public QuarpGame(string? cartPath = null, int? breakAtTick = null, ConsoleProfile? profile = null)
     {
         StartCompilerWarmUp();
 
-        _profile = ConsoleProfile.Profile8;
+        _profile = profile ?? ConsoleProfile.Profile8;
         if (cartPath is null)
         {
             _patternFramebuffer = new Framebuffer(_profile);
@@ -65,7 +72,7 @@ public sealed class QuarpGame : Game
         }
         else
         {
-            _session = CartSession.Start(cartPath);
+            _session = CartSession.Start(cartPath, _profile);
             _session.BreakAt = breakAtTick;
             // Lets a long resimulation repaint the window from inside its progress callback
             // instead of freezing it (ARCHITECTURE §4). Cached once — it is called in a loop.

@@ -36,12 +36,34 @@ switch (command)
         // it. NumberStyles.None is the strict half: no sign, no whitespace, no separators, so
         // `--break-at +5` and `--break-at 1,000` fail here, naming the value, instead of being
         // read as something the author did not write.
-        const string RunUsage = "usage: quarp run [path] [--break-at N]";
+        const string RunUsage = "usage: quarp run [path] [--break-at N] [--profile 8|8w]";
         string? cartPath = null;
         int? breakAt = null;
+        ConsoleProfile? profile = null;
         for (int i = 1; i < args.Length; i++)
         {
-            if (args[i] == "--break-at")
+            // --profile is the dev-only half of the resolution question (M4 work order, Р6).
+            // 8w is 160x90: not in the spec, not in CI, not in any golden — it exists so the
+            // same cartridge can be looked at on both screens before the verdict, because a
+            // verdict taken from thresholds on paper is a verdict nobody can check. After the
+            // verdict this flag and its profile leave in one commit, whichever way it goes.
+            if (args[i] == "--profile")
+            {
+                string? name = i + 1 < args.Length ? args[i + 1] : null;
+                profile = name switch
+                {
+                    "8" => ConsoleProfile.Profile8,
+                    "8w" => ConsoleProfile.Profile8Wide,
+                    _ => null,
+                };
+                if (profile is null)
+                {
+                    Console.Error.WriteLine($"quarp run: --profile takes 8 or 8w ({RunUsage})");
+                    return 1;
+                }
+                i++;
+            }
+            else if (args[i] == "--break-at")
             {
                 if (i + 1 >= args.Length
                     || !int.TryParse(args[i + 1], NumberStyles.None, CultureInfo.InvariantCulture, out int parsedBreak)
@@ -72,7 +94,7 @@ switch (command)
         QuarpGame game;
         try
         {
-            game = new QuarpGame(cartPath, breakAt);
+            game = new QuarpGame(cartPath, breakAt, profile);
         }
         catch (CartLoadException e)
         {
@@ -172,6 +194,15 @@ switch (command)
         }
     }
 
+    case "build":
+    {
+        // The diagnosis command ROADMAP promised and the tool never had (M4 Р14): load,
+        // compile, check the limits and the generated banks, print what was found — no window,
+        // no tick. This is what .vscode/tasks.json runs before F5, in place of the
+        // `sim --ticks 0` that used to stand in for it and that ran Init on every launch.
+        return BuildCommand.Invoke(args[1..]);
+    }
+
     case "new":
     {
         if (args.Length < 2)
@@ -219,6 +250,13 @@ switch (command)
             : AudioBuildCommand.Invoke(audioArgs);
     }
 
+    case "map":
+    {
+        // `map` is a group like `audio` and `replay`: the subcommand owns its own arguments,
+        // its error text and its exit code.
+        return MapBuildCommand.Invoke(args.Length > 1 ? args[1..] : Array.Empty<string>());
+    }
+
     case "bench":
     {
         if (args.Length < 2)
@@ -248,12 +286,18 @@ switch (command)
         Console.WriteLine("usage:");
         Console.WriteLine("  quarp run [path]             open the console window (test pattern without a path,");
         Console.WriteLine("                               a cart folder or .quarp8 file with one)");
+        Console.WriteLine("  quarp run <path> --profile 8w");
+        Console.WriteLine("                               run on the dev-only 160x90 console instead of 128x72");
+        Console.WriteLine("                               (M4 resolution spike; not part of the spec)");
         Console.WriteLine("  quarp run <path> --break-at N");
         Console.WriteLine("                               same, but pause before Update of tick N and stay there");
         Console.WriteLine("                               (docs/DEBUGGING.md — debugging in time)");
         Console.WriteLine("  quarp new <folder>           create a cartridge template (manifest.json + src/main.cs,");
         Console.WriteLine("                               .quarp/cart.csproj and .vscode for F5 debugging)");
         Console.WriteLine("  quarp pack <folder> [-o f]   pack a cart folder into a .quarp8 file");
+        Console.WriteLine("  quarp build <cart>           compile and check a cart — limits, metadata, banks —");
+        Console.WriteLine("                               without opening a window or running a tick; this is");
+        Console.WriteLine("                               what F5 runs before launching the debugger");
         Console.WriteLine("  quarp sim <path> --ticks N [--every N]");
         Console.WriteLine("                               run N ticks headless, print the framebuffer FNV-1a hash");
         Console.WriteLine("  quarp replay record <cart> -o <file>.qrpr --ticks N [--input <script>]");
@@ -269,6 +313,9 @@ switch (command)
         Console.WriteLine("  quarp audio silence --ticks N");
         Console.WriteLine("                               print the PCM digest of N ticks in which nothing sounds");
         Console.WriteLine("                               (what CI compares a run against to catch a mute cart)");
+        Console.WriteLine("  quarp map build <cart> [--check]");
+        Console.WriteLine("                               compile map.csv into map.bin (docs/MAP-FORMAT.md);");
+        Console.WriteLine("                               a cart without a map.csv is not an error");
         Console.WriteLine("  quarp bench <cart> --ticks N  measure play and resimulation speed (rewind cost)");
         Console.WriteLine("  quarp pattern <file>         write the test pattern as a .bmp image");
         Console.WriteLine();

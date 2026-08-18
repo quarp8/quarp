@@ -84,6 +84,23 @@ public sealed class VirtualConsole : IConsoleApi
     public Framebuffer Framebuffer { get; }
 
     /// <summary>
+    /// Screen width in pixels, as the cartridge sees it. The same number three ways —
+    /// <see cref="ConsoleProfile.Width"/>, <c>Framebuffer.Width</c> and the
+    /// <c>_width</c> every clip and plot already uses — and it is the field that is returned
+    /// so the API can never answer something the rasterizer disagrees with.
+    /// <para>This is the cartridge-facing half of "the hardware profile is data"
+    /// (ARCHITECTURE §2): the console is constructed around a profile, and the only way a
+    /// cartridge can learn its screen size is to ask the console it was attached to. That is
+    /// what makes the 160x90 spike (<see cref="ConsoleProfile.Profile8Wide"/>) a measurement
+    /// rather than a rebuild — the same compiled cartridge, pointed at a different console,
+    /// lays itself out differently without recompiling a line.</para>
+    /// </summary>
+    public int ScreenWidth => _width;
+
+    /// <summary>Screen height in pixels, as the cartridge sees it; see <see cref="ScreenWidth"/>.</summary>
+    public int ScreenHeight => _height;
+
+    /// <summary>
     /// The sound chip. Exposed so a shell can read <see cref="Audio.Apu.Block"/> after a tick
     /// and so tests can inspect channels; cartridges reach it only through <see cref="Sfx"/>
     /// and <see cref="Music"/>. Do not call <see cref="Audio.Apu.RenderTick"/> on it — the

@@ -84,14 +84,15 @@ public class CartTemplateTests
         Assert.Equal("quarp-build", task.GetProperty("label").GetString());
         Assert.Equal("process", task.GetProperty("type").GetString());
 
-        // `sim --ticks 0` and nothing else: it loads, compiles, runs Init and stops. A task that
-        // drifted into `run` would open a window on every F5, twice.
+        // `build` and nothing else: it loads, compiles, checks and stops — no window, no tick.
+        // A task that drifted into `run` would open a window on every F5, twice; one that drifted
+        // back to `sim` would run Init before the debugger is attached.
         var arguments = new List<string?>();
         foreach (JsonElement argument in task.GetProperty("args").EnumerateArray())
         {
             arguments.Add(argument.GetString());
         }
-        Assert.Equal(new[] { "sim", "${workspaceFolder}", "--ticks", "0" }, arguments);
+        Assert.Equal(new[] { "build", "${workspaceFolder}" }, arguments);
 
         // The problem matcher is the whole point of the task - without it a failed compile is a
         // silent non-launch - and its pattern has to survive being read as JSON, where every

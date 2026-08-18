@@ -105,6 +105,9 @@ public sealed class CartSession : IDisposable
     private (bool Crashed, bool Paused, int Speed, int Tick, string? Replay, string? Flash, bool InPlayback, bool AtBreak)
         _statusSignature = (false, false, -1, -1, null, null, false, false);
 
+    /// <summary>The console this session runs on; playback rebuilds its machine on the same one.</summary>
+    private readonly ConsoleProfile _profile;
+
     private CartSession(
         string cartPath,
         string savePath,
@@ -112,8 +115,10 @@ public sealed class CartSession : IDisposable
         TimeMachine machine,
         CartHost host,
         CartData data,
-        byte[] identity)
+        byte[] identity,
+        ConsoleProfile profile)
     {
+        _profile = profile;
         _cartPath = cartPath;
         _savePath = savePath;
         _replayFolder = Path.Combine(cartPath, "replays");
@@ -223,8 +228,18 @@ public sealed class CartSession : IDisposable
     /// a crash inside the cartridge's Init starts the session paused with the banner up,
     /// so the author can fix the code and hot-reload.
     /// </summary>
-    public static CartSession Start(string path)
+    /// <param name="profile">
+    /// Which console the cartridge runs on. Defaults to <see cref="ConsoleProfile.Profile8"/>;
+    /// the only other value in M4 is the dev-only <see cref="ConsoleProfile.Profile8Wide"/>
+    /// behind <c>--profile 8w</c>, which exists so the resolution verdict can be taken by
+    /// looking at the same game on both screens instead of at thresholds on paper (M4 work
+    /// order, Р6). It has to be threaded through rather than read from a static, because a
+    /// replay resimulated on a different console than it was recorded on would not be the
+    /// same run — the profile is part of what determines every frame.
+    /// </param>
+    public static CartSession Start(string path, ConsoleProfile? profile = null)
     {
+        ConsoleProfile consoleProfile = profile ?? ConsoleProfile.Profile8;
         string fullPath = Path.GetFullPath(path);
         // Watch before loading: the first compile is the cold one (seconds — Roslyn's own
         // JIT) and an edit saved while it runs must not be lost. The watcher's pending flag
@@ -257,10 +272,10 @@ public sealed class CartSession : IDisposable
             int[] persistent = ReadSaveFile(savePath);
             var header = new ReplayHeader(identity, seed: 0, persistent);
             var machine = new TimeMachine(
-                ConsoleProfile.Profile8, host.Cartridge, header, new ReplayLog(),
+                consoleProfile, host.Cartridge, header, new ReplayLog(),
                 data.Gfx, data.Map, data.Flags, data.Sfx, data.Music);
 
-            var session = new CartSession(fullPath, savePath, watcher, machine, host, data, identity)
+            var session = new CartSession(fullPath, savePath, watcher, machine, host, data, identity, consoleProfile)
             {
                 Name = data.Manifest.Name,
             };
@@ -864,7 +879,7 @@ public sealed class CartSession : IDisposable
             // and re-runs Init, which is why leaving playback has to put the live session back
             // together rather than simply dropping the reference — see StopPlayback.
             var playback = new TimeMachine(
-                ConsoleProfile.Profile8, _host.Cartridge, header, log, _gfx, _map, _flags, _sfx, _music)
+                _profile, _host.Cartridge, header, log, _gfx, _map, _flags, _sfx, _music)
             {
                 Progress = _progressCallback,
                 ProgressInterval = ProgressIntervalTicks,

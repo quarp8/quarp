@@ -77,8 +77,9 @@ public static class CartSource
         // A folder cart is the only shape where the audio *sources* can be present, so it is the
         // only place that can catch the one confusing failure mode: an author edits sfx.txt,
         // never runs the compiler, and hears nothing for reasons the console cannot explain.
-        RequireBuiltAudio(root, "sfx.txt", "sfx.bin");
-        RequireBuiltAudio(root, "music.txt", "music.bin");
+        RequireBuiltAsset(root, "sfx.txt", "sfx.bin", "audio build");
+        RequireBuiltAsset(root, "music.txt", "music.bin", "audio build");
+        RequireBuiltAsset(root, "map.csv", "map.bin", "map build");
         byte[] sfx = LoadSfx(ReadOptionalFile(root, "sfx.bin"));
         byte[] music = LoadMusic(ReadOptionalFile(root, "music.bin"));
 
@@ -249,14 +250,27 @@ public static class CartSource
     /// loading silence — is the worst outcome available: the cart works, sounds wrong, and
     /// nothing anywhere says why. The message names the command that fixes it.
     /// </summary>
-    private static void RequireBuiltAudio(string root, string textName, string binaryName)
+    /// <summary>
+    /// Refuses a folder that has an asset's source text but not the binary the console actually
+    /// reads. The console never compiles <c>sfx.txt</c>, <c>music.txt</c> or <c>map.csv</c> on
+    /// load — they are author files, built by a CLI command — so without this the forgotten
+    /// build step is completely silent: the cartridge runs with a bank of rests or an empty map
+    /// and the author goes looking for the bug in their own code. That silence is exactly what
+    /// this project refuses everywhere else, so the check names the file, the missing binary and
+    /// the command that fixes it.
+    ///
+    /// <para>The reverse case is deliberately legal: a binary without its source is a cartridge
+    /// somebody shipped built, which is the normal shape of <c>.quarp8</c> and of a cart cloned
+    /// without its authoring files.</para>
+    /// </summary>
+    private static void RequireBuiltAsset(string root, string textName, string binaryName, string command)
     {
         if (File.Exists(Path.Combine(root, textName)) && !File.Exists(Path.Combine(root, binaryName)))
         {
             string name = Path.GetFileName(root.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
             throw new CartLoadException(
-                $"{root}: {textName} is present but {binaryName} is not — the console plays the compiled bank. "
-                + $"Run 'quarp audio build {(name.Length == 0 ? root : name)}' to build it.");
+                $"{root}: {textName} is present but {binaryName} is not — the console reads the compiled file. "
+                + $"Run 'quarp {command} {(name.Length == 0 ? root : name)}' to build it.");
         }
     }
 

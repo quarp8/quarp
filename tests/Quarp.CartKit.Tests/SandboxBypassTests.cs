@@ -47,8 +47,8 @@ public class SandboxBypassTests
             }
             """);
 
-        // The syntax scan catches the spelling with a precise line...
-        string syntax = Rejects(result, "QRP0001");
+        // The analyzer catches the spelling with a precise line...
+        string syntax = Rejects(result, "QRP1001");
         Assert.Contains("src/main.cs(8,", syntax);
         Assert.Contains("'Double'", syntax);
 
@@ -77,13 +77,15 @@ public class SandboxBypassTests
             """);
 
         Assert.False(result.Success);
-        // Flagged at the alias declaration...
+        // Flagged at the alias declaration, which is where the mistake actually is: `D` at
+        // the use site carries no banned text at all, and the author fixes line 1, not line 8.
+        //
+        // M2 re-pin: M1's scan additionally reported the use site, because it bound every
+        // simple name looking for an alias target. QRP1001 reports the declaration only, and
+        // that second message is not worth keeping both scans (and therefore two ids) alive
+        // for — the alias is named once and the IL scan below is unaffected either way.
         Assert.Contains(result.Diagnostics,
-            d => d.Contains("QRP0001") && d.Contains("src/main.cs(1,") && d.Contains("'Double'"));
-        // ...and at the use site too, because the scan binds the name instead of matching
-        // its spelling — `D` carries no banned text at all.
-        Assert.Contains(result.Diagnostics,
-            d => d.Contains("QRP0001") && d.Contains("src/main.cs(8,") && d.Contains("'D'"));
+            d => d.Contains("QRP1001") && d.Contains("src/main.cs(1,") && d.Contains("'Double'"));
 
         // The assembly scan holds independently: the type reference and the float IL.
         Assert.Contains(result.Diagnostics, d => d.Contains("QRP0004") && d.Contains("System.Double"));
@@ -113,8 +115,8 @@ public class SandboxBypassTests
             """);
 
         Assert.False(result.Success);
-        Assert.Contains(result.Diagnostics, d => d.Contains("QRP0001") && d.Contains("'Single'"));
-        Assert.Contains(result.Diagnostics, d => d.Contains("QRP0001") && d.Contains("'Decimal'"));
+        Assert.Contains(result.Diagnostics, d => d.Contains("QRP1001") && d.Contains("'Single'"));
+        Assert.Contains(result.Diagnostics, d => d.Contains("QRP1001") && d.Contains("'Decimal'"));
 
         // float: caught as a field type and as ldc.r4 in both the ctor and Update.
         Assert.Contains(result.Diagnostics, d => d.Contains("QRP0004") && d.Contains("_speed (field type)"));
@@ -265,7 +267,7 @@ public class SandboxBypassTests
             }
             """);
 
-        string diagnostic = Rejects(result, "QRP0001");
+        string diagnostic = Rejects(result, "QRP1001");
         Assert.Contains("'Half'", diagnostic);
     }
 }

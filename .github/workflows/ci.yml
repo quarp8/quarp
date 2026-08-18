@@ -1,0 +1,490 @@
+# Quarp CI.
+#
+# The point of this file is the `cross-arch` job: it proves the M2 milestone criterion —
+# a replay recorded on windows-x64 produces identical framebuffer hashes on linux-arm64.
+# Everything else here is scaffolding around that proof.
+#
+# What makes the proof worth anything is *which* replay and *how many* hashes:
+#
+#   * `carts/snake/replays/golden.qrpr` is 3000 ticks (50 seconds) of live play: the snake
+#     walks a Hamiltonian cycle of the 16x8 field, never dies, and eats 15 apples on the way.
+#     An idle recording will not do. Left alone, carts/snake hits a wall around tick 64 and
+#     shows the game-over panel from then on, so `quarp sim carts/snake` prints the *same*
+#     hash 37c481f3e17fab02 at --ticks 100, 300 and 600. A simulation that broke after tick
+#     100 used to pass this workflow. The golden's 150 checkpoints are all distinct, and the
+#     job below asserts that — a golden that goes stale fails loudly instead of going quiet.
+#   * Every comparison below is over a *sequence* of checkpoints, never a single final hash.
+#     `--every N` makes quarp print `tick <n> <hash>` lines; a final hash cannot tell
+#     "identical the whole way" from "diverged at tick 40 and converged again", and a
+#     sequence names the tick where two architectures first disagree.
+#
+# Verified against current official documentation on 2026-08-17:
+#   * `ubuntu-24.04-arm` is the free Linux ARM64 label. arm64 hosted runners for public
+#     repositories went generally available on 2025-08-07 and are free there — which is the
+#     motive behind ADR-015. `ubuntu-26.04-arm` exists but is public preview, so we stay
+#     on the GA label.
+#   * `windows-latest` currently maps to Windows Server 2025.
+#   * Current action majors: checkout v7 (v7.0.1), setup-dotnet v6 (v6.0.0),
+#     upload-artifact v7 (v7.0.1), download-artifact v8 (v8.0.1), cache v6 (v6.1.0).
+#     download-artifact v8 decompresses by default, and with no `name` it puts every
+#     artifact of the run in its own subdirectory — which is what the paths below assume.
+#   * Job outputs of a *matrix* job overwrite one another (last leg wins), so the two
+#     architectures hand their results over as artifacts, never as `outputs`.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+    tags: ['m*']
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  DOTNET_NOLOGO: 'true'
+  DOTNET_CLI_TELEMETRY_OPTOUT: 'true'
+  DOTNET_SKIP_FIRST_TIME_EXPERIENCE: 'true'
+  # The simulation must be deterministic under *default* runtime settings — that is the
+  # claim we are testing. Tiered compilation, ReadyToRun and friends are intentionally
+  # left alone here: pinning them would weaken the proof, not strengthen it.
+
+  # --- the proof: the committed golden replay of live gameplay ---
+  GOLDEN_REPLAY: 'carts/snake/replays/golden.qrpr'
+  GOLDEN_INPUT: 'carts/snake/replays/golden.input'
+  GOLDEN_CART: 'carts/snake'
+  GOLDEN_TICKS: '3000'
+  # 3000 / 20 = 150 checkpoints. Both numbers are asserted below, so shortening the golden
+  # without updating this file fails here instead of quietly comparing fewer frames.
+  GOLDEN_EVERY: '20'
+  GOLDEN_CHECKPOINTS: '150'
+
+  # --- the smoke test: an idle headless run, kept because it is cheap, not because it
+  #     proves anything. See the note at the top about 37c481f3e17fab02. ---
+  SIM_TICKS: '600'
+  SIM_EVERY: '100'
+
+  # Built once per job, then invoked directly. See the comment in the determinism job.
+  QUARP_DLL: 'src/Quarp.Cli/bin/Release/net10.0/quarp.dll'
+
+defaults:
+  run:
+    # One shell for both runners: on Windows this is the bash from Git for Windows, so a
+    # single script works on x64 and arm64 without a PowerShell/sh dialect split.
+    shell: bash
+
+jobs:
+  build-test:
+    name: build + test (${{ matrix.arch }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: windows-latest, arch: x64 }
+          - { os: ubuntu-24.04-arm, arch: arm64 }
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/cache@v6
+        with:
+          path: ~/.nuget/packages
+          key: nuget-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('**/*.csproj', 'Directory.Build.props') }}
+          restore-keys: |
+            nuget-${{ runner.os }}-${{ runner.arch }}-
+
+      - uses: actions/setup-dotnet@v6
+        with:
+          # The repository has no global.json, so the SDK floats on the 10.0 feature band.
+          # Both legs of the matrix run within minutes of each other and therefore resolve
+          # the same patch; the exact version is recorded into the determinism report so a
+          # future divergence is visible instead of mysterious.
+          dotnet-version: '10.0.x'
+
+      - name: Report toolchain
+        run: |
+          echo "SDK: $(dotnet --version)"
+          echo "runner: ${{ matrix.os }} (${RUNNER_ARCH})"
+
+      - name: Restore
+        run: dotnet restore Quarp.sln
+
+      - name: Build
+        run: dotnet build Quarp.sln -c Release --no-restore
+
+      - name: Test
+        run: >
+          dotnet test Quarp.sln -c Release --no-build
+          --logger "trx;LogFileName=tests-${{ matrix.arch }}.trx"
+          --results-directory artifacts/test-results
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: quarp-tests-${{ matrix.arch }}
+          path: artifacts/test-results
+          if-no-files-found: warn
+          retention-days: 14
+
+  determinism:
+    name: determinism (${{ matrix.arch }})
+    needs: build-test
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: windows-latest, arch: x64 }
+          - { os: ubuntu-24.04-arm, arch: arm64 }
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/cache@v6
+        with:
+          path: ~/.nuget/packages
+          key: nuget-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('**/*.csproj', 'Directory.Build.props') }}
+          restore-keys: |
+            nuget-${{ runner.os }}-${{ runner.arch }}-
+
+      - uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Build the CLI
+        run: dotnet build src/Quarp.Cli -c Release
+
+      - name: Golden replay, round-trip and idle smoke test
+        run: |
+          set -euo pipefail
+
+          out="artifacts/determinism"
+          arch="${{ matrix.arch }}"
+          mkdir -p "$out"
+
+          # We invoke the built assembly directly instead of the work order's
+          # `dotnet run --project src/Quarp.Cli -c Release -- sim ...`. Two reasons, both
+          # about not corrupting the thing we are measuring:
+          #   1. `dotnet run` interleaves MSBuild output with the program's stdout, and the
+          #      only thing this job cares about is program stdout;
+          #   2. the working directory handed to the program by `dotnet run` is not
+          #      contractual, and every path below is relative to the workspace.
+          #      `dotnet <dll>` inherits this step's directory, full stop.
+          run_quarp() { dotnet "$QUARP_DLL" "$@"; }
+
+          die() { echo "::error title=$1::$2"; exit 1; }
+
+          # quarp prints two shapes and the difference between them matters:
+          #   `tick <n> <hash>`  a checkpoint, one per --every N ticks;
+          #   `<hash>`           the final framebuffer hash, always the last line of stdout.
+          # Both are matched by shape, not by position, so a future banner line cannot
+          # silently become "the hash".
+          final_hash_of() {
+            local file="$1" label="$2" value
+            value="$(tr -d '\r' < "$file" | grep -Eo '^[0-9a-f]{16}$' | tail -n 1 || true)"
+            if [ -z "$value" ]; then
+              {
+                echo "::error title=No hash printed::${label} printed no framebuffer hash (expected one line of 16 hex digits)."
+                echo "--- command output ---"
+                cat "$file"
+              } >&2
+              return 1
+            fi
+            printf '%s\n' "$value"
+          }
+
+          checkpoints_of() { tr -d '\r' < "$1" | grep -E '^tick [0-9]+ [0-9a-f]{16}$' || true; }
+
+          # ------------------------------------------------------------------
+          # 1. THE PROOF: the committed golden replay of live gameplay, played twice.
+          # ------------------------------------------------------------------
+          for file in "$GOLDEN_REPLAY" "$GOLDEN_INPUT"; do
+            [ -f "$file" ] || die "Golden replay missing" "${file} is not in the repository. The cross-architecture proof IS this file; there is no fallback that would prove the same thing."
+          done
+
+          for pass in 1 2; do
+            if ! run_quarp replay play "$GOLDEN_REPLAY" --cart "$GOLDEN_CART" --every "$GOLDEN_EVERY" > "$out/golden-${pass}.log"; then
+              cat "$out/golden-${pass}.log"
+              die "quarp replay play failed" "Playing ${GOLDEN_REPLAY} exited non-zero on ${arch}."
+            fi
+          done
+          checkpoints_of "$out/golden-1.log" > "$out/golden-checkpoints.txt"
+          checkpoints_of "$out/golden-2.log" > "$out/golden-checkpoints-2.txt"
+          if ! diff -u "$out/golden-checkpoints.txt" "$out/golden-checkpoints-2.txt" > "$out/golden-selfdiff.txt"; then
+            cat "$out/golden-selfdiff.txt"
+            die "Non-deterministic on one machine" "Two identical plays of the golden replay disagree on ${arch}. A cross-architecture mismatch later would be misdiagnosed as an architecture problem; fix this first."
+          fi
+          golden_final="$(final_hash_of "$out/golden-1.log" 'quarp replay play (golden)')"
+
+          # The golden has to keep having teeth, so two cheap assertions guard it:
+          #   * the expected number of checkpoints — a shortened golden fails here rather
+          #     than quietly proving less;
+          #   * every checkpoint distinct — the signature of a *dead* cartridge is a frame
+          #     that stops changing, and that is exactly the failure this rewrite is about.
+          #     (Snake's game-over panel blinks with period 40, so at a 20-tick spacing a
+          #     dead run produces repeats.)
+          count="$(wc -l < "$out/golden-checkpoints.txt" | tr -d ' ')"
+          [ "$count" = "$GOLDEN_CHECKPOINTS" ] || die "Golden checkpoint count changed" "Expected ${GOLDEN_CHECKPOINTS} checkpoints from ${GOLDEN_TICKS} ticks every ${GOLDEN_EVERY}, got ${count}. GOLDEN_TICKS, GOLDEN_EVERY and GOLDEN_CHECKPOINTS move together with the golden."
+          distinct="$(awk '{print $3}' "$out/golden-checkpoints.txt" | sort -u | wc -l | tr -d ' ')"
+          if [ "$distinct" != "$count" ]; then
+            echo "repeated frame hashes:"
+            awk '{print $3}' "$out/golden-checkpoints.txt" | sort | uniq -d | head -n 5
+            die "Golden replay is not live gameplay" "Only ${distinct} of ${count} golden checkpoints are distinct: the cartridge is repeating a frame, which is what a game-over screen looks like. Re-record the golden from ${GOLDEN_INPUT} — carts/snake/replays/README.md has the command."
+          fi
+
+          # ------------------------------------------------------------------
+          # 2. The golden must be reproducible from its input track, byte for byte, on this
+          #    architecture. This is the .qrpr half of REPLAY-FORMAT §6: it catches
+          #    non-canonical RLE, wrong byte order, junk in uninitialised memory, and a
+          #    cartridge edited without re-recording the golden — all before a single frame
+          #    is compared, and with a message that names which of those it was.
+          # ------------------------------------------------------------------
+          regen="$out/snake-${arch}.qrpr"
+          if ! run_quarp replay record "$GOLDEN_CART" -o "$regen" --ticks "$GOLDEN_TICKS" --input-file "$GOLDEN_INPUT" --every "$GOLDEN_EVERY" > "$out/record.log"; then
+            cat "$out/record.log"
+            die "quarp replay record failed" "Re-recording the golden from ${GOLDEN_INPUT} exited non-zero on ${arch}."
+          fi
+          cat "$out/record.log"
+          [ -s "$regen" ] || die "No replay recorded" "quarp replay record exited 0 but produced no ${regen}"
+          golden_sha="$(sha256sum "$GOLDEN_REPLAY" | cut -d' ' -f1)"
+          regen_sha="$(sha256sum "$regen" | cut -d' ' -f1)"
+          if [ "$golden_sha" != "$regen_sha" ]; then
+            die "Golden replay is stale" "Re-recording ${GOLDEN_INPUT} on ${arch} gives ${regen_sha}, but the committed ${GOLDEN_REPLAY} is ${golden_sha}. Either the cartridge changed without the golden being re-recorded, or the .qrpr encoder stopped being canonical. carts/snake/replays/README.md has the regeneration command."
+          fi
+          record_final="$(final_hash_of "$out/record.log" 'quarp replay record')"
+          if [ "$record_final" != "$golden_final" ]; then
+            die "Recording and playback disagree" "On ${arch} recording the golden ends on ${record_final} but playing it back ends on ${golden_final} — the replay is not driving the simulation."
+          fi
+          checkpoints_of "$out/record.log" > "$out/record-checkpoints.txt"
+          if ! diff -u "$out/golden-checkpoints.txt" "$out/record-checkpoints.txt" > "$out/roundtrip-diff.txt"; then
+            cat "$out/roundtrip-diff.txt"
+            die "Replay round-trip diverges" "On ${arch} the recorded run and the replayed run disagree at a checkpoint. They are supposed to be the same simulation."
+          fi
+
+          # ------------------------------------------------------------------
+          # 3. Smoke test: an idle headless run. Cheap, and it catches a cartridge that
+          #    fails to load or crashes at boot. It is NOT the proof — see the file header.
+          # ------------------------------------------------------------------
+          run_quarp sim "$GOLDEN_CART" --ticks "$SIM_TICKS" --every "$SIM_EVERY" > "$out/sim-1.log"
+          run_quarp sim "$GOLDEN_CART" --ticks "$SIM_TICKS" --every "$SIM_EVERY" > "$out/sim-2.log"
+          sim1="$(final_hash_of "$out/sim-1.log" 'quarp sim (run 1)')"
+          sim2="$(final_hash_of "$out/sim-2.log" 'quarp sim (run 2)')"
+          [ "$sim1" = "$sim2" ] || die "Non-deterministic on one machine" "Two identical runs of quarp sim on ${arch} disagree: ${sim1} vs ${sim2}"
+          checkpoints_of "$out/sim-1.log" > "$out/sim-checkpoints.txt"
+
+          # ------------------------------------------------------------------
+          # 4. The report the cross-arch job reads. Every field here is required there, and
+          #    a missing or empty one is a hard failure, never a silent match.
+          # ------------------------------------------------------------------
+          {
+            echo "arch=${arch}"
+            echo "os=${{ matrix.os }}"
+            echo "runner_arch=${RUNNER_ARCH}"
+            echo "sdk=$(dotnet --version)"
+            echo "golden_ticks=${GOLDEN_TICKS}"
+            echo "golden_every=${GOLDEN_EVERY}"
+            echo "golden_checkpoints=${count}"
+            echo "golden_final=${golden_final}"
+            echo "golden_sha256=${golden_sha}"
+            echo "regen_sha256=${regen_sha}"
+            echo "sim_ticks=${SIM_TICKS}"
+            echo "sim_final=${sim1}"
+          } > "$out/hashes.env"
+
+          echo "--- determinism report (${arch}) ---"
+          cat "$out/hashes.env"
+
+          {
+            echo "### Determinism report — ${arch}"
+            echo
+            echo "| field | value |"
+            echo "|---|---|"
+            awk -F= '{ printf "| `%s` | `%s` |\n", $1, substr($0, index($0, "=") + 1) }' "$out/hashes.env"
+            echo
+            echo "${count} golden checkpoints, all distinct. First and last:"
+            echo
+            echo '```'
+            head -n 1 "$out/golden-checkpoints.txt"
+            echo '...'
+            tail -n 1 "$out/golden-checkpoints.txt"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload determinism report
+        uses: actions/upload-artifact@v7
+        with:
+          name: quarp-determinism-${{ matrix.arch }}
+          path: artifacts/determinism
+          if-no-files-found: error
+          retention-days: 30
+
+  cross-arch:
+    # The milestone. Runs on ARM64 so it can also replay the x64 recording on the foreign
+    # architecture, which is the criterion in ROADMAP M2 word for word.
+    name: cross-arch determinism (x64 vs arm64)
+    needs: determinism
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/cache@v6
+        with:
+          path: ~/.nuget/packages
+          key: nuget-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('**/*.csproj', 'Directory.Build.props') }}
+          restore-keys: |
+            nuget-${{ runner.os }}-${{ runner.arch }}-
+
+      - uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Download determinism reports
+        uses: actions/download-artifact@v8
+        with:
+          # No `name`: every artifact of this run lands in its own subdirectory.
+          path: artifacts
+
+      - name: Compare the full checkpoint sequences across architectures
+        run: |
+          set -euo pipefail
+
+          x64="artifacts/quarp-determinism-x64"
+          arm64="artifacts/quarp-determinism-arm64"
+
+          # Nothing below may treat "absent" as "equal". Two missing files compare equal to
+          # every tool in this script, and a run where one architecture never produced a
+          # report would otherwise pass green, so existence is checked first and separately.
+          missing=0
+          for file in "$x64/hashes.env" "$arm64/hashes.env" "$x64/golden-checkpoints.txt" "$arm64/golden-checkpoints.txt" "$x64/sim-checkpoints.txt" "$arm64/sim-checkpoints.txt" "$x64/snake-x64.qrpr"; do
+            if [ ! -s "$file" ]; then
+              echo "::error title=Missing determinism artifact::${file} is missing or empty — the matching architecture never got that far, and a comparison against nothing proves nothing."
+              missing=1
+            fi
+          done
+          [ "$missing" -eq 0 ] || exit 1
+
+          val() { grep -E "^$2=" "$1" | head -n 1 | cut -d= -f2- || true; }
+          need_var() {
+            if [ -z "$(val "$1" "$2")" ]; then
+              echo "::error title=Missing field::$1 has no non-empty '$2=' line. A blank value would compare equal to another blank value and pass."
+              missing=1
+            fi
+          }
+          for field in arch sdk golden_ticks golden_every golden_checkpoints golden_final golden_sha256 regen_sha256 sim_final; do
+            need_var "$x64/hashes.env" "$field"
+            need_var "$arm64/hashes.env" "$field"
+          done
+          [ "$missing" -eq 0 ] || exit 1
+
+          failed=0
+
+          # --- 1. THE MILESTONE: the whole golden checkpoint sequence, not just its last line.
+          if diff -u "$x64/golden-checkpoints.txt" "$arm64/golden-checkpoints.txt" > golden.diff; then
+            echo "golden replay: $(wc -l < "$x64/golden-checkpoints.txt" | tr -d ' ') checkpoints identical on windows-x64 and linux-arm64."
+          else
+            failed=1
+            first="$(grep -E '^[-+]tick ' golden.diff | head -n 2 | tr '\n' ' ')"
+            echo "::error title=Cross-arch mismatch in the golden replay::The architectures diverge inside the golden replay. First differing checkpoints: ${first}"
+            echo "--- full diff (x64 vs arm64) ---"
+            cat golden.diff
+          fi
+
+          # --- 2. The smoke test sequence. Weak by design (see the file header), reported
+          #        anyway: when it also fails, the break is not specific to live gameplay.
+          if ! diff -u "$x64/sim-checkpoints.txt" "$arm64/sim-checkpoints.txt" > sim.diff; then
+            failed=1
+            echo "::error title=Cross-arch mismatch in the idle sim::Even the idle headless run differs between architectures."
+            cat sim.diff
+          fi
+
+          # --- 3. Scalars, including the byte-level identity of the file each side recorded.
+          for field in golden_final golden_sha256 regen_sha256 sim_final golden_checkpoints; do
+            a="$(val "$x64/hashes.env" "$field")"
+            b="$(val "$arm64/hashes.env" "$field")"
+            if [ "$a" != "$b" ]; then
+              failed=1
+              echo "::error title=Cross-arch mismatch in '${field}'::x64=${a}  arm64=${b}"
+            fi
+            printf '%-20s x64=%-68s arm64=%s\n' "$field" "$a" "$b"
+          done
+
+          sdk_x64="$(val "$x64/hashes.env" sdk)"
+          sdk_arm64="$(val "$arm64/hashes.env" sdk)"
+          if [ "$sdk_x64" != "$sdk_arm64" ]; then
+            echo "::warning title=SDK versions differ::x64 used ${sdk_x64}, arm64 used ${sdk_arm64}. Determinism must hold anyway; pin it with a global.json if this ever becomes the explanation for a mismatch."
+          fi
+
+          {
+            echo "### Cross-architecture determinism"
+            echo
+            echo "| check | windows-x64 | linux-arm64 | verdict |"
+            echo "|---|---|---|---|"
+            if [ -s golden.diff ]; then gv="**DIFFERENT**"; else gv="same"; fi
+            echo "| golden checkpoint sequence | $(wc -l < "$x64/golden-checkpoints.txt" | tr -d ' ') lines | $(wc -l < "$arm64/golden-checkpoints.txt" | tr -d ' ') lines | ${gv} |"
+            for field in golden_final golden_sha256 regen_sha256 sim_final sdk; do
+              a="$(val "$x64/hashes.env" "$field")"
+              b="$(val "$arm64/hashes.env" "$field")"
+              if [ "$a" = "$b" ]; then verdict="same"; else verdict="**DIFFERENT**"; fi
+              echo "| \`${field}\` | \`${a}\` | \`${b}\` | ${verdict} |"
+            done
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          if [ "$failed" -ne 0 ]; then
+            echo ""
+            echo "Cross-architecture determinism is broken — this is the M2 milestone criterion."
+            echo "windows-x64 report:"
+            cat "$x64/hashes.env"
+            echo "linux-arm64 report:"
+            cat "$arm64/hashes.env"
+            exit 1
+          fi
+          echo "Framebuffer hashes agree between windows-x64 and linux-arm64, checkpoint by checkpoint."
+
+      - name: Build the CLI
+        run: dotnet build src/Quarp.Cli -c Release
+
+      - name: Replay the x64 recording on arm64
+        run: |
+          set -euo pipefail
+
+          x64="artifacts/quarp-determinism-x64"
+          qrpr="$x64/snake-x64.qrpr"
+          expected="$x64/golden-checkpoints.txt"
+          for file in "$qrpr" "$expected"; do
+            if [ ! -s "$file" ]; then
+              echo "::error title=Missing x64 artifact::${file} was not uploaded by the x64 determinism job."
+              exit 1
+            fi
+          done
+
+          # The bytes replayed here are the ones windows-x64 wrote, carried across as an
+          # artifact. The determinism job also asserts they equal the committed golden on
+          # both sides; that equality is part of the proof, not a gap in it.
+          dotnet "$QUARP_DLL" replay play "$qrpr" --cart "$GOLDEN_CART" --every "$GOLDEN_EVERY" > foreign.log
+          tr -d '\r' < foreign.log | grep -E '^tick [0-9]+ [0-9a-f]{16}$' > foreign-checkpoints.txt || true
+          if [ ! -s foreign-checkpoints.txt ]; then
+            echo "::error title=No checkpoints printed::quarp replay play printed no checkpoint lines on arm64."
+            cat foreign.log
+            exit 1
+          fi
+
+          if ! diff -u "$expected" foreign-checkpoints.txt > foreign.diff; then
+            echo "::error title=Replay is not portable across architectures::A replay recorded on windows-x64 does not reproduce the same frames on linux-arm64. This is the M2 milestone criterion."
+            cat foreign.diff
+            exit 1
+          fi
+
+          lines="$(wc -l < foreign-checkpoints.txt | tr -d ' ')"
+          echo "replay recorded on windows-x64, played on linux-arm64: ${lines} checkpoints, all identical."
+          {
+            echo "### Milestone criterion"
+            echo
+            echo "Replay recorded on **windows-x64**, played back on **linux-arm64**: all ${lines} checkpoints identical, ending on \`$(tail -n 1 foreign-checkpoints.txt | awk '{print $3}')\`."
+          } >> "$GITHUB_STEP_SUMMARY"

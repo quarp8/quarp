@@ -10,9 +10,18 @@ namespace Quarp.Shell.Desktop;
 /// Desktop shell: presents the core's indexed framebuffer as one point-sampled texture
 /// at the largest integer scale that fits the window (ARCHITECTURE §5).
 /// Two modes (M1 work order): without a cart path it shows the palette test pattern;
-/// with one it runs the cartridge at a fixed 60 Hz step with hot reload and save.dat
-/// persistence (the strict accumulator arrives in M2 — MonoGame's fixed step is enough
-/// for M1). Escape closes the window in both modes.
+/// with one it runs the cartridge with hot reload and save.dat persistence.
+///
+/// <para><b>Time (M2).</b> MonoGame's <c>IsFixedTimeStep</c> is off and replaced by
+/// <see cref="TickAccumulator"/>: real time is banked, whole ticks come out, at most five
+/// catch-up ticks run in one frame, and <see cref="Draw"/> happens exactly once per frame
+/// whatever the tick count was. <c>SynchronizeWithVerticalRetrace</c> stays on for the
+/// picture, but no timing decision depends on it (ARCHITECTURE §4).</para>
+///
+/// <para><b>Two layers, on purpose.</b> The console texture carries the cartridge's frame and
+/// nothing else — that frame is the golden master the CI hashes. The pause and speed
+/// indicators live in <see cref="ShellOverlay"/>, a second texture blended on top at the same
+/// scale, so nothing the shell says about time can ever reach the framebuffer.</para>
 /// </summary>
 public sealed class QuarpGame : Game
 {
@@ -20,27 +29,37 @@ public sealed class QuarpGame : Game
     private readonly CartSession? _session;
     private readonly Color[] _colorBuffer;
     private readonly Color[] _palette;
+    private readonly TickAccumulator _accumulator = new();
+    private readonly ShellCommandReader _commands = new();
+    private readonly ConsoleProfile _profile;
 
     private SpriteBatch _spriteBatch = null!;
     private Texture2D _screenTexture = null!;
+    private ShellOverlay _overlay = null!;
+
+    private TimeSpeed _lastSpeed = TimeSpeed.At(TimeSpeed.NormalIndex);
+    private bool _lastPaused;
 
     /// <summary>Pattern mode when <paramref name="cartPath"/> is null; cart mode otherwise.</summary>
     public QuarpGame(string? cartPath = null)
     {
         StartCompilerWarmUp();
 
-        var profile = ConsoleProfile.Profile8;
+        _profile = ConsoleProfile.Profile8;
         if (cartPath is null)
         {
-            _patternFramebuffer = new Framebuffer(profile);
+            _patternFramebuffer = new Framebuffer(_profile);
             TestPattern.Render(_patternFramebuffer);
         }
         else
         {
             _session = CartSession.Start(cartPath);
+            // Lets a long resimulation repaint the window from inside its progress callback
+            // instead of freezing it (ARCHITECTURE §4). Cached once — it is called in a loop.
+            _session.PresentFrame = PresentCurrentFrame;
         }
 
-        _colorBuffer = new Color[profile.Width * profile.Height];
+        _colorBuffer = new Color[_profile.Width * _profile.Height];
         _palette = new Color[Palette.MasterCount];
         for (int i = 0; i < Palette.MasterCount; i++)
         {
@@ -50,15 +69,18 @@ public sealed class QuarpGame : Game
 
         var graphics = new GraphicsDeviceManager(this)
         {
-            PreferredBackBufferWidth = profile.Width * 10,   // 1280x720 — pixel-perfect x10
-            PreferredBackBufferHeight = profile.Height * 10,
+            PreferredBackBufferWidth = _profile.Width * 10,   // 1280x720 — pixel-perfect x10
+            PreferredBackBufferHeight = _profile.Height * 10,
+            SynchronizeWithVerticalRetrace = true,            // for the picture, not for the clock
         };
         graphics.ApplyChanges();
 
-        IsFixedTimeStep = true;
-        TargetElapsedTime = TimeSpan.FromTicks(TimeSpan.TicksPerSecond / 60); // 60 ticks per game second
+        // The strict accumulator owns time from here (M2 work order). MonoGame's own fixed
+        // step chases an unbounded backlog, which on slow hardware is a death spiral: this
+        // way an overloaded machine runs slowly instead of locking up.
+        IsFixedTimeStep = false;
 
-        Window.Title = _session is null ? profile.Name : $"{profile.Name} — {_session.Name}";
+        Window.Title = _session is null ? _profile.Name : $"{_profile.Name} — {_session.Name}";
         Window.AllowUserResizing = true;
         IsMouseVisible = true;
     }
@@ -95,22 +117,89 @@ public sealed class QuarpGame : Game
     protected override void LoadContent()
     {
         _spriteBatch = new SpriteBatch(GraphicsDevice);
-        Framebuffer framebuffer = CurrentFramebuffer;
-        _screenTexture = new Texture2D(GraphicsDevice, framebuffer.Width, framebuffer.Height);
+        _screenTexture = new Texture2D(GraphicsDevice, _profile.Width, _profile.Height);
+        _overlay = new ShellOverlay(GraphicsDevice, _profile.Width, _profile.Height);
     }
 
     protected override void Update(GameTime gameTime)
     {
-        if (Keyboard.GetState().IsKeyDown(Keys.Escape))
+        KeyboardState keyboard = Keyboard.GetState();
+        ShellCommands commands = _commands.Read(keyboard);
+        if (commands.Quit)
         {
             Exit();
+            return;
         }
-        _session?.Update(InputMapper.Read());
+
+        if (_session is null)
+        {
+            base.Update(gameTime);
+            return;
+        }
+
+        _session.ApplyCommands(commands);
+
+        // A speed change or a pause invalidates the banked remainder: it was measured in the
+        // old rung's units, and carrying it across would spit out a burst of ticks nobody
+        // asked for on the frame the player pressed the key.
+        TimeSpeed speed = _session.Speed;
+        bool paused = _session.IsPaused;
+        if (speed.Numerator != _lastSpeed.Numerator
+            || speed.Denominator != _lastSpeed.Denominator
+            || paused != _lastPaused)
+        {
+            _accumulator.Reset();
+            _lastSpeed = speed;
+            _lastPaused = paused;
+        }
+
+        // Backspace rewinds in real time at the selected speed, so the same budget of ticks
+        // is spent going backwards. Pause does not stop it: rewinding out of a pause (or out
+        // of a crash) is exactly when it is most wanted.
+        bool rewinding = commands.Rewinding;
+        int ticks = paused && !rewinding
+            ? 0
+            : _accumulator.Advance(gameTime.ElapsedGameTime.Ticks, speed);
+
+        _session.Update(ticks, InputMapper.Read(keyboard), rewinding);
         base.Update(gameTime);
     }
 
     protected override void Draw(GameTime gameTime)
     {
+        RenderFrame();
+        base.Draw(gameTime);        // the game loop presents for us
+    }
+
+    /// <summary>
+    /// Renders and <b>presents</b> one frame outside the game loop. Called straight from
+    /// <see cref="CartSession"/>'s progress callback during a long resimulation: the
+    /// simulation is blocking the main thread there, so nothing else can keep the window from
+    /// going dark. It touches no game state, only textures, and swallows device errors —
+    /// a repaint that fails must not turn a slow rebuild into a crash.
+    /// </summary>
+    private void PresentCurrentFrame()
+    {
+        try
+        {
+            RenderFrame();
+            GraphicsDevice.Present();
+        }
+        catch (Exception e) when (e is InvalidOperationException or ObjectDisposedException)
+        {
+            // Device lost, resizing, or shutting down mid-rebuild. Nothing to do but skip
+            // this repaint.
+        }
+    }
+
+    private void RenderFrame()
+    {
+        if (_spriteBatch is null || _screenTexture is null)
+        {
+            return;     // Called before LoadContent (a crash during the very first reload).
+        }
+        _overlay.Show(_session?.Status, _session?.StatusPercent ?? -1);
+
         Framebuffer framebuffer = CurrentFramebuffer;
         byte[] pixels = framebuffer.Pixels;
         for (int i = 0; i < pixels.Length; i++)
@@ -129,8 +218,10 @@ public sealed class QuarpGame : Game
         GraphicsDevice.Clear(Color.Black);
         _spriteBatch.Begin(samplerState: SamplerState.PointClamp);
         _spriteBatch.Draw(_screenTexture, dest, Color.White);
+        // The overlay goes over the same rectangle, so its pixels line up with console
+        // pixels — and it is a texture of its own, so the framebuffer stays untouched.
+        _overlay.Draw(_spriteBatch, dest);
         _spriteBatch.End();
-        base.Draw(gameTime);
     }
 
     protected override void OnExiting(object sender, ExitingEventArgs args)
@@ -144,6 +235,7 @@ public sealed class QuarpGame : Game
         if (disposing)
         {
             _session?.Dispose();
+            _overlay?.Dispose();
         }
         base.Dispose(disposing);
     }

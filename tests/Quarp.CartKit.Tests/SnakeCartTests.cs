@@ -43,7 +43,7 @@ public class SnakeCartTests
         {
             console.Tick(inputAt?.Invoke(i) ?? default);
         }
-        return Fnv.Hash(console.Framebuffer.Pixels);
+        return FrameHash.Compute(console.Framebuffer);
     }
 
     [Fact]
@@ -72,10 +72,10 @@ public class SnakeCartTests
         ulong first = Simulate(assembly, 600);
         ulong second = Simulate(assembly, 600);
         Assert.Equal(first, second);
-        Assert.NotEqual(Fnv.Hash(new byte[128 * 72]), first);   // it drew a real frame
+        Assert.NotEqual(FrameHash.Compute(new byte[128 * 72]), first);   // it drew a real frame
         // Golden cross-checked against `quarp sim carts/snake --ticks 600` (M1 acceptance).
         // A conscious snake or rasterizer change updates this constant along with it.
-        Assert.Equal("37c481f3e17fab02", first.ToString("x16"));
+        Assert.Equal("37c481f3e17fab02", FrameHash.Format(first));
     }
 
     [Fact]

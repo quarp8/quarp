@@ -8,5 +8,10 @@ TestResults/
 artifacts/
 *.binlog
 
+# Dev-only project written by `quarp new` next to a cartridge. It holds ABSOLUTE paths to
+# the Quarp tools on the machine that generated it, so committing one would point every
+# other checkout at a drive that does not exist. Regenerate it with `quarp new` instead.
+.quarp/
+
 # Личные заметки владельца — вне репозитория
 docs/NAME-CHECKLIST.md

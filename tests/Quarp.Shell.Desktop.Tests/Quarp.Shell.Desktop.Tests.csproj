@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+  <ItemGroup>
+    <!-- Same versions as the other test projects: one restore graph, no surprise upgrades. -->
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.12.0" />
+    <PackageReference Include="xunit" Version="2.9.2" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2" />
+  </ItemGroup>
+  <ItemGroup>
+    <!-- The shell's time arithmetic and its cartridge session. Nothing in these tests touches
+         MonoGame: CartSession owns the simulation, QuarpGame owns the window, and only the
+         latter needs a graphics device. That split is what makes the milestone criterion
+         ("edit the code mid-game and stay in the same place") testable without a display. -->
+    <ProjectReference Include="..\..\src\Quarp.Shell.Desktop\Quarp.Shell.Desktop.csproj" />
+    <ProjectReference Include="..\..\src\Quarp.CartKit\Quarp.CartKit.csproj" />
+    <ProjectReference Include="..\..\src\Quarp.Core\Quarp.Core.csproj" />
+  </ItemGroup>
+</Project>

@@ -3,9 +3,18 @@ using Xunit;
 namespace Quarp.CartKit.Tests;
 
 /// <summary>
-/// The two M1 determinism filters (SPEC-8 §7, ARCHITECTURE §3): the syntax scan bans
-/// float/double/decimal with file and line, the metadata scan bans OS-facing BCL APIs
-/// in the emitted DLL. User errors are diagnostics, never exceptions.
+/// The determinism filters (SPEC-8 §7, ARCHITECTURE §3): float/double/decimal are banned
+/// with file and line, the metadata scan bans OS-facing BCL APIs in the emitted DLL.
+/// User errors are diagnostics, never exceptions.
+///
+/// M2 re-pin: the float ban is now reported by <c>Quarp.Analyzers</c> as <b>QRP1001</b>
+/// rather than by CartCompiler's own syntax scan as QRP0001/QRP0002. The analyzer runs
+/// inside CartCompiler so that the ban holds without an IDE (M2 work order), and it covers
+/// exactly the same three shapes — keyword, name, real literal — with the same precision,
+/// so keeping both would print every violation twice under two ids (API-8 §12).
+/// The old scan survives as the fallback for a compilation the analyzer considers out of
+/// scope or for an analyzer that fails to run; the IL scan (QRP0004) is unchanged and is
+/// still the enforcement point.
 /// </summary>
 public class CartCompilerTests
 {
@@ -49,10 +58,10 @@ public class CartCompilerTests
             }
             """);
         Assert.False(result.Success);
-        string diagnostic = Assert.Single(result.Diagnostics, d => d.Contains("QRP0002"));
+        string diagnostic = Assert.Single(result.Diagnostics, d => d.Contains("QRP1001"));
         Assert.Contains("src/main.cs(7,", diagnostic);      // the literal sits on line 7
         Assert.Contains("1.5f", diagnostic);
-        Assert.Contains("Fix.Ratio", diagnostic);           // the fix-it hint
+        Assert.Contains("use int or Fix", diagnostic);      // the fix-it hint
     }
 
     [Fact]
@@ -67,7 +76,7 @@ public class CartCompilerTests
             }
             """);
         Assert.False(result.Success);
-        Assert.Contains(result.Diagnostics, d => d.Contains("QRP0002") && d.Contains("0.25"));
+        Assert.Contains(result.Diagnostics, d => d.Contains("QRP1001") && d.Contains("0.25"));
     }
 
     [Theory]
@@ -86,9 +95,60 @@ public class CartCompilerTests
             }
             """);
         Assert.False(result.Success);
-        string diagnostic = Assert.Single(result.Diagnostics, d => d.Contains("QRP0001"));
+        string diagnostic = Assert.Single(result.Diagnostics, d => d.Contains("QRP1001"));
         Assert.Contains($"'{keyword}'", diagnostic);
         Assert.Contains("src/main.cs(5,", diagnostic);      // the field sits on line 5
+    }
+
+    /// <summary>
+    /// The fallback path: a compilation with no <c>Cartridge</c> subclass is out of the
+    /// analyzer's scope by design (it must stay inert on engine code), so CartCompiler's own
+    /// syntax scan has to keep reporting there. Pinning this is what makes it safe to let
+    /// QRP1001 own the message everywhere else.
+    /// </summary>
+    [Fact]
+    public void FloatIsStillReportedWithoutACartridgeSubclassToScopeTheAnalyzer()
+    {
+        CartCompileResult result = CartCompiler.Compile(
+            new[] { new CartSourceFile("src/helper.cs", "public static class Helper { public static double K => 0.5; }") },
+            "helpercart");
+
+        Assert.False(result.Success);
+        Assert.Contains(result.Diagnostics, d => d.Contains("QRP0001") && d.Contains("'double'"));
+        Assert.Contains(result.Diagnostics, d => d.Contains("QRP0002") && d.Contains("0.5"));
+        Assert.DoesNotContain(result.Diagnostics, d => d.Contains("QRP1001"));
+    }
+
+    /// <summary>
+    /// QRP1003 is a warning (API-8 §12): it must be reported without failing the build,
+    /// because iterating a dictionary to sum numbers is legal and an error nobody can avoid
+    /// suppressing stops being read at all.
+    /// </summary>
+    [Fact]
+    public void DictionaryIterationWarnsButStillCompiles()
+    {
+        CartCompileResult result = Compile("""
+            using System.Collections.Generic;
+            using Quarp.Api;
+
+            public sealed class WarnCart : Cartridge
+            {
+                private readonly Dictionary<int, int> _scores = new();
+
+                public override void Update()
+                {
+                    int total = 0;
+                    foreach (KeyValuePair<int, int> pair in _scores)
+                    {
+                        total += pair.Value;
+                    }
+                    _ = total;
+                }
+            }
+            """);
+
+        Assert.True(result.Success, string.Join("\n", result.Diagnostics));
+        Assert.Contains(result.Warnings, w => w.Contains("QRP1003"));
     }
 
     [Fact]

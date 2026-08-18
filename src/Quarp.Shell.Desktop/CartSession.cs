@@ -1,4 +1,5 @@
 using System.Buffers.Binary;
+using System.Diagnostics;
 using Quarp.Api;
 using Quarp.CartKit;
 using Quarp.Core;
@@ -6,14 +7,21 @@ using Quarp.Core;
 namespace Quarp.Shell.Desktop;
 
 /// <summary>
-/// One running cartridge inside the shell: load, tick, hot reload, crash handling and
-/// save.dat persistence. Owns the <see cref="VirtualConsole"/> (recreated on every
-/// successful reload — restart mode, ARCHITECTURE §3) and the <see cref="CartHost"/>.
-/// A cartridge exception pauses the simulation, prints the full stack trace (embedded
-/// PDB gives line numbers) and stamps a red banner into the framebuffer; a successful
-/// reload resumes. Compile errors during reload keep the previous cartridge running, and so
-/// does a transient file lock (an editor mid-save) — that one is retried instead of dropped.
-/// Folder carts are watched for edits; a packed .quarp8 has no watcher (nothing to edit).
+/// One running cartridge inside the shell: load, tick, time control, hot reload, crash
+/// handling, replay files and save.dat persistence.
+///
+/// <para>The session owns a <see cref="TimeMachine"/>, not a bare console. That single change
+/// is what turns M1's restart-on-reload into M2's <b>continuation</b>: the input log is the
+/// session's memory, so an edit mid-game replays that log against the new code and the player
+/// lands in the same place with the new behaviour (ARCHITECTURE §4). The same log is what
+/// makes pause, single-step, rewind and replay files possible without a line of cartridge
+/// support.</para>
+///
+/// <para>The console instance never changes for the life of the session — rebuilds included —
+/// so <see cref="Framebuffer"/> is safe to cache. Crashes pause the simulation, print the
+/// stack trace (embedded PDB gives line numbers) and stamp a banner into the frame; a
+/// successful reload resumes. Compile errors during reload keep the previous cartridge
+/// running, and so does a transient file lock — that one is retried instead of dropped.</para>
 /// </summary>
 public sealed class CartSession : IDisposable
 {
@@ -22,30 +30,128 @@ public sealed class CartSession : IDisposable
     /// <summary>Wait before retrying a reload that hit a transient file lock — one debounce window.</summary>
     private const int ReloadRetryIntervalMs = CartWatcher.DebounceMilliseconds;
 
+    /// <summary>
+    /// Past this, a resimulation stops being a hiccup and the shell owes the player a
+    /// progress indicator instead of a frozen window (ARCHITECTURE §4).
+    /// </summary>
+    private const int ProgressAfterMs = 2000;
+
+    /// <summary>
+    /// Past this, a continuation reload is abandoned and the session restarts. Waiting ten
+    /// seconds after every Ctrl+S is worse than starting over (ARCHITECTURE §4).
+    /// </summary>
+    private const int RebuildTimeoutMs = 10_000;
+
+    /// <summary>Ticks between progress callbacks — also how often the timeout clock is checked.</summary>
+    private const int ProgressIntervalTicks = 512;
+
     private readonly string _cartPath;
     private readonly string _savePath;
+    private readonly string _replayFolder;
     private readonly CartWatcher? _watcher;
+    private readonly Action<int, int> _progressCallback;
+    private readonly Stopwatch _operationClock = new();
 
-    private VirtualConsole _console;
+    private readonly TimeMachine _machine;
     private CartHost _host;
+    private byte[] _identity;
+
+    /// <summary>
+    /// The assets the live console booted from, kept because a playback machine needs the
+    /// same ones and the console does not hand its boot image back out.
+    /// </summary>
+    private byte[] _gfx;
+    private byte[] _map;
+    private byte[] _flags;
+
+    /// <summary>Non-null while a saved replay is being watched; it shadows the live session.</summary>
+    private TimeMachine? _playback;
+    private string? _playbackName;
+
+    /// <summary>Where the live session stood when playback took over, so it can be put back.</summary>
+    private int _liveTick;
+
     private bool _crashed;
+    private bool _paused;
+    private int _speedIndex = TimeSpeed.NormalIndex;
     private long _lastSaveTick;
     private long _reloadRetryTick; // 0 = no retry armed.
 
-    private CartSession(string cartPath, string savePath, CartWatcher? watcher, VirtualConsole console, CartHost host)
+    // Progress plumbing for a blocking resimulation.
+    private string _operationLabel = "";
+    private long _operationDeadlineMs;
+    private bool _operationAnnounced;
+
+    private string? _status;
+    private int _statusPercent = -1;
+    private string? _flash;
+    private long _flashUntilMs;
+
+    /// <summary>Everything <see cref="RefreshStatus"/> reads, so an unchanged frame formats nothing.</summary>
+    private (bool Crashed, bool Paused, int Speed, int Tick, string? Replay, string? Flash, bool InPlayback)
+        _statusSignature = (false, false, -1, -1, null, null, false);
+
+    private CartSession(
+        string cartPath,
+        string savePath,
+        CartWatcher? watcher,
+        TimeMachine machine,
+        CartHost host,
+        CartData data,
+        byte[] identity)
     {
         _cartPath = cartPath;
         _savePath = savePath;
+        _replayFolder = Path.Combine(cartPath, "replays");
         _watcher = watcher;
-        _console = console;
+        _machine = machine;
         _host = host;
+        _identity = identity;
+        _gfx = data.Gfx;
+        _map = data.Map;
+        _flags = data.Flags;
+        _progressCallback = OnResimulationProgress;   // cached once: it runs inside the seek loop
+        machine.Progress = _progressCallback;
+        machine.ProgressInterval = ProgressIntervalTicks;
     }
 
     /// <summary>The cart's display name from its manifest.</summary>
     public string Name { get; private set; } = "";
 
-    /// <summary>The framebuffer to present; changes identity after a successful reload.</summary>
-    public Framebuffer Framebuffer => _console.Framebuffer;
+    /// <summary>
+    /// The framebuffer to present. Stable for the whole session — the TimeMachine keeps one
+    /// console across rebuilds — except while a saved replay is being watched, which runs on
+    /// its own console.
+    /// </summary>
+    public Framebuffer Framebuffer => Active.Framebuffer;
+
+    /// <summary>The machine the time controls act on: the replay being watched, or the live session.</summary>
+    private TimeMachine Active => _playback ?? _machine;
+
+    /// <summary>Where the console stands, in ticks since Init.</summary>
+    public int Tick => Active.Tick;
+
+    /// <summary>The selected rung of the speed ladder.</summary>
+    public TimeSpeed Speed => TimeSpeed.At(_speedIndex);
+
+    /// <summary>True when the simulation is not advancing on its own: paused, crashed, or rewinding.</summary>
+    public bool IsPaused => _paused || _crashed;
+
+    /// <summary>
+    /// What the shell's overlay should say, or null for nothing. A cached string, rebuilt only
+    /// when the state behind it changes, so presenting it every frame allocates nothing.
+    /// </summary>
+    public string? Status => _status;
+
+    /// <summary>Progress for the overlay's bar in 0..100, or -1 when there is nothing to show.</summary>
+    public int StatusPercent => _statusPercent;
+
+    /// <summary>
+    /// Called by the shell while a blocking resimulation is running, so the window can repaint
+    /// instead of freezing. The session cannot draw — it has no graphics device — so it hands
+    /// back the same status it publishes normally and lets the shell present a frame.
+    /// </summary>
+    public Action? PresentFrame { get; set; }
 
     /// <summary>
     /// Loads, compiles and starts a cartridge from a folder or a .quarp8 file.
@@ -64,6 +170,7 @@ public sealed class CartSession : IDisposable
         {
             CartData data = CartSource.Load(fullPath);
             CartCompileResult result = CartCompiler.Compile(data);
+            PrintWarnings(result);
             if (!result.Success)
             {
                 throw new CartLoadException(
@@ -72,21 +179,37 @@ public sealed class CartSession : IDisposable
             }
 
             CartHost host = CartHost.Load(result.AssemblyBytes);
-            var console = new VirtualConsole(ConsoleProfile.Profile8, data.Gfx, data.Map, data.Flags);
             string savePath = Directory.Exists(fullPath)
                 ? Path.Combine(fullPath, "save.dat")
                 : Path.ChangeExtension(fullPath, ".save.dat");
-            console.LoadPersistent(ReadSaveFile(savePath));
 
-            var session = new CartSession(fullPath, savePath, watcher, console, host) { Name = data.Manifest.Name };
+            // The three external inputs of the simulation, all captured before anything runs:
+            // the cartridge identity, the RNG seed and the persistent snapshot (REPLAY-FORMAT
+            // §2). The seed stays 0 for now — a per-session seed would be perfectly legal
+            // (the shell may read a clock, the core may not) but it would make two runs of the
+            // same cart diverge by default, and that is a decision for a milestone that has a
+            // reason to want it, not a side effect of wiring up replays.
+            byte[] identity = CartIdentity.Compute(data);
+            int[] persistent = ReadSaveFile(savePath);
+            var header = new ReplayHeader(identity, seed: 0, persistent);
+            var machine = new TimeMachine(
+                ConsoleProfile.Profile8, host.Cartridge, header, new ReplayLog(), data.Gfx, data.Map, data.Flags);
+
+            var session = new CartSession(fullPath, savePath, watcher, machine, host, data, identity)
+            {
+                Name = data.Manifest.Name,
+            };
             try
             {
-                console.AttachCart(host.Cartridge);
+                machine.Boot();
             }
             catch (Exception e)
             {
+                // The constructor ran no cartridge code, so the framebuffer exists and the
+                // banner is drawable even though Init never finished.
                 session.Crash(e);
             }
+            session.RefreshStatus();
             return session;
         }
         catch
@@ -96,12 +219,58 @@ public sealed class CartSession : IDisposable
         }
     }
 
+    // --- the frame ---
+
     /// <summary>
-    /// One fixed 60 Hz step: poll the watcher for a debounced reload, advance the
-    /// simulation unless crashed, and autosave dirty persistent memory at most once
-    /// per second.
+    /// One frame of shell time control, applied before any ticks run: pause, speed, stepping,
+    /// seeking, replay files. Returns after acting; the caller then asks for ticks.
     /// </summary>
-    public void Update(InputState input)
+    public void ApplyCommands(in ShellCommands commands)
+    {
+        if (commands.TogglePause)
+        {
+            _paused = !_paused;
+        }
+        if (commands.Slower)
+        {
+            _speedIndex = TimeSpeed.ClampIndex(_speedIndex - 1);
+        }
+        if (commands.Faster)
+        {
+            _speedIndex = TimeSpeed.ClampIndex(_speedIndex + 1);
+        }
+        if (commands.SaveReplay)
+        {
+            SaveReplay();
+        }
+        if (commands.PlayReplay)
+        {
+            TogglePlayback();
+        }
+        if (commands.ToStart)
+        {
+            SeekTo(0);
+            _paused = true;
+        }
+        if (commands.StepBack)
+        {
+            _paused = true;
+            StepBack();
+        }
+        if (commands.StepForward)
+        {
+            _paused = true;
+            StepForward();
+        }
+        RefreshStatus();
+    }
+
+    /// <summary>
+    /// Runs the frame's ticks. <paramref name="rewinding"/> spends them going backwards
+    /// (Backspace held) instead of forwards — same clock, same ladder, opposite direction.
+    /// Also polls the watcher for a debounced hot reload, once per frame on this thread.
+    /// </summary>
+    public void Update(int ticks, InputState input, bool rewinding)
     {
         if (_watcher is not null && (_watcher.ConsumeReloadRequest() || ReloadRetryDue()))
         {
@@ -118,18 +287,18 @@ public sealed class CartSession : IDisposable
                 ReportKeepingOldCart();
             }
         }
-        if (!_crashed)
+
+        if (rewinding)
         {
-            try
-            {
-                _console.Tick(input);
-            }
-            catch (Exception e)
-            {
-                Crash(e);
-            }
+            Rewind(ticks);
         }
+        else if (!IsPaused && ticks > 0)
+        {
+            RunForward(ticks, input);
+        }
+
         SaveIfDirty(force: false);
+        RefreshStatus();
     }
 
     /// <summary>Writes save.dat immediately if there are unsaved Dset changes.</summary>
@@ -137,12 +306,131 @@ public sealed class CartSession : IDisposable
 
     public void Dispose()
     {
+        // Quitting while watching a replay must still save the live session's progress, and
+        // SaveIfDirty deliberately refuses to write anything while playback is up.
+        StopPlayback(restore: false, quiet: true);
         SaveIfDirty(force: true);
         _watcher?.Dispose();
         _host.Unload();
     }
 
-    // --- hot reload (restart mode: fresh console + Init, ARCHITECTURE §3) ---
+    // --- moving through time ---
+
+    private void RunForward(int ticks, InputState input)
+    {
+        TimeMachine machine = Active;
+        try
+        {
+            if (_playback is not null)
+            {
+                // Watching a replay: step through the recorded input, never the live pad.
+                // Running out of recording is the end of the film, not an error.
+                if (machine.ReplayForward(ticks) == 0)
+                {
+                    _paused = true;
+                }
+                return;
+            }
+            // One polled snapshot feeds every tick of the frame. At x8 that means the same
+            // buttons are recorded eight times — faithful to what the simulation actually
+            // saw, which is the only thing a replay is allowed to claim.
+            machine.Advance(ticks, input);
+        }
+        catch (Exception e)
+        {
+            Crash(e);
+        }
+    }
+
+    private void Rewind(int ticks)
+    {
+        if (ticks <= 0)
+        {
+            return;
+        }
+        TimeMachine machine = Active;
+        int target = Math.Max(0, machine.Tick - ticks);
+        if (target == machine.Tick)
+        {
+            return;
+        }
+        // Rewinding out of a crash is the point of rewinding out of a crash: the tick that
+        // threw is behind us now, so the session is live again.
+        SeekTo(target);
+    }
+
+    private void StepBack()
+    {
+        TimeMachine machine = Active;
+        if (machine.Tick <= 0)
+        {
+            Flash("AT START");
+            return;
+        }
+        SeekTo(machine.Tick - 1);
+    }
+
+    private void StepForward()
+    {
+        TimeMachine machine = Active;
+        if (_crashed && machine.Tick >= machine.Log.TickCount)
+        {
+            // The console counts a tick before running it, so a crashed tick leaves the
+            // cartridge half-updated. Stepping forward from there would run the next tick on
+            // state no straight run could ever produce — the opposite of what this milestone
+            // is for. Rewinding re-boots and resimulates, which is a state that is real.
+            Flash("REWIND TO RECOVER");
+            return;
+        }
+        try
+        {
+            if (machine.Tick < machine.Log.TickCount)
+            {
+                // There is recorded future ahead (we stepped back into it): replay it rather
+                // than branching the timeline on a keypress.
+                machine.ReplayForward(1);
+                _crashed = false;
+            }
+            else if (_playback is null)
+            {
+                machine.Advance(1, default);
+            }
+            else
+            {
+                Flash("REPLAY END");
+            }
+        }
+        catch (Exception e)
+        {
+            Crash(e);
+        }
+    }
+
+    /// <summary>
+    /// Resimulates to <paramref name="tick"/>. Long seeks report progress through the cached
+    /// callback; a cartridge that crashes on the way is caught here, because a rewind through
+    /// a crashing tick must land the player somewhere, not take the window down.
+    /// </summary>
+    private void SeekTo(int tick)
+    {
+        TimeMachine machine = Active;
+        BeginOperation("REWIND", timeoutMs: 0);
+        try
+        {
+            machine.SeekTo(Math.Clamp(tick, 0, machine.Log.TickCount));
+            _crashed = false;
+        }
+        catch (Exception e)
+        {
+            Crash(e);
+        }
+        finally
+        {
+            EndOperation();
+        }
+    }
+
+    // --- hot reload, continuation mode (the milestone's headline feature) ---
 
     private void TryReload()
     {
@@ -180,6 +468,7 @@ public sealed class CartSession : IDisposable
         }
 
         CartCompileResult result = CartCompiler.Compile(data);
+        PrintWarnings(result);
         if (!result.Success)
         {
             foreach (string diagnostic in result.Diagnostics)
@@ -202,29 +491,87 @@ public sealed class CartSession : IDisposable
             return;
         }
 
-        // The new build is good — swap. Flush pending saves, carry persistent memory over
-        // (it belongs to the player, not to the cart instance), drop the old ALC.
+        // Watching a replay while editing is a real thing to do, but the reload belongs to
+        // the live session — drop back to it so the player sees the result of their edit.
+        // Rebuild below boots and resimulates the live log itself, so restoring here first
+        // would do that work twice.
+        StopPlayback(restore: false, quiet: true);
         SaveIfDirty(force: true);
-        var persistent = new int[VirtualConsole.PersistentSlots];
-        _console.CopyPersistentTo(persistent);
-        var newConsole = new VirtualConsole(ConsoleProfile.Profile8, data.Gfx, data.Map, data.Flags);
-        newConsole.LoadPersistent(persistent);
-        _host.Unload();
-        _host = newHost;
-        _console = newConsole;
-        _crashed = false;
-        Name = data.Manifest.Name;
+
+        CartHost oldHost = _host;
+        int landing = _machine.Tick;
+        byte[] newIdentity = CartIdentity.Compute(data);
+
+        BeginOperation("RELOADING", RebuildTimeoutMs);
+        RebuildResult rebuild;
         try
         {
-            newConsole.AttachCart(newHost.Cartridge);
-            Console.WriteLine("[quarp] reload OK — cartridge restarted.");
+            rebuild = _machine.Rebuild(newHost.Cartridge, data.Gfx, data.Map, data.Flags);
+        }
+        finally
+        {
+            EndOperation();
+        }
+
+        if (rebuild.Success)
+        {
+            AdoptBuild(newHost, data, newIdentity);
+            _crashed = false;
+            oldHost.Unload();
+            Console.WriteLine(
+                $"[quarp] reload OK — continuing at tick {rebuild.Tick} ({FormatSeconds(rebuild.Tick)}), "
+                + $"cart {CartIdentity.ToShortHex(newIdentity)}.");
+            Flash($"RELOADED @{rebuild.Tick}");
+            return;
+        }
+
+        // The new code could not survive the recorded past. Say which tick killed it — that
+        // is the only clue the author has — then fall back to restart mode (ARCHITECTURE §4).
+        bool timedOut = rebuild.Error is ResimulationTimeoutException;
+        Console.Error.WriteLine(timedOut
+            ? $"[quarp] new code needed more than {RebuildTimeoutMs / 1000} s to resimulate "
+              + $"{landing} ticks — falling back to restart."
+            : $"[quarp] new code crashed on tick {rebuild.Tick} while replaying the session "
+              + $"({landing} ticks) — falling back to restart.");
+        if (!timedOut && rebuild.Error is not null)
+        {
+            Console.Error.WriteLine(rebuild.Error.ToString());
+        }
+
+        AdoptBuild(newHost, data, newIdentity);
+        oldHost.Unload();
+        try
+        {
+            // Restart mode: a clean session on the new code, timeline dropped. The old input
+            // log described a game the new code cannot play.
+            _machine.Restart();
+            _crashed = false;
+            _paused = false;
+            Flash(timedOut ? "RESTART (SLOW)" : "RESTART (CRASH)");
+            Console.Error.WriteLine("[quarp] restarted on the new code.");
         }
         catch (Exception e)
         {
-            // The new code crashed in Init: stay on the new build (it is what the author
-            // is editing), paused with the banner, waiting for the next fix.
+            // Even Init throws now. Stay paused with the banner; the next edit gets another go.
             Crash(e);
         }
+    }
+
+    /// <summary>
+    /// Takes ownership of a newly compiled build, whichever way the rebuild went. The
+    /// identity is stamped on the machine so that a replay saved from now on names the build
+    /// that is actually running; it touches neither seed nor persistent snapshot, so
+    /// resimulation is unaffected.
+    /// </summary>
+    private void AdoptBuild(CartHost newHost, CartData data, byte[] newIdentity)
+    {
+        _host = newHost;
+        _machine.SetCartIdentity(newIdentity);
+        _identity = newIdentity;
+        _gfx = data.Gfx;
+        _map = data.Map;
+        _flags = data.Flags;
+        Name = data.Manifest.Name;
     }
 
     /// <summary>True once the wait after a transient reload failure has elapsed.</summary>
@@ -244,6 +591,241 @@ public sealed class CartSession : IDisposable
             : "[quarp] previous cartridge keeps running.");
     }
 
+    private static void PrintWarnings(CartCompileResult result)
+    {
+        foreach (string warning in result.Warnings)
+        {
+            Console.Error.WriteLine(warning);
+        }
+    }
+
+    // --- long operations: progress and the timeout ---
+
+    private void BeginOperation(string label, int timeoutMs)
+    {
+        _operationLabel = label;
+        _operationAnnounced = false;
+        _operationDeadlineMs = timeoutMs > 0 ? timeoutMs : 0;
+        _operationClock.Restart();
+    }
+
+    private void EndOperation()
+    {
+        _operationClock.Reset();
+        _operationLabel = "";
+        if (_operationAnnounced)
+        {
+            Console.WriteLine();     // close the progress line the callback was overwriting
+            _operationAnnounced = false;
+        }
+        _statusPercent = -1;
+    }
+
+    /// <summary>
+    /// The <see cref="TimeMachine.Progress"/> callback, fired every
+    /// <see cref="ProgressIntervalTicks"/> ticks of a long resimulation. Three jobs: keep the
+    /// window painting, keep the terminal informed, and enforce the ten-second ceiling.
+    ///
+    /// <para>The ceiling is enforced by throwing: <c>Rebuild</c> catches everything and turns
+    /// it into a failed <see cref="RebuildResult"/>, which is exactly the "fall back to
+    /// restart" path the work order asks for. There is no other way to stop a resimulation
+    /// from outside, and inventing a cancellation token would have meant editing the core,
+    /// which belongs to another team this milestone.</para>
+    /// </summary>
+    private void OnResimulationProgress(int reached, int target)
+    {
+        long elapsed = _operationClock.ElapsedMilliseconds;
+        if (_operationDeadlineMs > 0 && elapsed > _operationDeadlineMs)
+        {
+            throw new ResimulationTimeoutException(reached, target, elapsed);
+        }
+        if (elapsed < ProgressAfterMs)
+        {
+            return;     // A rewind nobody can feel does not deserve a progress bar.
+        }
+
+        int percent = target > 0 ? (int)((long)reached * 100 / target) : 100;
+        _status = $"{_operationLabel} {percent}%";
+        _statusPercent = percent;
+        // Painting from inside the callback keeps the window alive without moving the
+        // simulation onto another thread — the console is not thread-safe, and a race on the
+        // framebuffer would be a far worse bug than a progress bar that updates coarsely.
+        PresentFrame?.Invoke();
+
+        Console.Write($"\r[quarp] {_operationLabel.ToLowerInvariant()} {reached}/{target} ticks ({percent}%)   ");
+        _operationAnnounced = true;
+    }
+
+    // --- replay files (F5 / F8) ---
+
+    private void SaveReplay()
+    {
+        TimeMachine machine = Active;
+        try
+        {
+            Directory.CreateDirectory(_replayFolder);
+            // Sortable, collision-free, and readable at a glance. The shell may look at a
+            // clock; the core may not, which is why this lives here and not in ReplayLog.
+            string name = $"{DateTime.Now:yyyyMMdd-HHmmss}.qrpr";
+            string path = Path.Combine(_replayFolder, name);
+            using (var stream = new FileStream(path, FileMode.Create, FileAccess.Write))
+            {
+                machine.Log.WriteTo(stream, machine.Header);
+            }
+            Console.WriteLine(
+                $"[quarp] replay saved: {path} ({machine.Log.TickCount} ticks, {machine.Log.ByteLength} bytes)");
+            Flash("REPLAY SAVED");
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        {
+            Console.Error.WriteLine($"[quarp] could not save the replay: {e.Message}");
+            Flash("SAVE FAILED");
+        }
+    }
+
+    private void TogglePlayback()
+    {
+        if (_playback is not null)
+        {
+            StopPlayback(restore: true, quiet: false);
+            return;
+        }
+
+        string? file = NewestReplay();
+        if (file is null)
+        {
+            Console.Error.WriteLine($"[quarp] no replay to play — press F5 first (looked in {_replayFolder}).");
+            Flash("NO REPLAY");
+            return;
+        }
+
+        try
+        {
+            ReplayLog log;
+            ReplayHeader header;
+            using (var stream = File.OpenRead(file))
+            {
+                log = ReplayLog.ReadFrom(stream, out header);
+            }
+            if (header.HasIdentity && !header.IdentityMatches(_identity))
+            {
+                // A warning, never a refusal (REPLAY-FORMAT §5): playing a replay against
+                // edited code is a feature, not an accident.
+                Console.Error.WriteLine(
+                    $"[quarp] replay was recorded against cart {CartIdentity.ToShortHex(header.CartIdentity)}, "
+                    + $"this build is {CartIdentity.ToShortHex(_identity)} — playing anyway.");
+            }
+
+            // The playback machine gets its own console but shares the one Cartridge instance
+            // this session has. Booting it re-attaches that instance to the playback console
+            // and re-runs Init, which is why leaving playback has to put the live session back
+            // together rather than simply dropping the reference — see StopPlayback.
+            var playback = new TimeMachine(
+                ConsoleProfile.Profile8, _host.Cartridge, header, log, _gfx, _map, _flags)
+            {
+                Progress = _progressCallback,
+                ProgressInterval = ProgressIntervalTicks,
+            };
+            _liveTick = _machine.Tick;
+            playback.Boot();
+
+            _playback = playback;
+            _playbackName = Path.GetFileName(file);
+            _paused = false;
+            _crashed = false;
+            Console.WriteLine($"[quarp] playing {_playbackName} — {log.TickCount} ticks. F8 returns to the game.");
+            Flash("PLAYING");
+        }
+        catch (ReplayFormatException e)
+        {
+            Console.Error.WriteLine($"[quarp] {Path.GetFileName(file)}: {e.Message}");
+            Flash("BAD REPLAY");
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        {
+            Console.Error.WriteLine($"[quarp] could not read {file}: {e.Message}");
+            Flash("BAD REPLAY");
+        }
+        catch (Exception e)
+        {
+            // The cartridge crashed during the replay's Init.
+            Console.Error.WriteLine("[quarp] cartridge crashed while starting the replay:");
+            Console.Error.WriteLine(e.ToString());
+            _playback = null;
+            Flash("REPLAY CRASH");
+        }
+    }
+
+    /// <summary>
+    /// Leaves playback. <paramref name="restore"/> puts the live session back on its feet,
+    /// which is more than dropping a reference: the two machines share one
+    /// <see cref="Cartridge"/> instance, and booting the playback machine pointed that
+    /// instance at the playback console and re-ran its Init. Re-booting the live machine and
+    /// resimulating its own log re-attaches the cartridge and rebuilds the state that belongs
+    /// to it. The cost is exactly one rewind, which is what the shell pays for a rewind
+    /// anyway.
+    ///
+    /// <para>A caller that is about to <see cref="TimeMachine.Rebuild(Cartridge)"/> passes
+    /// false: that does its own boot and resimulation from the same log, so restoring first
+    /// would simply do the work twice.</para>
+    /// </summary>
+    private void StopPlayback(bool restore, bool quiet)
+    {
+        if (_playback is null)
+        {
+            return;
+        }
+        _playback = null;
+        _playbackName = null;
+        _paused = false;
+        _crashed = false;
+
+        if (restore)
+        {
+            BeginOperation("RESTORING", timeoutMs: 0);
+            try
+            {
+                _machine.Boot();
+                _machine.SeekTo(Math.Min(_liveTick, _machine.Log.TickCount));
+            }
+            catch (Exception e)
+            {
+                Crash(e);
+            }
+            finally
+            {
+                EndOperation();
+            }
+        }
+
+        if (!quiet)
+        {
+            Console.WriteLine($"[quarp] back to the live session at tick {_machine.Tick}.");
+            Flash("LIVE");
+        }
+    }
+
+    /// <summary>The most recently written .qrpr next to the cartridge, or null when there is none.</summary>
+    private string? NewestReplay()
+    {
+        if (!Directory.Exists(_replayFolder))
+        {
+            return null;
+        }
+        string? newest = null;
+        DateTime newestTime = DateTime.MinValue;
+        foreach (string file in Directory.GetFiles(_replayFolder, "*.qrpr"))
+        {
+            DateTime written = File.GetLastWriteTimeUtc(file);
+            if (newest is null || written > newestTime)
+            {
+                newest = file;
+                newestTime = written;
+            }
+        }
+        return newest;
+    }
+
     // --- crash handling ---
 
     private void Crash(Exception exception)
@@ -251,14 +833,15 @@ public sealed class CartSession : IDisposable
         _crashed = true;
         Console.Error.WriteLine("[quarp] cartridge crashed:");
         Console.Error.WriteLine(exception.ToString());
-        Console.Error.WriteLine("[quarp] simulation paused — edit the code to reload.");
+        Console.Error.WriteLine(
+            "[quarp] simulation paused — edit the code to reload, or hold Backspace to rewind past it.");
         DrawCrashBanner();
     }
 
     /// <summary>Stamps the banner over the last frame via the console's own drawing API.</summary>
     private void DrawCrashBanner()
     {
-        IConsoleApi c = _console;
+        IConsoleApi c = Active.Console;
         // Reset draw state the cart may have left behind so the banner is always legible.
         c.Camera();
         c.Clip();
@@ -268,6 +851,79 @@ public sealed class CartSession : IDisposable
         c.Print("CRASHED - SEE TERMINAL", 20, 29, 3);
         c.Print("EDIT CODE TO RELOAD", 26, 38, 3);
     }
+
+    // --- status line for the shell overlay ---
+
+    private void Flash(string message)
+    {
+        _flash = message;
+        _flashUntilMs = Environment.TickCount64 + 1500;
+    }
+
+    /// <summary>
+    /// Rebuilds the overlay string, but only when something behind it actually changed. The
+    /// shell asks for the status every frame, and formatting one there would be a fresh
+    /// string sixty times a second for a line that changes when a key is pressed.
+    /// </summary>
+    private void RefreshStatus()
+    {
+        if (_operationClock.IsRunning)
+        {
+            return;     // The progress callback owns the status while a seek is running.
+        }
+
+        string? flash = _flash;
+        if (flash is not null && Environment.TickCount64 > _flashUntilMs)
+        {
+            _flash = null;
+            flash = null;
+        }
+
+        // Cheap comparison first: everything the line is built from, packed into a value.
+        // Only a real change pays for the formatting.
+        var signature = (_crashed, _paused, _speedIndex, Tick, _playbackName, flash, _playback is not null);
+        if (signature == _statusSignature)
+        {
+            return;
+        }
+        _statusSignature = signature;
+
+        string? next;
+        if (_crashed)
+        {
+            next = "CRASHED";
+        }
+        else if (_playback is not null)
+        {
+            next = $"REPLAY {_playbackName} {Tick}/{_playback.Log.TickCount}"
+                + (_paused ? " PAUSE" : Speed.IsNormal ? "" : " " + Speed.Label);
+        }
+        else if (_paused)
+        {
+            next = $"PAUSE {Tick}";
+        }
+        else if (!Speed.IsNormal)
+        {
+            next = (_speedIndex < TimeSpeed.NormalIndex ? "<< " : ">> ") + Speed.Label;
+        }
+        else
+        {
+            next = null;
+        }
+
+        if (flash is not null)
+        {
+            next = next is null ? flash : next + "  " + flash;
+        }
+        if (!string.Equals(next, _status, StringComparison.Ordinal))
+        {
+            _status = next;
+        }
+        _statusPercent = -1;
+    }
+
+    private static string FormatSeconds(int ticks) =>
+        $"{ticks / TickAccumulator.TicksPerSecond}.{ticks % TickAccumulator.TicksPerSecond * 100 / TickAccumulator.TicksPerSecond:D2}s";
 
     // --- persistence: save.dat = 64 x int32 little-endian raw Fix (M1 work order) ---
 
@@ -296,7 +952,21 @@ public sealed class CartSession : IDisposable
 
     private void SaveIfDirty(bool force)
     {
-        if (!_console.PersistentDirty)
+        if (_playback is not null)
+        {
+            // Watching a replay must not touch the player's saves: during playback Dset
+            // writes to a copy (SPEC-8 §7 rule 7, API-8 §8). The copy is the playback
+            // console's own persistent array — all the shell has to do is never flush it.
+            return;
+        }
+        if (_operationClock.IsRunning)
+        {
+            // Mid-seek or mid-rebuild the persistent array is an intermediate state of a
+            // resimulation, not a save the player made. Writing it would let a rewind
+            // scribble half-replayed high scores onto the disk.
+            return;
+        }
+        if (!_machine.Console.PersistentDirty)
         {
             return;
         }
@@ -307,7 +977,7 @@ public sealed class CartSession : IDisposable
         }
 
         var slots = new int[VirtualConsole.PersistentSlots];
-        _console.CopyPersistentTo(slots);
+        _machine.Console.CopyPersistentTo(slots);
         byte[] bytes = new byte[slots.Length * 4];
         for (int i = 0; i < slots.Length; i++)
         {
@@ -316,7 +986,7 @@ public sealed class CartSession : IDisposable
         try
         {
             File.WriteAllBytes(_savePath, bytes);
-            _console.PersistentDirty = false;
+            _machine.Console.PersistentDirty = false;
             _lastSaveTick = now;
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException)
@@ -327,4 +997,25 @@ public sealed class CartSession : IDisposable
             _lastSaveTick = now;
         }
     }
+}
+
+/// <summary>
+/// Thrown out of the progress callback to abandon a resimulation that has outstayed its
+/// welcome. <see cref="TimeMachine.Rebuild(Cartridge)"/> catches every exception and reports
+/// it as a failed <see cref="RebuildResult"/>, so this is how the shell converts "too slow"
+/// into the restart fallback without the core needing to know about clocks.
+/// </summary>
+public sealed class ResimulationTimeoutException : Exception
+{
+    public ResimulationTimeoutException(int reached, int target, long elapsedMilliseconds)
+        : base($"Resimulation reached tick {reached} of {target} in {elapsedMilliseconds} ms and was abandoned.")
+    {
+        Reached = reached;
+        Target = target;
+        ElapsedMilliseconds = elapsedMilliseconds;
+    }
+
+    public int Reached { get; }
+    public int Target { get; }
+    public long ElapsedMilliseconds { get; }
 }

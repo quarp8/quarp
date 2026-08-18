@@ -1,0 +1,33 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <!-- Roslyn analyzers must target netstandard2.0: the same DLL is loaded by the .NET
+         command-line compiler (csc on .NET 10) and by the .NET Framework process that hosts
+         Visual Studio. Verified against the official tutorial, which states it outright:
+         "Analyzers should target .NET Standard 2.0 because they can run in .NET Core
+         environment (command line builds) and .NET Framework environment (Visual Studio)."
+         This overrides the net10.0 default from Directory.Build.props. -->
+    <TargetFramework>netstandard2.0</TargetFramework>
+    <!-- Turns on the extended analyzer rules from Microsoft.CodeAnalysis.Analyzers (RS1035:
+         APIs an analyzer must not touch, such as Environment or File). RS1036 warns when an
+         analyzer project omits it. -->
+    <EnforceExtendedAnalyzerRules>true</EnforceExtendedAnalyzerRules>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <IsPackable>false</IsPackable>
+    <!-- Not a NuGet package: the DLL ships next to the CLI and is wired up by hand in two
+         places (the generated .quarp/cart.csproj and CartCompiler). -->
+  </PropertyGroup>
+  <ItemGroup>
+    <!-- 4.14.0 is the highest version both hosts satisfy: CartKit compiles cartridges with
+         Microsoft.CodeAnalysis.CSharp 4.14.0, and the .NET 10 SDK's csc is Roslyn 5.0, which
+         loads analyzers built against any earlier Roslyn. Requesting a newer Roslyn here
+         would make the analyzer unloadable inside CartCompiler.
+         PrivateAssets="all": the compiler host supplies these assemblies at run time; they
+         must not flow to whoever references this project. -->
+    <PackageReference Include="Microsoft.CodeAnalysis.CSharp" Version="4.14.0" PrivateAssets="all" />
+  </ItemGroup>
+  <ItemGroup>
+    <!-- Release tracking (RS2007/RS2008): every shipped rule id is recorded here. -->
+    <AdditionalFiles Include="AnalyzerReleases.Shipped.md" />
+    <AdditionalFiles Include="AnalyzerReleases.Unshipped.md" />
+  </ItemGroup>
+</Project>

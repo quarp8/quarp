@@ -13,9 +13,16 @@ namespace Quarp.Shell.Desktop;
 /// </summary>
 public static class InputMapper
 {
-    public static InputState Read()
+    /// <summary>Polls the keyboard itself — for callers with no keyboard state of their own.</summary>
+    public static InputState Read() => Read(Keyboard.GetState());
+
+    /// <summary>
+    /// Maps an already-polled keyboard state. The shell reads the keyboard once per frame and
+    /// feeds it to both this and <see cref="ShellCommandReader"/>, so the cartridge and the
+    /// time controls can never disagree about which keys were down on a given frame.
+    /// </summary>
+    public static InputState Read(KeyboardState keyboard)
     {
-        KeyboardState keyboard = Keyboard.GetState();
         byte player0 = FromKeyboard(keyboard);
         player0 |= FromGamePad(GamePad.GetState(PlayerIndex.One));
         byte player1 = FromGamePad(GamePad.GetState(PlayerIndex.Two));

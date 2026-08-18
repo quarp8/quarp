@@ -6,8 +6,10 @@ using System.Text;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
+using Microsoft.CodeAnalysis.Diagnostics;
 using Microsoft.CodeAnalysis.Emit;
 using Microsoft.CodeAnalysis.Text;
+using Quarp.Analyzers;
 using Quarp.Api;
 
 namespace Quarp.CartKit;
@@ -27,9 +29,16 @@ namespace Quarp.CartKit;
 ///     produces float arithmetic without leaving float element types or float opcodes in
 ///     the assembly.</item>
 /// </list>
-/// This is the honest M1 ban; the full Roslyn analyzer arrives in M2. User errors never
-/// throw — they come back as <see cref="CartCompileResult.Diagnostics"/> so the shell can
-/// keep the previous cartridge running during hot reload.
+/// M2 adds a fourth pass in front of these: <see cref="Quarp.Analyzers"/>, the same Roslyn
+/// analyzers the author's IDE runs, executed here so the ban holds for someone writing in
+/// Notepad and in CI, where there is no IDE by definition (M2 work order). QRP1001 subsumes
+/// post-pass (a) exactly, so (a) now runs only when the analyzer did not report floating
+/// point — which covers both an analyzer failure and a compilation the analyzer considers
+/// out of scope (no <c>Cartridge</c> subclass). One violation, one message.
+///
+/// User errors never throw — they come back as
+/// <see cref="CartCompileResult.Diagnostics"/> so the shell can keep the previous cartridge
+/// running during hot reload.
 ///
 /// Decision (repair pass, D4): cartridges compile with
 /// <see cref="OptimizationLevel.Debug"/>. Carts are at most 64 KB of code, so the
@@ -40,6 +49,28 @@ public static class CartCompiler
 {
     private static readonly object ReferencesGate = new();
     private static ImmutableArray<MetadataReference> _references;
+
+    /// <summary>
+    /// The cartridge rule set from <c>Quarp.Analyzers</c> (team B). Built once: analyzers are
+    /// stateless, and it is <c>CompilationWithAnalyzers</c> that is per-compilation. All four
+    /// gate themselves on the compilation declaring a <c>Quarp.Api.Cartridge</c> subclass, so
+    /// they stay inert for anything that is not cartridge code.
+    ///
+    /// <para>QRP1004 is the one rule here with no backstop further down this method: the
+    /// metadata and IL scans see that a cartridge called <c>Rnd</c>, but not that it called it
+    /// from <c>Draw</c>, because <c>Draw</c> is an ordinary virtual method and the answer is a
+    /// call-graph question. For that rule this list <em>is</em> the enforcement, which is the
+    /// reason it has to run here and not only in the author's editor.</para>
+    /// </summary>
+    private static readonly ImmutableArray<DiagnosticAnalyzer> CartAnalyzers =
+        ImmutableArray.Create<DiagnosticAnalyzer>(
+            new FloatBanAnalyzer(),
+            new NonDeterministicApiAnalyzer(),
+            new UnorderedIterationAnalyzer(),
+            new DrawPurityAnalyzer());
+
+    /// <summary>Roslyn's id for "an analyzer threw"; an analyzer bug must never read as a cartridge bug.</summary>
+    private const string AnalyzerFailureId = "AD0001";
 
     // Namespaces whose entire subtree is banned in cart code (SPEC-8 §7, ARCHITECTURE §3).
     private static readonly string[] BannedNamespacePrefixes =
@@ -160,14 +191,97 @@ public static class CartCompiler
         }
 
         var violations = new List<string>();
-        foreach (SyntaxTree tree in trees)
+        var warnings = new List<string>();
+
+        // Pass 0 — the author-facing analyzer. Runs first so its precise spans are what the
+        // author reads; the metadata and IL scans below stay the enforcement point.
+        bool floatsReported = RunAnalyzers(compilation, violations, warnings);
+        if (!floatsReported)
         {
-            ScanSyntax(compilation, tree, violations);
+            // Fallback: the analyzer either failed or considered this compilation out of
+            // scope. Post-pass (a) is name-based and needs no analyzer to load.
+            foreach (SyntaxTree tree in trees)
+            {
+                ScanSyntax(compilation, tree, violations);
+            }
         }
+
         byte[] assemblyBytes = peStream.ToArray();
         ScanMetadata(assemblyBytes, violations);
         ScanFloats(assemblyBytes, violations);
-        return violations.Count > 0 ? CartCompileResult.Failed(violations) : CartCompileResult.Ok(assemblyBytes);
+        return violations.Count > 0
+            ? CartCompileResult.Failed(violations, warnings)
+            : CartCompileResult.Ok(assemblyBytes, warnings);
+    }
+
+    // --- pass 0: the Roslyn analyzer, the same one the author's IDE runs ---
+
+    /// <summary>
+    /// Runs QRP1001-QRP1004 over the cartridge compilation, sorting errors into
+    /// <paramref name="violations"/> and warnings into <paramref name="warnings"/>.
+    /// Returns true when the analyzer actually reported floating point, which is the signal
+    /// that post-pass (a) has nothing left to add.
+    ///
+    /// <para><see cref="Diagnostic.ToString"/> already produces
+    /// <c>path(line,col): severity ID: message</c> — the exact shape
+    /// <see cref="Format(SyntaxTree, TextSpan, string)"/> emits — and the path is the
+    /// cart-relative one handed to the parser, so nothing needs reformatting.</para>
+    ///
+    /// <para>Never throws: an analyzer that misbehaves must not stop a cartridge from
+    /// building, because the bans that matter are enforced downstream on the emitted
+    /// assembly. A failure is reported as a warning and hands the job back to post-pass
+    /// (a).</para>
+    /// </summary>
+    private static bool RunAnalyzers(CSharpCompilation compilation, List<string> violations, List<string> warnings)
+    {
+        ImmutableArray<Diagnostic> diagnostics;
+        try
+        {
+            // GetAnalyzerDiagnosticsAsync is async-only, and this is a cold path measured in
+            // hundreds of milliseconds of Roslyn work either way. Blocking is correct here;
+            // the shell keeps the compile off its main thread by other means (WarmUp).
+            diagnostics = compilation
+                .WithAnalyzers(CartAnalyzers)
+                .GetAnalyzerDiagnosticsAsync()
+                .GetAwaiter()
+                .GetResult();
+        }
+        catch (Exception e)
+        {
+            warnings.Add(
+                $"warning QRP0100: the cartridge analyzer failed to run ({e.GetType().Name}: {e.Message}) — "
+                + "falling back to the built-in syntax scan; this is an engine bug, not a cartridge bug");
+            return false;
+        }
+
+        bool floatsReported = false;
+        bool analyzerCrashed = false;
+        foreach (Diagnostic diagnostic in diagnostics)
+        {
+            if (diagnostic.Id == AnalyzerFailureId)
+            {
+                // AD0001 arrives with severity Error and would otherwise read to the author
+                // as "your cartridge is broken". It means the opposite.
+                analyzerCrashed = true;
+                warnings.Add(
+                    $"warning QRP0100: a cartridge analyzer threw — {diagnostic.GetMessage()} "
+                    + "(this is an engine bug, not a cartridge bug)");
+                continue;
+            }
+            switch (diagnostic.Severity)
+            {
+                case DiagnosticSeverity.Error:
+                    violations.Add(diagnostic.ToString());
+                    floatsReported |= diagnostic.Id == QuarpDiagnostics.FloatingPointId;
+                    break;
+                case DiagnosticSeverity.Warning:
+                    warnings.Add(diagnostic.ToString());
+                    break;
+            }
+        }
+        // A crashed analyzer may have swallowed the very diagnostic it was supposed to
+        // report, so the fallback runs even if some QRP1001 did come through.
+        return floatsReported && !analyzerCrashed;
     }
 
     /// <summary>

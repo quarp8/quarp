@@ -5,5 +5,10 @@
   <ItemGroup>
     <ProjectReference Include="..\Quarp.Api\Quarp.Api.csproj" />
     <ProjectReference Include="..\Quarp.Core\Quarp.Core.csproj" />
+    <!-- A PLAIN reference on purpose: OutputItemType="Analyzer" would point the cartridge
+         rules at CartKit's own source, and CartKit is engine code, which is allowed float
+         and dictionaries. CartCompiler instantiates the analyzers by hand and runs them
+         against the cartridge compilation instead (M2 work order, "Интеграция (C)"). -->
+    <ProjectReference Include="..\Quarp.Analyzers\Quarp.Analyzers.csproj" />
   </ItemGroup>
 </Project>

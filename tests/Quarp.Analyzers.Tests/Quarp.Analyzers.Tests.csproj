@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.12.0" />
+    <PackageReference Include="xunit" Version="2.9.2" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2" />
+    <!-- The official Roslyn analyzer test framework (dotnet/roslyn-sdk). 1.1.4 is the current
+         release and the first with net10.0 support; its DefaultVerifier replaces the
+         Microsoft.CodeAnalysis.Testing.Verifiers.XUnit package, which stopped at 1.1.2 and is
+         marked legacy. -->
+    <PackageReference Include="Microsoft.CodeAnalysis.CSharp.Analyzer.Testing" Version="1.1.4" />
+    <!-- The line above only asks for Workspaces 1.0.1, which NuGet then restores as a .NET
+         Framework package (NU1701). Pinning it to the CartKit/analyzer version keeps one
+         Roslyn in the graph. -->
+    <PackageReference Include="Microsoft.CodeAnalysis.CSharp.Workspaces" Version="4.14.0" />
+  </ItemGroup>
+  <ItemGroup>
+    <!-- Plain references, deliberately not OutputItemType="Analyzer": these tests drive the
+         analyzers through the test framework, they must not also run against this project. -->
+    <ProjectReference Include="..\..\src\Quarp.Analyzers\Quarp.Analyzers.csproj" />
+    <ProjectReference Include="..\..\src\Quarp.Api\Quarp.Api.csproj" />
+  </ItemGroup>
+</Project>

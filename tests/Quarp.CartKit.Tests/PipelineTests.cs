@@ -17,6 +17,8 @@ public class PipelineTests
         {
             private int _t;
             private Fix _x;
+            private int _sparkX;
+            private int _sparkY;
 
             public override void Init()
             {
@@ -32,6 +34,12 @@ public class PipelineTests
                 {
                     _x += 1;
                 }
+                // The two draws stay in Update because the RNG is simulation state: a rewind
+                // resimulates without Draw, so drawing them there would consume a different
+                // number of values and land in a different game (QRP1004, SPEC-8 §7 rule 2).
+                // The sequence is unchanged — the same two draws per tick, in the same order.
+                _sparkX = RndInt(128);
+                _sparkY = RndInt(72);
             }
 
             public override void Draw()
@@ -40,7 +48,7 @@ public class PipelineTests
                 RectFill((int)_x, 20, 20, 10, 8);
                 Circ(64, 40, _t, 10);
                 Print("TICK", 2, 2, 3);
-                Pset(RndInt(128), RndInt(72), 7);
+                Pset(_sparkX, _sparkY, 7);
             }
         }
         """;
@@ -62,7 +70,7 @@ public class PipelineTests
         {
             console.Tick(default);
         }
-        return Fnv.Hash(console.Framebuffer.Pixels);
+        return FrameHash.Compute(console.Framebuffer);
     }
 
     [Fact]
@@ -73,7 +81,7 @@ public class PipelineTests
         ulong second = RunTicks(assembly, 10);
         Assert.Equal(first, second);
         // And the cart actually drew something: an empty framebuffer hashes differently.
-        Assert.NotEqual(Fnv.Hash(new byte[128 * 72]), first);
+        Assert.NotEqual(FrameHash.Compute(new byte[128 * 72]), first);
     }
 
     [Fact]
@@ -98,7 +106,7 @@ public class PipelineTests
         {
             console.Tick(right);
         }
-        Assert.NotEqual(idle, Fnv.Hash(console.Framebuffer.Pixels));
+        Assert.NotEqual(idle, FrameHash.Compute(console.Framebuffer));
     }
 
     [Fact]

@@ -12,6 +12,10 @@ namespace Quarp.Core;
 /// decides what to show).
 /// Drawing model: camera offset first, then clip rectangle, then palette remap; every
 /// pixel write funnels through one clipped plot helper.
+/// Rewind and hot-reload live one layer up, in <see cref="TimeMachine"/>; what the console
+/// contributes is the ability to be put back exactly as it started — <see cref="ResetAssets"/>,
+/// <see cref="LoadPersistent"/> and the seed on <see cref="AttachCart"/> restore all three
+/// simulation inputs — and <see cref="TickUpdateOnly"/>, a tick whose frame nobody needs.
 /// </summary>
 public sealed class VirtualConsole : IConsoleApi
 {
@@ -33,6 +37,15 @@ public sealed class VirtualConsole : IConsoleApi
     private readonly byte[] _sheet = new byte[SheetWidth * SheetHeight];
     private readonly byte[] _map = new byte[MapWidth * MapHeight];
     private readonly byte[] _flags = new byte[SpriteCount];
+
+    // The assets exactly as loaded. Sset/Mset/Fset write to the live copies above; a rewind or
+    // a hot-reload resimulation restores from these (SPEC-8 §7: a cart that edits its own map
+    // must resimulate from the map it started with, not from the one the last run left behind).
+    // The duplicate costs 35 KB per console — cheap next to a determinism hole.
+    private readonly byte[] _sheetImage = new byte[SheetWidth * SheetHeight];
+    private readonly byte[] _mapImage = new byte[MapWidth * MapHeight];
+    private readonly byte[] _flagsImage = new byte[SpriteCount];
+
     private readonly byte[] _palMap = new byte[Palette.VisibleCount];
     private readonly bool[] _palt = new bool[Palette.VisibleCount];
     private readonly int[] _persistent = new int[PersistentSlots];
@@ -77,22 +90,56 @@ public sealed class VirtualConsole : IConsoleApi
         _width = Framebuffer.Width;
         _height = Framebuffer.Height;
         _pixels = Framebuffer.Pixels;
-        CopyAsset(sheet, _sheet, "sheet");
-        CopyAsset(map, _map, "map");
-        CopyAsset(flags, _flags, "flags");
-        ResetRuntimeState();
+        LoadAssets(sheet, map, flags);
+        ResetRuntimeState(0);
     }
 
-    private static void CopyAsset(byte[]? source, byte[] destination, string name)
+    /// <summary>
+    /// Replaces the cartridge assets — sheet 128x128, map 256x72, flags 256 bytes — each
+    /// optional and copied in defensively; a null asset becomes all zeros (Format spec v1).
+    /// The copy also becomes the boot image, so <see cref="ResetAssets"/> and every later
+    /// resimulation start from exactly these bytes. Sizes are checked before anything is
+    /// written, so a wrong-sized asset leaves the console untouched.
+    /// </summary>
+    public void LoadAssets(byte[]? sheet, byte[]? map, byte[]? flags)
+    {
+        ValidateAsset(sheet, _sheetImage.Length, "sheet");
+        ValidateAsset(map, _mapImage.Length, "map");
+        ValidateAsset(flags, _flagsImage.Length, "flags");
+        CopyAsset(sheet, _sheetImage);
+        CopyAsset(map, _mapImage);
+        CopyAsset(flags, _flagsImage);
+        ResetAssets();
+    }
+
+    /// <summary>
+    /// Restores sheet, map and flags to the assets last loaded, undoing every Sset/Mset/Fset the
+    /// cartridge made. Resimulation starts here: assets are simulation state like everything
+    /// else, and a rewind that skipped them would replay the same inputs against a different
+    /// world.
+    /// </summary>
+    public void ResetAssets()
+    {
+        _sheetImage.CopyTo(_sheet, 0);
+        _mapImage.CopyTo(_map, 0);
+        _flagsImage.CopyTo(_flags, 0);
+    }
+
+    private static void ValidateAsset(byte[]? source, int expectedLength, string name)
+    {
+        if (source is not null && source.Length != expectedLength)
+        {
+            throw new ArgumentException(
+                $"Asset '{name}' must be exactly {expectedLength} bytes, got {source.Length}.");
+        }
+    }
+
+    private static void CopyAsset(byte[]? source, byte[] destination)
     {
         if (source is null)
         {
+            Array.Clear(destination);
             return;
-        }
-        if (source.Length != destination.Length)
-        {
-            throw new ArgumentException(
-                $"Asset '{name}' must be exactly {destination.Length} bytes, got {source.Length}.");
         }
         source.CopyTo(destination, 0);
     }
@@ -101,14 +148,16 @@ public sealed class VirtualConsole : IConsoleApi
 
     /// <summary>
     /// Binds a cartridge and runs its Init as tick 0 (SPEC-8 §7). Resets runtime state
-    /// (camera, clip, palettes, RNG seed 0, input, tick counter, framebuffer) but keeps
-    /// loaded assets and persistent memory. Init exceptions propagate.
+    /// (camera, clip, palettes, RNG seeded with <paramref name="seed"/>, input, tick counter,
+    /// framebuffer) but keeps loaded assets and persistent memory — a reproducible run restores
+    /// those first, with <see cref="ResetAssets"/> and <see cref="LoadPersistent"/>, because
+    /// Init already reads them. Init exceptions propagate.
     /// </summary>
-    public void AttachCart(Cartridge cart)
+    public void AttachCart(Cartridge cart, int seed = 0)
     {
         ArgumentNullException.ThrowIfNull(cart);
         _cart = cart;
-        ResetRuntimeState();
+        ResetRuntimeState(seed);
         cart.Attach(this);
         cart.Init();
     }
@@ -119,24 +168,41 @@ public sealed class VirtualConsole : IConsoleApi
     /// </summary>
     public void Tick(InputState input)
     {
-        if (_cart is null)
-        {
-            throw new InvalidOperationException("No cartridge attached; call AttachCart first.");
-        }
+        Cartridge cart = BeginTick(input);
+        cart.Update();
+        cart.Draw();
+    }
+
+    /// <summary>
+    /// Advances the simulation one tick without drawing it. Simulation state moves exactly as
+    /// <see cref="Tick"/> moves it — Draw changes nothing a later tick can observe (SPEC-8 §7) —
+    /// but the framebuffer is left alone. This is what makes rewinding affordable: a seek
+    /// resimulates thousands of ticks this way and draws only the frame someone will look at.
+    /// </summary>
+    public void TickUpdateOnly(InputState input)
+    {
+        Cartridge cart = BeginTick(input);
+        cart.Update();
+    }
+
+    /// <summary>Shared tick prologue: rotate input, count the tick, hand back the live cartridge.</summary>
+    private Cartridge BeginTick(InputState input)
+    {
+        Cartridge cart = _cart
+            ?? throw new InvalidOperationException("No cartridge attached; call AttachCart first.");
         _previous = _input;
         _input = input;
         _ticks++;
-        _cart.Update();
-        _cart.Draw();
+        return cart;
     }
 
-    private void ResetRuntimeState()
+    private void ResetRuntimeState(int seed)
     {
         Camera();
         Clip();
         Pal();
         Palt();
-        Srand(0);
+        Srand(seed);
         _input = default;
         _previous = default;
         _ticks = 0;

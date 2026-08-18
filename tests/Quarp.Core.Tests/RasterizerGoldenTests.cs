@@ -218,7 +218,7 @@ public class RasterizerGoldenTests
     {
         var console = NewConsole();
         Scenes[name](console);
-        string actual = Fnv.Hash(console.Framebuffer.Pixels).ToString("x16");
+        string actual = FrameHash.Of(console.Framebuffer);
         Assert.Equal(Goldens[name], actual);
     }
 
@@ -230,7 +230,7 @@ public class RasterizerGoldenTests
         Scenes[name](first);
         var second = NewConsole();
         Scenes[name](second);
-        Assert.Equal(Fnv.Hash(first.Framebuffer.Pixels), Fnv.Hash(second.Framebuffer.Pixels));
+        Assert.Equal(FrameHash.Compute(first.Framebuffer), FrameHash.Compute(second.Framebuffer));
     }
 
     [Fact]
@@ -241,7 +241,7 @@ public class RasterizerGoldenTests
         {
             var console = NewConsole();
             scene.Value(console);
-            ulong hash = Fnv.Hash(console.Framebuffer.Pixels);
+            ulong hash = FrameHash.Compute(console.Framebuffer);
             Assert.False(seen.TryGetValue(hash, out string? clash),
                 $"scenes '{scene.Key}' and '{clash}' hash identically — a scene is not drawing");
             seen[hash] = scene.Key;

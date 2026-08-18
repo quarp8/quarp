@@ -1,0 +1,40 @@
+# carts/dialogue - walkthrough: read the scene to the end and take the FIRST answer
+# ("Burn it all in the tower"), which finishes on the ending THE TOWER HELD.
+#
+#     quarp replay record carts/dialogue -o /tmp/w.qrpr --ticks 1200 \
+#         --input-file carts/dialogue/replays/walkthrough.input
+#
+# Grammar (quarp replay record --input-file): tick:buttons, entries separated by commas
+# or newlines, '#' starts a comment. Buttons are L R U D O X S; every press is a *tap*
+# (press on one tick, release on the next) because the cartridge reads Btnp - "pressed
+# this tick and not the last" - and a held button would advance exactly one page and then
+# sit there for the rest of the recording.
+#
+# The track is deliberately dumb: one X tap every 20 ticks and nothing else. Each tap
+# either finishes typing the page it is looking at or turns to the next one, so the scene
+# can only move forwards and the script does not have to know the page layout - which is
+# what makes it survive a re-wrap on the 160x90 spike, where the same text needs fewer
+# windows. The choice menu takes the same X to confirm, and with no Down ever pressed it
+# confirms the option the cursor starts on: the first one.
+#
+# Timeline at 128x72, all of it read off the frame hash and not off the source: the first
+# of 15 setup windows is up at tick 0, the 28th tap opens the choice menu on tick 560, the
+# tap on tick 580 confirms the first option, and the tap on tick 820 closes the last window
+# of the branch - from tick 820 on the screen is THE TOWER HELD and the frame hash never
+# changes again, because an ending answers to nothing but Start. The remaining taps in this
+# file are slack: they cost nothing and they keep the two tracks the same length.
+20:X,21:,40:X,41:,60:X,61:,80:X,81:,
+100:X,101:,120:X,121:,140:X,141:,160:X,161:,
+180:X,181:,200:X,201:,220:X,221:,240:X,241:,
+260:X,261:,280:X,281:,300:X,301:,320:X,321:,
+340:X,341:,360:X,361:,380:X,381:,400:X,401:,
+420:X,421:,440:X,441:,460:X,461:,480:X,481:,
+500:X,501:,520:X,521:,540:X,541:,560:X,561:,
+580:X,581:,600:X,601:,620:X,621:,640:X,641:,
+660:X,661:,680:X,681:,700:X,701:,720:X,721:,
+740:X,741:,760:X,761:,780:X,781:,800:X,801:,
+820:X,821:,840:X,841:,860:X,861:,880:X,881:,
+900:X,901:,920:X,921:,940:X,941:,960:X,961:,
+980:X,981:,1000:X,1001:,1020:X,1021:,1040:X,1041:,
+1060:X,1061:,1080:X,1081:,1100:X,1101:,1120:X,1121:,
+1140:X,1141:,1160:X,1161:,1180:X,1181:

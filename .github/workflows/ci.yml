@@ -149,6 +149,24 @@ jobs:
           --logger "trx;LogFileName=tests-${{ matrix.arch }}.trx"
           --results-directory artifacts/test-results
 
+      - name: Demo carts build + boot smoke
+        # Every cartridge in carts/ must compile and pass its bank checks with the same CLI
+        # a user runs, and then actually BOOT: `quarp build` deliberately never constructs a
+        # VirtualConsole, so an exception in Init() sails through it — the stage-3 adversary
+        # demonstrated that a demo throwing on its first frame kept this step green in the
+        # build-only version. The 60-tick sim runs Init plus a second of updates; its exit
+        # code is the whole assertion. Demo frame/PCM hashes are deliberately NOT pinned and
+        # not even compared until the resolution verdict (M4 stage 3, R20): pinning goldens
+        # that the verdict may re-pin weeks later would teach everyone to ignore red.
+        run: |
+          set -euo pipefail
+          for cart in carts/*/; do
+            echo "--- quarp build ${cart}"
+            dotnet "$QUARP_DLL" build "$cart"
+            echo "--- quarp sim ${cart} --ticks 60 (boot smoke, hashes unchecked)"
+            dotnet "$QUARP_DLL" sim "$cart" --ticks 60 > /dev/null
+          done
+
       - name: Upload test results
         if: always()
         uses: actions/upload-artifact@v7

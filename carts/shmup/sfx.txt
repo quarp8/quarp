@@ -1,0 +1,30 @@
+# Sound bank for the shmup: a shot, a boom (used for both a kill and a player hit), and
+# two loop-friendly slots (bass + lead) that music.txt sequences into the title theme.
+# Rebuild with `quarp audio build carts/shmup` after editing this file (AUDIO-FORMAT.md §6).
+
+sfx 0                     # shoot: a short upward blip, fast enough not to smear under autofire
+  speed 2                 # 2 ticks/step = 30 steps/sec — the whole sound is 6 ticks
+  00 C-5 sqr 5 -
+  01 F-5 sqr 4 -
+  02 A-5 sqr 3 fadeout
+
+sfx 1                     # boom: falling noise, shared by an enemy kill and a player hit
+  speed 5
+  00 A-3 noi 7 drop
+  01 F-3 noi 5 -
+  02 C-3 noi 3 fadeout
+
+sfx 2                     # bass, loops — the theme's floor
+  speed 8
+  loop 0 4
+  00 E-3 tri 4 -
+  01 ---
+  02 B-2 tri 3 -
+  03 ---
+
+sfx 3                     # lead, joins on the second half of the loop
+  speed 8
+  00 G-5 p25 5 -
+  01 B-5 p25 4 -
+  02 E-6 p25 5 arp
+  03 ---

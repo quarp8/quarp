@@ -1,0 +1,43 @@
+# carts/dialogue — sound bank of "Two Lights" (AUDIO-FORMAT.md §6).
+# Slots 0-1 are the two effects the scene needs; 2-3 are the two voices of the harbour
+# theme (music.txt drives them on channels 2 and 3, so channels 0 and 1 stay free and a
+# page turn never steals a note from the tune); 4 is the sting that closes the scene.
+
+sfx 0                     # page turn: one dry tick, four ticks long
+  speed 2
+  00 A-5 p12 4 -
+  01 D-5 p12 2 fadeout
+
+sfx 1                     # the answer is locked in: three notes up
+  speed 4
+  00 D-5 sqr 5 -
+  01 A-5 sqr 5 -
+  02 D-6 sqr 4 fadeout
+
+sfx 2                     # theme, bass voice: a slow swell under the talking
+  speed 12
+  00 D-3 tri 4 -
+  01 ---
+  02 A-3 tri 3 -
+  03 ---
+  04 F-3 tri 4 -
+  05 ---
+  06 C-3 tri 3 -
+  07 ---
+
+sfx 3                     # theme, lead voice: the tune the lead plays over the swell
+  speed 12
+  00 A-4 p25 4 -
+  01 ---
+  02 D-5 p25 4 -
+  03 F-5 p25 3 -
+  04 E-5 p25 4 -
+  05 ---
+  06 C-5 p25 3 fadeout
+  07 ---
+
+sfx 4                     # ending sting: the theme has already been stopped by then
+  speed 6
+  00 D-4 tri 5 -
+  01 A-4 tri 5 -
+  02 D-5 tri 6 fadeout

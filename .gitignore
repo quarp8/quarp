@@ -13,6 +13,16 @@ artifacts/
 # other checkout at a drive that does not exist. Regenerate it with `quarp new` instead.
 .quarp/
 
+# Same story, same tool, same absolute paths: launch.json/tasks.json written by `quarp new`
+# point at this machine's quarp.exe. Three stage-3 brigades reported this independently.
+# The repository's own .vscode (if one ever appears at the root) is not covered on purpose.
+carts/*/.vscode/
+
+# Persistent memory (Dget/Dset) written by the shell INTO the cartridge folder when a game
+# is played. The owner's playtest would otherwise commit machine-local save state; found by
+# the stage-3 adversary before the first playtest could step on it.
+carts/*/save.dat
+
 # Личные заметки владельца — вне репозитория
 docs/NAME-CHECKLIST.md
 

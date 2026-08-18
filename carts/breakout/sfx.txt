@@ -1,0 +1,32 @@
+# Sound bank for carts/breakout. Rebuild with `quarp audio build carts/breakout`.
+
+sfx 0                     # bounce: wall or paddle, a short high blip
+  speed 2
+  00 E-5 sqr 5 -
+  01 ---
+
+sfx 1                     # brick destroyed: a brighter, noisier tick
+  speed 3
+  00 C-6 noi 6 -
+  01 G-5 noi 4 fadeout
+
+sfx 2                     # life lost: falling noise, same shape as carts/snake's death sfx
+  speed 6
+  00 A-3 noi 7 drop
+  01 ---
+  02 D-2 noi 5 fadeout
+
+sfx 3                     # theme bass, loops on its own
+  speed 8
+  loop 0 4
+  00 C-3 tri 4 -
+  01 ---
+  02 G-3 tri 3 -
+  03 ---
+
+sfx 4                     # theme lead, joins the bass every other pattern
+  speed 8
+  00 E-5 p25 5 -
+  01 G-5 p25 4 -
+  02 C-6 p25 5 -
+  03 ---

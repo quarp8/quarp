@@ -1,0 +1,34 @@
+# carts/breakout — scripted walkthrough (M4 stage 3, work order K, Р20).
+#
+# The ball always serves straight up (main.cs, ServeAngle) from wherever the paddle sits, so
+# this script steers each shot purely by repositioning the paddle *before* launch — it never
+# needs to predict a paddle-bounce angle. Four rounds walk the paddle across the four bottom-row
+# brick columns (0, 1, 2, 3) left to right, launching straight into each one in turn:
+#
+#   round 0: paddle -> column 0 (x=0),  launch, then paddle -> column 1 while the ball is airborne
+#   round 1: paddle already at column 1, launch, then paddle -> column 2 while airborne
+#   round 2: paddle already at column 2, launch, then paddle -> column 3 while airborne
+#   round 3: paddle already at column 3, launch — this shot clears the last bottom-row brick
+#
+# Because the paddle has moved on to the next column by the time each shot's ball comes back
+# down (round trip ~68 ticks at BallSpeed=1 px/tick: ~32 up, ~36 down — main.cs StepBall), the
+# first three shots are not caught: each is a miss, i.e. a lost life, which is what proves
+# criterion 2's "at least one life lost" alongside "at least one row cleared" (bottom row, all
+# four columns, destroyed by tick ~312). StartingLives=5 comfortably survives the three misses.
+#
+# Grammar (quarp replay record --input-file): tick:buttons, entries separated by commas or
+# newlines, '#' starts a comment. O is a *tap* (Btnp) — press then release — same as every
+# turn in carts/snake's golden.input. L/R are held for a duration and then released.
+
+# round 0: paddle 48 -> 0 (24 ticks at 2px/tick), then launch, then paddle 0 -> 32 mid-flight
+5:L,29:,40:O,41:,50:R,66:,
+
+# round 1: paddle already at 32 from the move above; launch, then paddle 32 -> 64 mid-flight
+120:O,121:,130:R,146:,
+
+# round 2: paddle already at 64; launch, then paddle 64 -> 96 mid-flight
+200:O,201:,210:R,226:,
+
+# round 3: paddle already at 96; this launch's collision (~tick 312) clears the last
+# bottom-row brick, completing the row. No further scripted input is needed.
+280:O,281:

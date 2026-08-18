@@ -1,0 +1,74 @@
+# The same tower as ASCII -- generated, for reading in a diff. See tower.py.
+
+ 0 |########################|  roof
+ 1 |#  !!                  #|  the banner -- touching it wins the run
+ 2 |#======                #|  summit platform
+ 3 |#                      #|
+ 4 |#        ======        #|  platform 31, columns 9-14
+ 5 |#                      #|
+ 6 |#                ======#|  platform 30, columns 17-22
+ 7 |#          *           #|
+ 8 |#        ======        #|  platform 29, columns 9-14
+ 9 |#                      #|
+10 |#======                #|  platform 28, columns 1-6
+11 |#                      #|
+12 |#        ======        #|  platform 27, columns 9-14
+13 |#                  *   #|
+14 |#                ======#|  platform 26, columns 17-22
+15 |#                      #|
+16 |#        ======        #|  platform 25, columns 9-14
+17 |#                      #|
+18 |#======                #|  platform 24, columns 1-6
+19 |#          *           #|
+20 |#        ======        #|  platform 23, columns 9-14
+21 |#                      #|
+22 |#                ======#|  platform 22, columns 17-22
+23 |#                      #|
+24 |#        ======        #|  platform 21, columns 9-14
+25 |#  *                   #|
+26 |#======                #|  platform 20, columns 1-6
+27 |#                      #|
+28 |#        ======        #|  platform 19, columns 9-14
+29 |#                      #|
+30 |#                ======#|  platform 18, columns 17-22
+31 |#          *           #|
+32 |#        ======        #|  platform 17, columns 9-14
+33 |#                      #|
+34 |#======                #|  platform 16, columns 1-6
+35 |#                      #|
+36 |#        ======        #|  platform 15, columns 9-14
+37 |#                  *   #|
+38 |#                ======#|  platform 14, columns 17-22
+39 |#                      #|
+40 |#        ======        #|  platform 13, columns 9-14
+41 |#                      #|
+42 |#======                #|  platform 12, columns 1-6
+43 |#          *           #|
+44 |#        ======        #|  platform 11, columns 9-14
+45 |#                      #|
+46 |#                ======#|  platform 10, columns 17-22
+47 |#                      #|
+48 |#        ======        #|  platform 09, columns 9-14
+49 |#  *                   #|
+50 |#======                #|  platform 08, columns 1-6
+51 |#                      #|
+52 |#        ======        #|  platform 07, columns 9-14
+53 |#                      #|
+54 |#                ======#|  platform 06, columns 17-22
+55 |#          *           #|
+56 |#        ======        #|  platform 05, columns 9-14
+57 |#                      #|
+58 |#======                #|  platform 04, columns 1-6
+59 |#                      #|
+60 |#        ======        #|  platform 03, columns 9-14
+61 |#                  *   #|
+62 |#                ======#|  platform 02, columns 17-22
+63 |#                      #|
+64 |#        ======        #|  platform 01, columns 9-14
+65 |#                      #|
+66 |#======                #|  platform 00, columns 1-6
+67 |#                      #|
+68 |#______                #|  start ledge (player spawns here)
+69 |#                      #|
+70 |#^^^^^^^^^^^^^^^^^^^^^^#|  the pit: falling here is the loss condition
+71 |#______________________#|

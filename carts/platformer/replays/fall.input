@@ -1,0 +1,13 @@
+# carts/platformer -- the negative control for walkthrough.input. Hand-written, five bytes
+# of it: hold Right from tick 0 and never let go.
+#
+# The start ledge is six tiles wide with nothing to its right, so the climber walks off it and
+# drops onto the spikes. It exists to prove that the freeze at the end of a cleared run means
+# something: a cleared tower holds a single frame for as long as the recording lasts, while a
+# fall leaves the failure screen blinking, so its frame hash alternates in runs of 28 and 12
+# ticks forever. One is a constant, the other is a square wave -- and "still climbing" is
+# neither, because the clock in the HUD moves every tick.
+#
+#     quarp replay record carts/platformer -o <tmp>.qrpr --ticks 300 \
+#         --input-file carts/platformer/replays/fall.input --every 1
+0:R

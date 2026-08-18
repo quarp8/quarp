@@ -1,0 +1,83 @@
+# carts/platformer -- sound bank. Rebuild with: quarp audio build carts/platformer
+#
+# Slots 0-4 are the game's effects; 8-11 are the voices the theme in music.txt plays.
+# The gap between them is deliberate: an effect and a song voice are edited for different
+# reasons, and a number you can read as "this is a tune" beats a comment saying so.
+#
+# The theme uses chip channels 0-2 and leaves channel 3 idle, so every effect below lands
+# on a free channel and never has to steal a voice from the song (API-8 section 5).
+
+sfx 0                     # jump: a short chirp up, over in six ticks
+  speed 2
+  00 C-5 sqr 5 -
+  01 G-5 sqr 5 -
+  02 C-6 sqr 4 fadeout
+
+sfx 1                     # landing: a soft low knock, quiet enough to hear 30 times a climb
+  speed 3
+  00 C-3 tri 4 -
+  01 G-2 tri 2 fadeout
+
+sfx 2                     # gem: bright and high, so it reads over the theme without a duck
+  speed 2
+  00 E-6 p25 5 -
+  01 B-6 p25 5 -
+  02 D-7 p25 4 fadeout
+
+sfx 3                     # death on the spikes: noise falling away
+  speed 5
+  00 A-4 noi 7 drop
+  01 ---
+  02 D-3 noi 6 drop
+  03 C-2 noi 4 fadeout
+
+sfx 4                     # summit fanfare
+  speed 6
+  00 C-5 p25 6 -
+  01 E-5 p25 6 -
+  02 G-5 p25 6 -
+  03 C-6 p25 7 fadeout
+
+sfx 8                     # theme, bass: a minor ostinato that keeps walking upward
+  speed 6
+  00 A-2 tri 5 -
+  01 ---
+  02 A-3 tri 3 -
+  03 ---
+  04 E-3 tri 4 -
+  05 ---
+  06 A-2 tri 4 -
+  07 ---
+
+sfx 9                     # theme, lead A
+  speed 6
+  00 A-4 p25 4 -
+  01 C-5 p25 4 -
+  02 E-5 p25 5 -
+  03 D-5 p25 4 -
+  04 C-5 p25 4 -
+  05 ---
+  06 A-4 p25 3 fadeout
+  07 ---
+
+sfx 10                    # theme, percussion
+  speed 6
+  00 C-4 noi 3 fadeout
+  01 C-3 noi 2 fadeout
+  02 C-4 noi 3 fadeout
+  03 C-3 noi 2 fadeout
+  04 C-4 noi 3 fadeout
+  05 C-3 noi 2 fadeout
+  06 C-4 noi 4 fadeout
+  07 C-4 noi 2 fadeout
+
+sfx 11                    # theme, lead B: the same phrase answered a step higher
+  speed 6
+  00 C-5 p25 4 -
+  01 E-5 p25 4 -
+  02 G-5 p25 5 -
+  03 E-5 p25 4 -
+  04 D-5 p25 4 -
+  05 ---
+  06 C-5 p25 3 fadeout
+  07 ---

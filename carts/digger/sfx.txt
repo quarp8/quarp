@@ -1,0 +1,98 @@
+# Digger — effects and the two voices of the cave theme (docs/AUDIO-FORMAT.md §6).
+# Rebuild after editing:  quarp audio build carts/digger
+# Check it is in sync:    quarp audio build carts/digger --check
+#
+# Slots 0-6 are the game's noises, 7-10 the song. The song lives on channels 2 and 3
+# (music.txt), so Sfx() — which takes the lowest idle channel — always finds channel 0 or 1
+# free and never has to interrupt the theme to be heard.
+
+sfx 0                     # dig: one dry scrape of a shovel, over in 4 ticks
+  speed 2                 # a step is 6 ticks, so digging never overlaps itself
+  00 D-3 noi 3 -
+  01 A-2 noi 2 fadeout
+
+sfx 1                     # gem: a bright rising blip
+  speed 3
+  00 E-6 sqr 5 -
+  01 B-6 sqr 5 -
+  02 D-7 sqr 4 fadeout
+
+sfx 2                     # a boulder finding the floor
+  speed 4
+  00 C-3 noi 6 drop
+  01 C-2 noi 4 fadeout
+
+sfx 3                     # shoving a boulder: low grinding stone
+  speed 4
+  00 F-2 saw 4 vib
+  01 D-2 saw 3 fadeout
+
+sfx 4                     # crushed: the cave takes it back
+  speed 6
+  00 A-4 noi 7 drop
+  01 D-4 noi 6 drop
+  02 A-2 noi 4 fadeout
+  03 D-2 noi 2 fadeout
+
+sfx 5                     # the exit unlocks — heard from anywhere in the cave
+  speed 4
+  00 C-5 tri 5 -
+  01 G-5 tri 5 -
+  02 C-6 tri 6 -
+  03 E-6 tri 5 fadeout
+
+sfx 6                     # level clear
+  speed 6
+  00 C-5 p25 6 -
+  01 E-5 p25 6 -
+  02 G-5 p25 6 -
+  03 C-6 p25 7 fadeout
+
+# --- the theme ------------------------------------------------------------
+# D minor, four steps to the bar: a walking bass with a thin pulse lead over it. Both
+# voices are 8 steps at speed 8 = 64 ticks, so a pattern is 1.07 s and the four-pattern
+# song comes round every 4.3 s.
+
+sfx 7                     # bass, first half
+  speed 8
+  00 D-2 tri 4 -
+  01 ---
+  02 D-3 tri 3 -
+  03 ---
+  04 A-2 tri 4 -
+  05 ---
+  06 A-3 tri 3 -
+  07 ---
+
+sfx 8                     # bass, second half
+  speed 8
+  00 F-2 tri 4 -
+  01 ---
+  02 F-3 tri 3 -
+  03 ---
+  04 C-3 tri 4 -
+  05 ---
+  06 C-4 tri 3 -
+  07 ---
+
+sfx 9                     # lead, first half
+  speed 8
+  00 D-4 p12 4 -
+  01 ---
+  02 F-4 p12 3 -
+  03 A-4 p12 4 -
+  04 ---
+  05 G-4 p12 3 -
+  06 F-4 p12 4 fadeout
+  07 ---
+
+sfx 10                    # lead, second half
+  speed 8
+  00 C-5 p12 4 -
+  01 A-4 p12 3 -
+  02 ---
+  03 F-4 p12 4 -
+  04 ---
+  05 E-4 p12 3 -
+  06 D-4 p12 4 fadeout
+  07 ---

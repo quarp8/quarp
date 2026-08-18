@@ -1,0 +1,6 @@
+# Title theme: bass alone for a bar, then bass+lead, looping (AUDIO-FORMAT.md §6).
+#  P  ch0 ch1 ch2 ch3   флаги
+
+   0   02  --  --  --   loop-start
+   1   02  03  --  --
+   2   02  03  --  --   loop-end

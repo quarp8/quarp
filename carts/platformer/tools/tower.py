@@ -36,11 +36,22 @@ BASE_ROW = MAP_H - 1            # 71 — solid stone under the spikes
 PIT_ROW = MAP_H - 2             # 70 — the spikes you die on
 START_ROW = MAP_H - 4           # 68 — the ledge the climb starts from
 BOTTOM_LEDGE_ROW = MAP_H - 6    # 66 — first one-way platform
-LEDGE_COUNT = 32
+# 32 platforms at the original uniform spacing put the top two (rows 4 and 2) directly under
+# the roof: a full held jump rises 26.25 px = 3.28 tiles (apex on tick 20, src/main.cs), and
+# from row 4 or row 2 that arc runs out of tower before it runs out of rise -- the climber's
+# head is stopped by the roof (row 0) mid-arc, measured clearance 0 px on both (bug-platformer-
+# ceiling.md). BOTTOM_LEDGE_ROW and LEDGE_STEP are the lower tower's business and stay fixed
+# (Р19 non-goal), so the only lever that buys headroom without moving a single lower platform
+# is how many of them there are: two fewer (32 -> 30) leaves the new top platform (formerly
+# index 29) at row 8, already the safe one this cap was measured against.
+LEDGE_COUNT = 30
 LEDGE_STEP = 2                  # rows between platforms: 2 tiles = 16 px of climb
 
-GOAL_LEDGE_ROW = 2
-GOAL_ROW = 1
+# The summit sits one row above the new top platform (row 8) rather than the old two-row step:
+# row 7 gives 13 px of clearance to the roof for a full held jump, comfortably clear of the
+# 26.25 px arc (bug-platformer-ceiling.md re-measured this after the LEDGE_COUNT cut above).
+GOAL_LEDGE_ROW = 7
+GOAL_ROW = 6
 # The summit sits over the LEFT landing zone, and that is a fix rather than a taste. A jump
 # lifts the climber's head four tiles (26 px of rise plus the 8 px box), so a banner directly
 # above the last platform was also within reach of the one two rows below it -- the top of the

@@ -7,14 +7,14 @@
 # commas or newlines, '#' starts a comment. Each entry sets what player 0 holds from
 # that tick until the next one.
 #
-# The banner is reached on tick 1258; the run collects 5 of the tower's gems. Every
+# The banner is reached on tick 1184; the run collects 5 of the tower's gems. Every
 # hop is the same shape: hold a direction, hold the jump button across the arc, then
 # release everything and let friction stop the climber before the next hop is planned.
 # Jumps are held for 24 ticks because a release under 8 ticks would cut the rise
 # (JumpCutSpeed in src/main.cs) and the two-tile step would stop clearing.
 #
 # Reproduce:  quarp replay record carts/platformer -o carts/platformer/replays/walkthrough.qrpr \
-#                 --ticks 1348 --input-file carts/platformer/replays/walkthrough.input
+#                 --ticks 1274 --input-file carts/platformer/replays/walkthrough.input
 #
 # tick 0: setting off for platform 00 (map row 66)
 0:O,24:,
@@ -76,11 +76,7 @@
 1061:LO,1085:L,1095:,
 # tick 1098: setting off for platform 29 (map row 8)
 1098:RO,1122:R,1132:,
-# tick 1135: setting off for platform 30 (map row 6)
-1135:RO,1159:R,1169:,
-# tick 1172: setting off for platform 31 (map row 4)
-1172:LO,1196:L,1206:,
-# tick 1209: setting off for the summit (map row 2)
-1209:L,1230:LO,1241:,
-# tick 1244: setting off for the banner (map row 1)
-1244:LO,1258:
+# tick 1135: setting off for the summit (map row 7)
+1135:LO,1159:L,1173:,
+# tick 1176: setting off for the banner (map row 6)
+1176:L,1181:LO,1184:

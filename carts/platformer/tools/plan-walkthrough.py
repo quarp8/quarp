@@ -4,7 +4,7 @@
 Run from the repository root:   python carts/platformer/tools/plan-walkthrough.py
 
 Why a planner and not a hand-written track. M4 Р20 asks every demo to carry a scripted run
-from the start to the end state, and thirty-three jumps across two-tile chasms cannot be
+from the start to the end state, and thirty-one jumps across mostly-two-tile chasms cannot be
 timed by eye: a track written by guessing would be tuned by watching the game, and a brigade
 that may not open a window has no way to watch. So the physics of src/main.cs is mirrored
 here in exact Q16.16 integer arithmetic -- the same operations in the same order, floors and

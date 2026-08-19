@@ -1,35 +1,43 @@
 # carts/digger — scripted walkthrough of the cave. Play it with:
 #
 #     quarp replay record carts/digger -o carts/digger/replays/walkthrough.qrpr \
-#         --ticks 768 --input-file carts/digger/replays/walkthrough.input
+#         --ticks 996 --input-file carts/digger/replays/walkthrough.input
 #
 # Grammar (quarp replay record --input-file): tick:buttons, entries separated by commas or
 # newlines, '#' starts a comment. Buttons are L R U D O X S; an empty list releases
 # everything, and what is named on a tick stays held until the next entry.
 #
-# The cave advances one grid step every 6 ticks and a step uses the direction held on
-# that tick, so a whole run of steps is one entry: "5:D" is held from tick 6, which is
-# step 1. Nothing here is a tap: this cartridge reads Btn, not Btnp, and latches the last
-# direction seen since the previous step.
+# The cave advances one grid step every 6 ticks. A press buys exactly one of those steps
+# however long the key stays down; a key held past 18 ticks starts repeating, one cell every
+# 6 ticks from then on (src/main.cs, LatchDirection). So a run of N cells is one entry, and
+# it costs 18 ticks for the second cell and 6 for each one after it — the two grid steps in
+# between are the gate, and the world keeps falling through them. Both facts are why this
+# track is 996 ticks long and the pre-fix one was 768: same 128 cells, same route, 38 extra
+# steps of standing still. A run must therefore not *start* under a rock it just loosened.
 #
 # What happens when — every line below was read back out of the cartridge itself, tick by
 # tick, not just planned:
 #
-#   tick   54   the boulder at (9,1) loses its floor and comes loose
-#   tick   60   it drops into (9,2), one step behind the digger
-#   tick   66   it lands in (9,2) and thuds
-#   tick   78   he walks back into it and shoves it west into (8,2)
-#   tick  150   gem 1 of 5, at (20,1)
-#   tick  216   the boulder at (30,1) loses its floor and comes loose
-#   tick  222   it drops into (30,2), one step behind the digger
-#   tick  228   it lands in (30,2) and thuds
-#   tick  312   gem 2 of 5, at (16,4)
-#   tick  348   gem 3 of 5, at (15,9)
-#   tick  528   gem 4 of 5, at (5,15)
-#   tick  696   gem 5 of 5, at (27,21)
-#   tick  696   quota met: the exit at (38,22) unlocks
-#   tick  768   he steps into the open exit at (38,22) — LEVEL CLEAR
+#   tick    6   the first press: one cell down, digging (1,2) — Mget(1,2) 1 -> 0
+#   tick   12   the run east begins; ticks 18 and 24 are the gate, he stands, the world runs
+#   tick   30   the hold repeats and keeps repeating, a cell every 6 ticks
+#   tick   66   he digs (9,2) and the boulder at (9,1) loses its floor: Mget(9,1) 3 -> 8
+#   tick   72   it drops into (9,2), one step behind the digger, who is already at (10,2)
+#   tick   78   it lands in (9,2) and thuds: Mget(9,2) 8 -> 3
+#   tick  102   he walks back into it and shoves it west into (8,2)
+#   tick  186   gem 1 of 5, at (20,1)
+#   tick  264   he digs (30,2); the boulder at (30,1) comes loose
+#   tick  270   it drops into (30,2), one step behind him again
+#   tick  276   it lands in (30,2) and thuds
+#   tick  384   gem 2 of 5, at (16,4)
+#   tick  444   gem 3 of 5, at (15,9)
+#   tick  696   gem 4 of 5, at (5,15)
+#   tick  924   gem 5 of 5, at (27,21) — quota met, the exit at (38,22) unlocks
+#   tick  996   he steps into the open exit at (38,22) — LEVEL CLEAR
 #
-# 128 steps, 768 ticks, 5 of 7 gems, two left in the cave on purpose.
-5:D,11:R,71:L,83:R,149:U,155:D,161:R,221:L,299:D,311:L,323:D,353:R,383:D,
-413:L,419:D,437:L,497:U,509:L,533:R,557:D,569:R,635:D,659:R,767:D,768:
+# 166 grid steps, 996 ticks, 128 of the steps move him; 5 of 7 gems, two left in the cave on
+# purpose. The track is also the fix's own negative control: run it against the pre-fix latch
+# (which re-armed from Btn every tick) and every hold overshoots — the digger misses the first
+# gem, ends up at (18,19) with 2 of 5 and never opens the exit, let alone reaches it.
+4:D,6:R,78:L,102:R,180:U,186:D,192:R,264:L,354:D,378:L,402:D,444:R,486:D,528:L,534:D,
+564:L,636:U,660:L,696:R,732:D,756:R,834:D,870:R,990:D,996:

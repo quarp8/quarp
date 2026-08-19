@@ -1,6 +1,6 @@
 # Tower Climb — the vertical platformer
 
-Climb 32 platforms to the banner at the top. Two chimneys run the whole height of the tower and
+Climb 30 platforms to the banner at the top. Two chimneys run the whole height of the tower and
 no platform ever covers them; the bottom of a chimney is a spike pit. Arrows move, `Z` or `X`
 jumps (hold for a full jump, tap for a short one), `Enter` restarts a finished run.
 
@@ -118,6 +118,14 @@ this file.
 A jump eating two fifths of the visible field is the other half of the same crowding: at 128x72
 the apex of an ordinary jump is most of the way to the top of the screen, so the camera is
 moving during almost every jump.
+
+The same 26.25 px arc is why the tower has 30 platforms and not 32: the owner's playtest found
+the roof jammed against the top two (`bug-platformer-ceiling.md`), and a full held jump measured
+0 px of clearance to the roof from both the old top platform (row 4) and the old summit ledge
+(row 2) — the arc was stopped mid-rise, not clipped by a hair. `tools/tower.py` now stops the
+regular staircase two platforms short (`LEDGE_COUNT = 30`, top platform at row 8, 21 px of
+clearance) and moves the summit ledge to row 7, 13 px of clearance to the roof for the same full
+jump. Nothing below the new top platform moved.
 
 ### Rows of play field left after the HUD
 

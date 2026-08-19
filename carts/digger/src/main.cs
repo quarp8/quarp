@@ -26,7 +26,9 @@ namespace Digger;
 ///
 /// <para><b>Time is a grid step, not a tick.</b> Every <see cref="StepTicks"/> ticks the world
 /// advances once: the player moves, then everything unsupported falls. Between steps the
-/// pressed direction is latched, so a tap made off-beat is not swallowed.</para>
+/// pressed direction is latched, so a tap made off-beat is not swallowed — and a press pays for
+/// exactly one of those steps, however long the key stays down, until the hold gate opens
+/// <see cref="HoldRepeatTicks"/> ticks later (<see cref="LatchDirection"/>).</para>
 /// </summary>
 public sealed class DiggerGame : Cartridge
 {
@@ -67,6 +69,12 @@ public sealed class DiggerGame : Cartridge
 
     // --- tuning ---
     private const int StepTicks = 6;            // 10 grid steps a second
+    // How long a held direction waits before it repeats. Three grid steps rather than a round
+    // number of milliseconds on purpose: a gate that is a whole number of steps long makes the
+    // wait exactly this many ticks whichever tick of the step cycle the press landed on (see
+    // LatchDirection). 18 ticks is 0.3 s — a keyboard's own repeat delay, and enough that a
+    // human tap can never reach it.
+    private const int HoldRepeatTicks = StepTicks * 3;
     private const int GemsSpare = 2;            // gems you may leave in the cave
     private const int PanelBlinkTicks = 40;
 
@@ -101,6 +109,11 @@ public sealed class DiggerGame : Cartridge
     private const int DirDown = 3;
     private static readonly int[] DirDx = { -1, 1, 0, 0 };
     private static readonly int[] DirDy = { 0, 0, -1, 1 };
+
+    // Indexed by direction like DirDx/DirDy, so the order of this array *is* the priority that
+    // settles a press of two directions at once — and it is the only place that order is
+    // written down (both the "went down" and the "still held" reads walk this one array).
+    private static readonly Button[] DirButtons = { Button.Left, Button.Right, Button.Up, Button.Down };
 
     private static readonly string[] Digits = { "0", "1", "2", "3", "4", "5", "6", "7", "8", "9" };
 
@@ -221,6 +234,7 @@ public sealed class DiggerGame : Cartridge
     private int _gems;
     private int _wantDir = DirNone;
     private int _stepTimer;
+    private int _repeatDelay;                   // ticks left before a held direction may repeat
 
     public override void Init()
     {
@@ -419,36 +433,78 @@ public sealed class DiggerGame : Cartridge
         _gems = 0;
         _wantDir = DirNone;
         _stepTimer = StepTicks;
+        // A key still down from the previous run is not a press, so it serves the whole gate
+        // before it may run: pressing Start with a thumb on the stick must not launch the digger.
+        _repeatDelay = HoldRepeatTicks;
         Music(MusicTheme);                      // restarts the song on every new run
     }
 
     // --- simulation --------------------------------------------------------------------
 
     /// <summary>
-    /// Remembers the direction held on any tick so the next grid step can use it. Without the
-    /// latch a tap between two steps would be dropped, and with a step six ticks long that is
-    /// most taps. Fixed priority left-right-up-down decides a diagonal press: it has to be
-    /// decided by something, and something arbitrary and written down beats something that
-    /// depends on which key the shell polled first.
+    /// Turns buttons into the direction the next grid step will use, under two promises a hand
+    /// can predict: <b>one press is exactly one cell</b>, and <b>a hold repeats only after
+    /// <see cref="HoldRepeatTicks"/> ticks</b>, evenly from then on.
+    ///
+    /// <para>The latch itself is what keeps an off-beat tap alive: with a step six ticks long,
+    /// most taps happen between two steps, and a direction sampled only at the step would drop
+    /// them. What made the cave twitchy was latching from <see cref="Cartridge.Btn"/> alone —
+    /// a key that is merely still down re-arms the latch every tick, so a press that spans a
+    /// step boundary buys the next step as well. A 100 ms tap did that in five phases of the
+    /// six-tick cycle out of six (two cells), and a 133 ms one could reach three, the last of
+    /// them landing 83 ms after the key was already up.</para>
+    ///
+    /// <para>So a press is read as an edge (<see cref="Cartridge.Btnp"/>), and it shuts the
+    /// repeat gate behind itself: however long the key stays down afterwards, that press pays
+    /// for one step and no more. Because the gate is a whole number of steps long, the first
+    /// repeat lands exactly <see cref="HoldRepeatTicks"/> ticks after the step the press bought
+    /// — not "somewhere between 13 and 23" — whichever tick of the cycle the press happened on.
+    /// Past the gate the level read takes over and the run goes at the full step rate, and
+    /// letting go clears the latch so the run stops at the next step rather than one cell
+    /// later.</para>
     /// </summary>
     private void LatchDirection()
     {
-        if (Btn(Button.Left))
+        // Counted down before the reads, so the gate opens on the tick exactly HoldRepeatTicks
+        // after the press — which is a step tick, since the gate is a multiple of StepTicks.
+        if (_repeatDelay > 0)
         {
-            _wantDir = DirLeft;
+            _repeatDelay--;
         }
-        else if (Btn(Button.Right))
+
+        int pressed = DirectionDown(freshOnly: true);
+        if (pressed != DirNone)
         {
-            _wantDir = DirRight;
+            _wantDir = pressed;
+            _repeatDelay = HoldRepeatTicks;
+            return;
         }
-        else if (Btn(Button.Up))
+
+        if (_repeatDelay == 0)
         {
-            _wantDir = DirUp;
+            _wantDir = DirectionDown(freshOnly: false);
         }
-        else if (Btn(Button.Down))
+    }
+
+    /// <summary>
+    /// First direction whose button reads down, in the fixed priority order of
+    /// <see cref="DirButtons"/>, or <see cref="DirNone"/>. <paramref name="freshOnly"/> asks
+    /// "went down on this tick" instead of "is down"; both questions share this one walk so the
+    /// priority that settles a diagonal press cannot drift apart between them. The order has to
+    /// be decided by something, and something arbitrary and written down beats something that
+    /// depends on which key the shell polled first.
+    /// </summary>
+    private int DirectionDown(bool freshOnly)
+    {
+        for (int dir = 0; dir < DirButtons.Length; dir++)
         {
-            _wantDir = DirDown;
+            if (freshOnly ? Btnp(DirButtons[dir]) : Btn(DirButtons[dir]))
+            {
+                return dir;
+            }
         }
+
+        return DirNone;
     }
 
     /// <summary>

@@ -206,8 +206,16 @@ public sealed class TwoLights : Cartridge
         "...2222222222...",
         "....22222222....",
         ".....222222.....",
-        "..444422224444..",
-        "4444442222444444",
+        // Rows 14-15 sit at y=22-23, at or below the horizon (DrawSea starts at
+        // _horizonY=20 for the 128x72 layout): '4' there is ColSea, the exact slot the
+        // sea itself is filled with, so whenever Osk is undimmed (he is speaking, or
+        // Draw is in the ending, where CurrentSpeaker is Nobody and nobody is dimmed)
+        // that collar trim renders in the sea's own master color and vanishes into it —
+        // tasks/open/bug-dialogue-portrait-flicker.md, hat/body flicker. '2' (steel,
+        // already this collar's dominant color two rows up) reads against the sea in
+        // both palette states and costs nothing else in the silhouette.
+        "..222222222222..",
+        "2222222222222222",
     };
 
     private static readonly string[][] Portraits = { MaraArt, OskArt };
@@ -608,12 +616,22 @@ public sealed class TwoLights : Cartridge
     /// Points every slot the scene draws with at its darker master twin, so the listener can
     /// be pushed back without a second set of sprites. Slot 15 is the exception worth knowing:
     /// its twin 31 is *lighter* skin, so the dim version of light skin is plain tan (14).
+    ///
+    /// Slot 4 is the second exception, found on the same playtest as slot 15's (this bug's
+    /// cousin — tasks/open/idea-palette-dark-twins.md): its literal twin is 20, which is also
+    /// <see cref="MasterNight"/> — the exact master color <see cref="ApplyNightPalette"/>
+    /// paints the whole sky with, every frame, regardless of who is dimmed. Osk's hood
+    /// (rows 1-3 of <see cref="OskArt"/>) sits entirely inside the sky rectangle, so a
+    /// dimmed Osk had a hood-shaped hole where the "dark twin" of his own hat color was
+    /// pixel-identical to the sky behind it — the hat half of the flicker in
+    /// tasks/open/bug-dialogue-portrait-flicker.md, the coat/collar half is in DrawBusts.
+    /// 21 ("steel", still a cold master tone) has no other claim in this table.
     /// </summary>
     private void ApplyDimPalette()
     {
         Pal(2, 17);
         Pal(3, 18);
-        Pal(4, 20);
+        Pal(4, 21);
         Pal(6, 22);
         Pal(9, 25);
         Pal(10, 26);
@@ -685,7 +703,11 @@ public sealed class TwoLights : Cartridge
     {
         int speaker = CurrentSpeaker;
         DrawBust(_leftBustX, Mara, ColMara, speaker != Mara && speaker != Nobody);
-        DrawBust(_rightBustX, Osk, ColSea, speaker != Osk && speaker != Nobody);
+        // Coat was ColSea: undimmed (Osk speaking, or nobody dimmed in the Ending) that
+        // RectFill drew the sea's own slot over the sea, and the body vanished — the other
+        // half of the flicker fixed alongside the sprite rows above. ColSteel already owns
+        // most of his collar, so the coat now reads as one gray oilskin instead of two.
+        DrawBust(_rightBustX, Osk, ColSteel, speaker != Osk && speaker != Nobody);
     }
 
     private void DrawBust(int x, int who, byte coat, bool dim)

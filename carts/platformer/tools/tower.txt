@@ -1,13 +1,13 @@
 # The same tower as ASCII -- generated, for reading in a diff. See tower.py.
 
  0 |########################|  roof
- 1 |#  !!                  #|  the banner -- touching it wins the run
- 2 |#======                #|  summit platform
+ 1 |#                      #|
+ 2 |#                      #|
  3 |#                      #|
- 4 |#        ======        #|  platform 31, columns 9-14
+ 4 |#                      #|
  5 |#                      #|
- 6 |#                ======#|  platform 30, columns 17-22
- 7 |#          *           #|
+ 6 |#  !!                  #|  the banner -- touching it wins the run
+ 7 |#======    *           #|  summit platform
  8 |#        ======        #|  platform 29, columns 9-14
  9 |#                      #|
 10 |#======                #|  platform 28, columns 1-6

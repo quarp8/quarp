@@ -725,16 +725,35 @@ public sealed class VirtualConsole : IConsoleApi
     }
 
     /// <summary>
-    /// Draws text with the 4x6 system font and returns the x after the last glyph.
-    /// '\n' starts a new line at the original x; other control characters are skipped;
-    /// characters outside ASCII 32-126 draw a hollow box.
+    /// Draws text with the small 3x5 font — the console's default, and the only place in the
+    /// codebase that says so. Deliberately an overload rather than an optional parameter: an
+    /// optional parameter's value is baked into every caller's metadata, so the same "default
+    /// is Small" fact would exist in three assemblies at once (interface, console, Cartridge)
+    /// and could drift between them. Here every caller that names no font ends up in this one
+    /// line, which the snake's anchor hashes then guard for everyone.
     /// </summary>
-    public int Print(string text, int x, int y, byte color)
+    public int Print(string text, int x, int y, byte color) => Print(text, x, y, color, Font.Small);
+
+    /// <summary>
+    /// Draws text with the named system font and returns the x after the last glyph.
+    /// '\n' starts a new line at the original x <em>by the chosen font's line height</em>; other
+    /// control characters are skipped; characters outside ASCII 32-126 draw a hollow box.
+    /// <para>The cursor rule — advance per character, newline, what is skipped — lives here
+    /// once and reads the metrics out of whichever font was asked for, so the two fonts cannot
+    /// drift into two different text layouts. What is per-font is only the glyph blit, because
+    /// only the bit packing differs (15 bits of 3x5 against 24 bits of 4x6), and the small
+    /// font's blit is the one it always had: every pixel it has ever written must stay where it
+    /// is, or every recorded frame hash moves.</para>
+    /// </summary>
+    public int Print(string text, int x, int y, byte color, Font font)
     {
         if (text is null)
         {
             return x;
         }
+        bool large = font == Font.Large;
+        int advance = large ? SystemFontLarge.CellWidth : SystemFont.CellWidth;
+        int lineHeight = large ? SystemFontLarge.CellHeight : SystemFont.CellHeight;
         int cursorX = x;
         int cursorY = y;
         foreach (char c in text)
@@ -742,27 +761,52 @@ public sealed class VirtualConsole : IConsoleApi
             if (c == '\n')
             {
                 cursorX = x;
-                cursorY += SystemFont.CellHeight;
+                cursorY += lineHeight;
                 continue;
             }
             if (c < ' ')
             {
                 continue;
             }
-            uint glyph = SystemFont.GetGlyph(c);
-            for (int row = 0; row < SystemFont.GlyphHeight; row++)
+            if (large)
             {
-                for (int col = 0; col < SystemFont.GlyphWidth; col++)
-                {
-                    if (SystemFont.IsSet(glyph, col, row))
-                    {
-                        Plot(cursorX + col, cursorY + row, color);
-                    }
-                }
+                DrawLargeGlyph(SystemFontLarge.GetGlyph(c), cursorX, cursorY, color);
             }
-            cursorX += SystemFont.CellWidth;
+            else
+            {
+                DrawSmallGlyph(SystemFont.GetGlyph(c), cursorX, cursorY, color);
+            }
+            cursorX += advance;
         }
         return cursorX;
+    }
+
+    private void DrawSmallGlyph(uint glyph, int x, int y, byte color)
+    {
+        for (int row = 0; row < SystemFont.GlyphHeight; row++)
+        {
+            for (int col = 0; col < SystemFont.GlyphWidth; col++)
+            {
+                if (SystemFont.IsSet(glyph, col, row))
+                {
+                    Plot(x + col, y + row, color);
+                }
+            }
+        }
+    }
+
+    private void DrawLargeGlyph(uint glyph, int x, int y, byte color)
+    {
+        for (int row = 0; row < SystemFontLarge.GlyphHeight; row++)
+        {
+            for (int col = 0; col < SystemFontLarge.GlyphWidth; col++)
+            {
+                if (SystemFontLarge.IsSet(glyph, col, row))
+                {
+                    Plot(x + col, y + row, color);
+                }
+            }
+        }
     }
 
     public void Camera(int x = 0, int y = 0)

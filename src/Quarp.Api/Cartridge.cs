@@ -104,8 +104,16 @@ public abstract class Cartridge
     /// <summary>Writes a sprite-sheet pixel (color masked to 0-15); outside the sheet it is ignored.</summary>
     protected void Sset(int x, int y, byte color) => Q.Sset(x, y, color);
 
-    /// <summary>Draws text with the 4x6 system font and returns the x after the last glyph; '\n' starts a new line.</summary>
+    /// <summary>Draws text with the small 4x6 cell (32 columns on QUARP-8) and returns the x after
+    /// the last glyph; '\n' starts a new line.</summary>
     protected int Print(string text, int x, int y, byte color) => Q.Print(text, x, y, color);
+
+    /// <summary>
+    /// Draws text with the named font and returns the x after the last glyph, in that font's
+    /// advance: <see cref="Font.Small"/> is the 4x6 cell, <see cref="Font.Large"/> the 5x7 one
+    /// (25 columns on QUARP-8) — prose wants it, a HUD does not.
+    /// </summary>
+    protected int Print(string text, int x, int y, byte color, Font font) => Q.Print(text, x, y, color, font);
 
     /// <summary>Shifts every later draw call by -x, -y; calling it without arguments recenters on the origin.</summary>
     protected void Camera(int x = 0, int y = 0) => Q.Camera(x, y);

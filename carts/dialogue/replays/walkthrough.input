@@ -1,7 +1,7 @@
 # carts/dialogue - walkthrough: read the scene to the end and take the FIRST answer
-# ("Burn it all in the tower"), which finishes on the ending THE TOWER HELD.
+# ("Burn the drum"), which finishes on the ending THE TOWER HELD.
 #
-#     quarp replay record carts/dialogue -o /tmp/w.qrpr --ticks 1200 \
+#     quarp replay record carts/dialogue -o /tmp/w.qrpr --ticks 1500 \
 #         --input-file carts/dialogue/replays/walkthrough.input
 #
 # Grammar (quarp replay record --input-file): tick:buttons, entries separated by commas
@@ -12,17 +12,22 @@
 #
 # The track is deliberately dumb: one X tap every 20 ticks and nothing else. Each tap
 # either finishes typing the page it is looking at or turns to the next one, so the scene
-# can only move forwards and the script does not have to know the page layout - which is
-# what makes it survive a re-wrap on the 160x90 spike, where the same text needs fewer
-# windows. The choice menu takes the same X to confirm, and with no Down ever pressed it
-# confirms the option the cursor starts on: the first one.
+# can only move forwards and the script does not have to know the page layout. That is
+# what makes it survive a re-wrap on the 160x90 spike - and it is what let it survive the
+# prose moving to the large font (tasks/open/08-second-font.md): the same taps on the same
+# ticks play a scene that grew from 21 windows to 29, and the only edit the track needed
+# was to be longer. 74 taps over 1500 ticks, where 59 over 1200 used to be enough.
+# The choice menu takes the same X to confirm, and with no Down ever pressed it confirms
+# the option the cursor starts on: the first one.
 #
-# Timeline at 128x72, all of it read off the frame hash and not off the source: the first
-# of 15 setup windows is up at tick 0, the 28th tap opens the choice menu on tick 560, the
-# tap on tick 580 confirms the first option, and the tap on tick 820 closes the last window
-# of the branch - from tick 820 on the screen is THE TOWER HELD and the frame hash never
-# changes again, because an ending answers to nothing but Start. The remaining taps in this
-# file are slack: they cost nothing and they keep the two tracks the same length.
+# Timeline at 128x72, all of it read off the frame hash and not off the source (a tap on
+# tick N is seen by the cartridge on tick N+1): the first of 21 setup windows is up at tick
+# 0, the tap on tick 740 opens the choice menu - ticks 741..760 are one unchanging frame,
+# the only stretch in the whole run where nothing moves - the tap on tick 760 confirms the
+# first option, and the tap on tick 1040 closes the last window of the branch. From tick
+# 1041 on, the screen is THE TOWER HELD and the frame hash never changes again, because an
+# ending answers to nothing but Start. The remaining 22 taps in this file are slack: they
+# cost nothing and they keep the two tracks the same length.
 20:X,21:,40:X,41:,60:X,61:,80:X,81:,
 100:X,101:,120:X,121:,140:X,141:,160:X,161:,
 180:X,181:,200:X,201:,220:X,221:,240:X,241:,
@@ -37,4 +42,8 @@
 900:X,901:,920:X,921:,940:X,941:,960:X,961:,
 980:X,981:,1000:X,1001:,1020:X,1021:,1040:X,1041:,
 1060:X,1061:,1080:X,1081:,1100:X,1101:,1120:X,1121:,
-1140:X,1141:,1160:X,1161:,1180:X,1181:
+1140:X,1141:,1160:X,1161:,1180:X,1181:,1200:X,1201:,
+1220:X,1221:,1240:X,1241:,1260:X,1261:,1280:X,1281:,
+1300:X,1301:,1320:X,1321:,1340:X,1341:,1360:X,1361:,
+1380:X,1381:,1400:X,1401:,1420:X,1421:,1440:X,1441:,
+1460:X,1461:,1480:X,1481:

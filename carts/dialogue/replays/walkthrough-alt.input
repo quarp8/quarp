@@ -1,7 +1,7 @@
 # carts/dialogue - walkthrough, second answer: the same reading, the OTHER branch
-# ("Row out with the lantern"), which finishes on the ending THE SHOAL LIGHT.
+# ("Row to the shoal"), which finishes on the ending THE SHOAL LIGHT.
 #
-#     quarp replay record carts/dialogue -o /tmp/w.qrpr --ticks 1200 \
+#     quarp replay record carts/dialogue -o /tmp/wa.qrpr --ticks 1500 \
 #         --input-file carts/dialogue/replays/walkthrough-alt.input
 #
 # Identical to walkthrough.input except for one thing: a Down tap is dropped in between
@@ -11,10 +11,13 @@
 # this file, like its twin, does not have to know on which tick the menu shows up - and
 # why the pair of them proves the branch and not the timing.
 #
-# Timeline at 128x72: the menu opens on tick 560, the Down tap on tick 570 moves the cursor
-# to the second option (this is the first tick on which the two tracks draw different
-# pixels), the tap on tick 580 confirms it, and from tick 820 the screen is THE SHOAL LIGHT
-# and frozen. Both branches happen to run to the same tick - they are six windows each.
+# Timeline at 128x72: the tap on tick 740 opens the menu, the Down tap on tick 750 moves the
+# cursor to the second option - the cartridge sees it on tick 751, and 751 is exactly the
+# first tick on which the two tracks draw different pixels - the tap on tick 760 confirms
+# it, and from tick 1061 the screen is THE SHOAL LIGHT and frozen. The two branches no
+# longer finish on the same tick the way they did in the small font: both are eight windows
+# long, but this one's last window carries a line more, and one more line is one more tap's
+# worth of typing.
 10:D,11:,20:X,21:,30:D,31:,40:X,41:,
 50:D,51:,60:X,61:,70:D,71:,80:X,81:,
 90:D,91:,100:X,101:,110:D,111:,120:X,121:,
@@ -44,4 +47,11 @@
 1050:D,1051:,1060:X,1061:,1070:D,1071:,1080:X,1081:,
 1090:D,1091:,1100:X,1101:,1110:D,1111:,1120:X,1121:,
 1130:D,1131:,1140:X,1141:,1150:D,1151:,1160:X,1161:,
-1170:D,1171:,1180:X,1181:
+1170:D,1171:,1180:X,1181:,1190:D,1191:,1200:X,1201:,
+1210:D,1211:,1220:X,1221:,1230:D,1231:,1240:X,1241:,
+1250:D,1251:,1260:X,1261:,1270:D,1271:,1280:X,1281:,
+1290:D,1291:,1300:X,1301:,1310:D,1311:,1320:X,1321:,
+1330:D,1331:,1340:X,1341:,1350:D,1351:,1360:X,1361:,
+1370:D,1371:,1380:X,1381:,1390:D,1391:,1400:X,1401:,
+1410:D,1411:,1420:X,1421:,1430:D,1431:,1440:X,1441:,
+1450:D,1451:,1460:X,1461:,1470:D,1471:,1480:X,1481:

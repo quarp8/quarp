@@ -20,19 +20,29 @@ namespace Dialogue;
 /// in <see cref="Init"/> from the hex-digit art below (Р16: no hand-drawn binaries), so the
 /// cartridge carries no gfx.png and the art still diffs as text.</para>
 ///
-/// <para>Text is measured in the system font's own units: a glyph cell is 4x6 px (3x5 ink
-/// plus one pixel of air), so a line of N characters is exactly 4N wide. The word wrapper
-/// below is written by hand: <see cref="IConsoleApi.Print"/> draws exactly the string it is
+/// <para>Text is measured in the system fonts' own units, and this scene uses both of them
+/// (<see cref="Font"/>): the <b>prose</b> — the three lines of the window and the epilogues —
+/// is drawn with the large 5x7 cell, so a line of N characters is 5N wide, while the
+/// <b>labels</b> — speaker name, the choice prompt, the ending title, the restart hint — stay
+/// in the small 4x6 cell at 4N. That split is the point of the demo now: prose is what the
+/// reader reads word by word and what the resolution verdict is about, a label is read once
+/// and wants to be out of the way. The word wrapper below is written by hand:
+/// <see cref="IConsoleApi.Print(string, int, int, byte, Font)"/> draws exactly the string it is
 /// given, and a dialogue window is the one place where the string is not known until the
-/// console has been asked how wide it is. That wrapper is the single biggest thing this
-/// demo had to supply for itself.</para>
+/// console has been asked how wide it is. That wrapper is the single biggest thing this demo
+/// had to supply for itself.</para>
 /// </summary>
 public sealed class TwoLights : Cartridge
 {
-    // --- system font metrics (API-8 §3 "Print") ---
-    private const int GlyphW = 4;               // horizontal advance per character
-    private const int LineH = 6;                // baseline pitch: 5 px of ink plus 1 px of air
-    private const int FirstGlyph = 32;          // the font covers ASCII 32..126 and nothing else
+    // --- system font metrics (API-8 §3 "Print"), one pair per font ---
+    // The console has no call that reports them, so a cartridge that lays itself out in
+    // characters has to carry the numbers; API-8 §3 is where they are owned, this is a copy,
+    // and the tables in README.md are computed from these two lines and nothing else.
+    private const int LabelGlyphW = 4;          // Font.Small: advance per character
+    private const int LabelLineH = 6;           // Font.Small: 5 px of ink plus 1 px of air
+    private const int ProseGlyphW = 5;          // Font.Large: advance per character
+    private const int ProseLineH = 7;           // Font.Large: 6 px of ink plus 1 px of air
+    private const int FirstGlyph = 32;          // both fonts cover ASCII 32..126 and nothing else
     private const int GlyphCount = 95;
 
     // --- dialogue window; all of it is thickness, not position (position comes from the API) ---
@@ -139,22 +149,31 @@ public sealed class TwoLights : Cartridge
 
     private const string ChoicePrompt = "What do you say, pilot?";
 
-    // 24 characters each: the cursor eats two of the window's columns, and 2 + 24 is exactly
-    // the 26 columns the portrait leaves. Longer options would be clipped, not wrapped.
+    // At most 18 characters each, and that is a number the large font set: the cursor eats two
+    // of the window's 20 prose columns, so 2 + 18 is the line. The answers used to be 24
+    // characters ("Burn it all in the tower" / "Row out with the lantern") because the small
+    // font left 26 columns; they were shortened, not wrapped, when the prose moved to the 5x7
+    // cell. Menu options are the one place where crowding is not a compromise — a choice reads
+    // better short — but it is still the clearest thing the second font costs, and it is
+    // measured in README.md rather than glossed over.
     private static readonly string[] ChoiceOption =
     {
-        "Burn it all in the tower",
-        "Row out with the lantern",
+        "Burn the drum",
+        "Row to the shoal",
     };
 
     private static readonly int[] ChoiceTarget = { 5, 7 };
 
     private static readonly string[] EndingTitle = { "THE TOWER HELD", "THE SHOAL LIGHT" };
 
+    // Two lines of prose each at the ending's 24 wide columns; the third line of the window
+    // belongs to the restart hint. The second one lost a word to the large font ("crawled in,
+    // and the drum" ran to three lines and the wrapper would have dropped "finger." off the
+    // bottom) — a clamp that silently eats the last word of a story is worse than a rewrite.
     private static readonly string[] EndingEpilogue =
     {
         "Dawn came with a dry rail and an empty drum.",
-        "Two lights crawled in, and the drum kept a finger.",
+        "Two lights crawled in; the drum kept a finger.",
     };
 
     private const string RestartHint = "PRESS START TO PLAY AGAIN";
@@ -428,20 +447,26 @@ public sealed class TwoLights : Cartridge
     {
         int inset = BoxBorder + BoxPad;
 
-        _boxH = 2 * inset + LineH + NameGap + TextLines * LineH;
+        // One label line for the name, then three prose lines: the window is the sum of the two
+        // fonts, not of one of them. Moving the prose from the 4x6 cell to the 5x7 one grew it
+        // by 3 px (31 -> 34 on any screen), which is the whole price of the change in layout
+        // terms and is where the "43 % -> 47 % of a 128x72 screen" number in README.md comes
+        // from. Nothing else here changed: heights are still only thicknesses, positions are
+        // still arithmetic on ScreenWidth/ScreenHeight.
+        _boxH = 2 * inset + LabelLineH + NameGap + TextLines * ProseLineH;
         _boxY = ScreenHeight - _boxH;
         _portraitX = inset;
         _nameY = _boxY + inset;
         _textX = _portraitX + PortraitPx + PortraitGap;
-        _textY = _nameY + LineH + NameGap;
-        _cols = (ScreenWidth - inset - _textX) / GlyphW;
+        _textY = _nameY + LabelLineH + NameGap;
+        _cols = (ScreenWidth - inset - _textX) / ProseGlyphW;
         _wideX = inset;
-        _wideCols = (ScreenWidth - 2 * inset) / GlyphW;
+        _wideCols = (ScreenWidth - 2 * inset) / ProseGlyphW;
 
         // The portrait is centred against the name plus the three lines, not against the
         // box: the box also holds the border and the padding, and centring against those
         // would push the face down against the bottom rule.
-        _portraitY = _nameY + (LineH + NameGap + TextLines * LineH - PortraitPx) / 2;
+        _portraitY = _nameY + (LabelLineH + NameGap + TextLines * ProseLineH - PortraitPx) / 2;
 
         _horizonY = _boxY / 2;
         _pierY = _boxY - PierH;
@@ -500,10 +525,11 @@ public sealed class TwoLights : Cartridge
 
     /// <summary>
     /// Greedy word wrap into lines of at most <paramref name="cols"/> characters. The console
-    /// has no wrapping call: Print takes one string and advances 4 px per character, so where
-    /// the line ends is the cartridge's problem. (The core does honour a '\n' inside the
-    /// string as a hard break, which API-8 §3 denies — but an authored break is not a wrap,
-    /// and a scene that re-lays itself out for the screen it is given needs this either way.)
+    /// has no wrapping call: Print takes one string and advances one cell per character — 5 px
+    /// in the prose font, 4 in the label one — so where the line ends is the cartridge's
+    /// problem. (The core also honours a '\n' inside the string as a hard break, but an
+    /// authored break is not a wrap, and a scene that re-lays itself out for the screen it is
+    /// given needs this either way.)
     /// A word longer than the whole line is cut at the column rather than left to run off the
     /// window — silently clipped text is worse than a visible break.
     /// </summary>
@@ -756,19 +782,26 @@ public sealed class TwoLights : Cartridge
         }
     }
 
+    /// <summary>
+    /// The prompt is a label (small): it is a question the player reads once, it is 23
+    /// characters — four more than the prose column holds — and putting it in the small font
+    /// keeps the two answers, which are spoken words, in the same face as the rest of the
+    /// dialogue. The cursor goes in the prose font too, so it sits on the answers' baseline
+    /// instead of floating a pixel above it.
+    /// </summary>
     private void DrawChoice()
     {
         Print(ChoicePrompt, _textX, _textY, ColDim);
         for (int i = 0; i < ChoiceOption.Length; i++)
         {
-            int y = _textY + (i + 1) * LineH;
+            int y = _textY + LabelLineH + i * ProseLineH;
             bool picked = i == _choice;
             if (picked)
             {
-                Print(">", _textX, y, ColLamp);
+                Print(">", _textX, y, ColLamp, Font.Large);
             }
 
-            Print(ChoiceOption[i], _textX + 2 * GlyphW, y, picked ? ColPaper : ColSteel);
+            Print(ChoiceOption[i], _textX + 2 * ProseGlyphW, y, picked ? ColPaper : ColSteel, Font.Large);
         }
     }
 
@@ -783,12 +816,17 @@ public sealed class TwoLights : Cartridge
             count = TextLines - 1;
         }
 
-        Print(EndingTitle[_ending], Centered(EndingTitle[_ending]), _nameY, ColLamp);
+        // Title and hint are labels, the epilogue is prose — the ending is the frame where both
+        // fonts are on screen with nothing else competing for attention.
+        Print(EndingTitle[_ending], Centered(EndingTitle[_ending], LabelGlyphW), _nameY, ColLamp);
         DrawLines(_endFirstLine[_ending], count, _wideX, AllRevealed);
-        Print(RestartHint, Centered(RestartHint), _textY + (TextLines - 1) * LineH, ColDim);
+        Print(RestartHint, Centered(RestartHint, LabelGlyphW), _textY + (TextLines - 1) * ProseLineH, ColDim);
     }
 
-    private int Centered(string text) => _wideX + (_wideCols - text.Length) * GlyphW / 2;
+    /// <summary>Left edge that centres <paramref name="text"/> in the wide column, in whichever
+    /// font's advance it will be drawn with — the one place both fonts share a formula.</summary>
+    private int Centered(string text, int advance) =>
+        _wideX + (_wideCols * ProseGlyphW - text.Length * advance) / 2;
 
     /// <summary>
     /// Draws up to <paramref name="count"/> wrapped lines, revealing only the first
@@ -808,11 +846,11 @@ public sealed class TwoLights : Cartridge
 
             if (revealed >= line.Length)
             {
-                Print(line, x, _textY + i * LineH, ColPaper);
+                Print(line, x, _textY + i * ProseLineH, ColPaper, Font.Large);
             }
             else
             {
-                DrawPartialLine(line, revealed, x, _textY + i * LineH, ColPaper);
+                DrawPartialLine(line, revealed, x, _textY + i * ProseLineH, ColPaper);
                 return;
             }
 
@@ -827,10 +865,10 @@ public sealed class TwoLights : Cartridge
             char c = line[i];
             if (c > ' ' && c < FirstGlyph + GlyphCount)
             {
-                Print(_glyph[c - FirstGlyph], x, y, color);
+                Print(_glyph[c - FirstGlyph], x, y, color, Font.Large);
             }
 
-            x += GlyphW;
+            x += ProseGlyphW;
         }
     }
 

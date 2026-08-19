@@ -447,4 +447,119 @@ public class RasterizerPixelTests
             }
         }
     }
+
+    // --- Print with the second font (Font.Large, 4x6 ink in a 5x7 cell) ---
+
+    /// <summary>
+    /// The invariant the whole second font was built under: a Print call that does not name a
+    /// font draws <em>exactly</em> what it drew before there was a second one. Compared frame
+    /// against frame rather than by eye, over text that exercises lowercase, digits, the
+    /// newline path and an unsupported character — every branch of the cursor rule the two
+    /// fonts now share. If this ever fails, every recorded frame hash in the repository moved.
+    /// </summary>
+    [Fact]
+    public void PrintWithoutAFontIsPixelIdenticalToTheSmallFont()
+    {
+        const string text = "Quarp-8 gjpqy 0123\nsecond line\té";
+        var byDefault = NewConsole();
+        byDefault.Print(text, 3, 4, 7);
+        var explicitly = NewConsole();
+        explicitly.Print(text, 3, 4, 7, Font.Small);
+        Assert.Equal(explicitly.Framebuffer.Pixels, byDefault.Framebuffer.Pixels);
+
+        // ...and the large font really is a different picture, or the comparison above proves nothing.
+        var large = NewConsole();
+        large.Print(text, 3, 4, 7, Font.Large);
+        Assert.NotEqual(explicitly.Framebuffer.Pixels, large.Framebuffer.Pixels);
+    }
+
+    [Fact]
+    public void PrintReturnsTheAdvanceOfTheFontItWasGiven()
+    {
+        var c = NewConsole();
+        Assert.Equal(10 + 3 * SystemFont.CellWidth, c.Print("ABC", 10, 10, 7));
+        Assert.Equal(10 + 3 * SystemFont.CellWidth, c.Print("ABC", 10, 20, 7, Font.Small));
+        Assert.Equal(10 + 3 * SystemFontLarge.CellWidth, c.Print("ABC", 10, 30, 7, Font.Large));
+        Assert.Equal(10, c.Print("", 10, 40, 7, Font.Large));
+        Assert.Equal(10, c.Print(null!, 10, 50, 7, Font.Large));
+        // The two fonts must not accidentally agree: 5 px per character is the whole trade-off.
+        Assert.NotEqual(SystemFont.CellWidth, SystemFontLarge.CellWidth);
+    }
+
+    [Fact]
+    public void PrintLargeDrawsGlyphAExactly()
+    {
+        // 'A' is 0b0110_1001_1111_1001_1001_0000: .##. / #..# / #### / #..# / #..# / ....
+        var c = NewConsole();
+        c.Print("A", 10, 10, 7, Font.Large);
+        string[] expected = { ".##.", "#..#", "####", "#..#", "#..#", "...." };
+        for (int row = 0; row < SystemFontLarge.GlyphHeight; row++)
+        {
+            for (int col = 0; col < SystemFontLarge.GlyphWidth; col++)
+            {
+                byte want = expected[row][col] == '#' ? (byte)7 : (byte)0;
+                Assert.Equal(want, Pixel(c, 10 + col, 10 + row));
+            }
+        }
+        // The cell's spacing column and row stay empty: 4x6 of ink inside 5x7.
+        for (int row = 0; row < SystemFontLarge.CellHeight; row++)
+        {
+            Assert.Equal(0, Pixel(c, 10 + SystemFontLarge.CellWidth - 1, 10 + row));
+        }
+        for (int col = 0; col < SystemFontLarge.CellWidth; col++)
+        {
+            Assert.Equal(0, Pixel(c, 10 + col, 10 + SystemFontLarge.CellHeight - 1));
+        }
+    }
+
+    /// <summary>
+    /// A descender really hangs below the baseline — the thing the 3x5 cell had no room for.
+    /// 'g' inks row 5, which is one row below the row every x-height letter ends on.
+    /// </summary>
+    [Fact]
+    public void PrintLargeDrawsDescendersBelowTheBaseline()
+    {
+        var c = NewConsole();
+        c.Print("og", 10, 10, 7, Font.Large);
+        int baseline = 10 + 4;
+        bool tail = false;
+        for (int col = 0; col < SystemFontLarge.GlyphWidth; col++)
+        {
+            Assert.Equal(0, Pixel(c, 10 + col, baseline + 1));           // 'o' stops at the baseline
+            tail |= Pixel(c, 10 + SystemFontLarge.CellWidth + col, baseline + 1) == 7;
+        }
+        Assert.True(tail, "'g' has no ink below the baseline — the tail row is what the 4x6 cell is for");
+    }
+
+    [Fact]
+    public void PrintNewlineUsesTheLineHeightOfTheChosenFont()
+    {
+        var small = NewConsole();
+        Assert.Equal(10 + SystemFont.CellWidth, small.Print("A\nA", 10, 10, 7));
+        Assert.Equal(7, Pixel(small, 11, 10 + SystemFont.CellHeight));
+
+        var large = NewConsole();
+        Assert.Equal(10 + SystemFontLarge.CellWidth, large.Print("A\nA", 10, 10, 7, Font.Large));
+        Assert.Equal(0, Pixel(large, 11, 10 + SystemFont.CellHeight));       // not the small pitch
+        Assert.Equal(7, Pixel(large, 11, 10 + SystemFontLarge.CellHeight));  // the large one
+    }
+
+    /// <summary>
+    /// Out-of-range characters draw the large font's own box, which — unlike the 3x5 one — is
+    /// not any glyph in the table (tasks/open/debt-fallback-zero.md). Asserted as pixels rather
+    /// than through GetGlyph so the check covers the drawing path too.
+    /// </summary>
+    [Fact]
+    public void PrintLargeBoxesUnknownCharacters()
+    {
+        var c = NewConsole();
+        c.Print("é", 10, 10, 7, Font.Large);
+        for (int col = 0; col < SystemFontLarge.GlyphWidth; col++)
+        {
+            Assert.Equal(7, Pixel(c, 10 + col, 10));      // solid top edge
+            Assert.Equal(7, Pixel(c, 10 + col, 14));      // solid bottom edge
+        }
+        Assert.Equal(0, Pixel(c, 11, 12));                // hollow centre
+        Assert.Equal(0, Pixel(c, 12, 12));
+    }
 }

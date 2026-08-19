@@ -146,6 +146,25 @@ public class RasterizerGoldenTests
         c.Print("", 50, 50, 9);            // empty string: no-op
     }
 
+    /// <summary>
+    /// The same shape of scene as "text", drawn with <see cref="Font.Large"/> — and one line of
+    /// each font side by side, because the mixed frame (prose large, labels small) is what the
+    /// dialogue cart actually ships and what a font regression would break first.
+    /// </summary>
+    private static void SceneTextLarge(VirtualConsole c)
+    {
+        c.Cls(0);
+        int x = c.Print("QUARP-8", 2, 2, 7, Font.Large);
+        c.Print("!", x + 2, 2, 10, Font.Large);            // chained from the returned x
+        c.Print("line one\nline two\nline 3", 2, 11, 3, Font.Large);
+        c.Print("éЖ", 2, 34, 8, Font.Large);               // outside ASCII 32-126: fallback boxes
+        c.Print("edge", 118, 42, 5, Font.Large);           // spills past the right edge
+        c.Print("gjpqy", 4, 68, 6, Font.Large);            // tails spill past the bottom
+        c.Print("", 50, 50, 9, Font.Large);                // empty string: no-op
+        c.Print("MARA", 2, 52, 6);                         // small font in the same frame
+        c.Print("Burn the drum", 2, 59, 3, Font.Large);    // m, w-family and the round letters
+    }
+
     private static void SceneCombo(VirtualConsole c)
     {
         FillSheet(c);
@@ -190,6 +209,7 @@ public class RasterizerGoldenTests
         ["clipcam"] = SceneClipCamera,
         ["palette"] = ScenePalette,
         ["text"] = SceneText,
+        ["textlarge"] = SceneTextLarge,
         ["combo"] = SceneCombo,
     };
 
@@ -214,6 +234,10 @@ public class RasterizerGoldenTests
         // Verified the delta is the font and nothing else — "clipcam" and "combo" print too, in
         // capitals and digits only, and both kept their hashes, as did every other scene.
         ["text"] = "c1870e56815f1682",
+        // New pin, not a re-pin: the 4x6 font arrived with tasks/open/08-second-font.md and this
+        // scene is the first thing that draws it. Nothing above moved — the small font path is
+        // byte-for-byte what it was, which the eight anchors and all nine older scenes say too.
+        ["textlarge"] = "96e90a4def524024",
         ["combo"] = "8c4abe5f22ba1527",
     };
 

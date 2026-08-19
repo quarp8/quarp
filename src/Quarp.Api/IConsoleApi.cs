@@ -101,11 +101,24 @@ public interface IConsoleApi
     void Sset(int x, int y, byte color);
 
     /// <summary>
-    /// Draws text with the 4x6 system font. Returns the x coordinate after the last glyph
-    /// (decided: yes, API-8 §reviewed). '\n' starts a new line at the original x; characters
-    /// outside ASCII 32-126 draw a hollow box.
+    /// Draws text with the small system font (3x5 ink in a 4x6 cell) and returns the x
+    /// coordinate after the last glyph (decided: yes, API-8 §reviewed) — that is, x + 4 per
+    /// printed character, which is what a caller chains or centers with. '\n' starts a new line
+    /// at the original x; characters outside ASCII 32-126 draw a hollow box.
+    /// <para>This is the call that existed before there was a second font, and it keeps drawing
+    /// exactly the pixels it drew. Which font "no font named" means is decided in one place
+    /// only — <c>VirtualConsole</c>'s implementation of this overload.</para>
     /// </summary>
     int Print(string text, int x, int y, byte color);
+
+    /// <summary>
+    /// Draws text with the named font: <see cref="Font.Small"/> is the 4x6 cell above,
+    /// <see cref="Font.Large"/> the 5x7 one — a third fewer characters per line, real
+    /// descenders, and the face prose wants. The return value follows the font, so it is
+    /// x + 5 per character for <see cref="Font.Large"/>.
+    /// <para>Per call, never a mode: the console has no "current font" to set or forget.</para>
+    /// </summary>
+    int Print(string text, int x, int y, byte color, Font font);
 
     /// <summary>Shifts every later draw call by -x, -y; calling it without arguments recenters on the origin.</summary>
     void Camera(int x = 0, int y = 0);

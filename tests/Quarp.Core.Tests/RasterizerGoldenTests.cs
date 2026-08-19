@@ -208,7 +208,12 @@ public class RasterizerGoldenTests
         ["map"] = "2e911b814e5ef34b",
         ["clipcam"] = "c3e382cde046344b",
         ["palette"] = "e50a7b4ebb0452eb",
-        ["text"] = "456fbad923d44569",
+        // Re-pinned from 456fbad923d44569 by the lowercase redraw of 2026-08-18
+        // (tasks/open/bug-font-readability.md): this is the only scene here that prints lowercase
+        // ("line one/two/3", "edge", "low"), and 20 of the 26 lowercase glyphs changed shape.
+        // Verified the delta is the font and nothing else — "clipcam" and "combo" print too, in
+        // capitals and digits only, and both kept their hashes, as did every other scene.
+        ["text"] = "c1870e56815f1682",
         ["combo"] = "8c4abe5f22ba1527",
     };
 

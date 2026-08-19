@@ -1,34 +1,49 @@
-# carts/breakout — scripted walkthrough (M4 stage 3, work order K, Р20).
+# carts/breakout — scripted walkthrough (M4 stage 4.0, Р20/Р25: re-planned for 160x90).
 #
 # The ball always serves straight up (main.cs, ServeAngle) from wherever the paddle sits, so
 # this script steers each shot purely by repositioning the paddle *before* launch — it never
-# needs to predict a paddle-bounce angle. Four rounds walk the paddle across the four bottom-row
-# brick columns (0, 1, 2, 3) left to right, launching straight into each one in turn:
+# needs to predict a paddle-bounce angle. Five rounds, and the run ends in a real terminal
+# state: GameOver with all five lives spent.
 #
-#   round 0: paddle -> column 0 (x=0),  launch, then paddle -> column 1 while the ball is airborne
-#   round 1: paddle already at column 1, launch, then paddle -> column 2 while airborne
-#   round 2: paddle already at column 2, launch, then paddle -> column 3 while airborne
-#   round 3: paddle already at column 3, launch — this shot clears the last bottom-row brick
+#   rounds 0-3: walk the paddle across the four bottom-row brick columns left to right,
+#               launching straight into each one in turn and stepping aside while the ball is
+#               airborne so it is never caught — four bricks, four misses, bottom row cleared;
+#   round 4:    launch from the middle, take one row-2 brick, step aside again — the fifth
+#               miss spends the last life and the GAME OVER panel comes up.
 #
-# Because the paddle has moved on to the next column by the time each shot's ball comes back
-# down (round trip ~68 ticks at BallSpeed=1 px/tick: ~32 up, ~36 down — main.cs StepBall), the
-# first three shots are not caught: each is a miss, i.e. a lost life, which is what proves
-# criterion 2's "at least one life lost" alongside "at least one row cleared" (bottom row, all
-# four columns, destroyed by tick ~312). StartingLives=5 comfortably survives the three misses.
+# Everything below is arithmetic on main.cs's own constants at ScreenWidth/Height = 160x90
+# (replays/README.md carries the full derivation). The numbers that changed with the screen:
+# paddle width and brick width are both ScreenWidth/4 = 40 px (were 32), the paddle starts
+# centred at x=60 (was 48) and its column stops are 0/40/80/120 (were 0/32/64/96), the paddle
+# top is at y=83 (was 65), and one round trip of the ball is 104 ticks (was 68) because the
+# ball has 18 px more air under the bricks to cross each way at BallSpeed = 1 px/tick.
 #
 # Grammar (quarp replay record --input-file): tick:buttons, entries separated by commas or
 # newlines, '#' starts a comment. O is a *tap* (Btnp) — press then release — same as every
-# turn in carts/snake's golden.input. L/R are held for a duration and then released.
+# turn in carts/snake's golden.input. L/R are held for a duration and then released. The
+# cartridge sees entry N on its own tick N+1 (Ticks is incremented before Update), so the
+# cartridge-scale ticks quoted below are one higher than the entry that caused them.
 
-# round 0: paddle 48 -> 0 (24 ticks at 2px/tick), then launch, then paddle 0 -> 32 mid-flight
-5:L,29:,40:O,41:,50:R,66:,
+# round 0: paddle 60 -> 0 (30 ticks at 2 px/tick), launch, then paddle 0 -> 40 mid-flight.
+# Brick (row 3, col 0) at tick 91; life 1 of 5 lost at tick 145.
+5:L,35:,40:O,41:,50:R,70:,
 
-# round 1: paddle already at 32 from the move above; launch, then paddle 32 -> 64 mid-flight
-120:O,121:,130:R,146:,
+# round 1: paddle already at 40 from the move above; launch, then paddle 40 -> 80 mid-flight.
+# Brick (row 3, col 1) at tick 201; life 2 lost at tick 255.
+150:O,151:,160:R,180:,
 
-# round 2: paddle already at 64; launch, then paddle 64 -> 96 mid-flight
-200:O,201:,210:R,226:,
+# round 2: paddle already at 80; launch, then paddle 80 -> 120 (its right stop) mid-flight.
+# Brick (row 3, col 2) at tick 311; life 3 lost at tick 365.
+260:O,261:,270:R,290:,
 
-# round 3: paddle already at 96; this launch's collision (~tick 312) clears the last
-# bottom-row brick, completing the row. No further scripted input is needed.
-280:O,281:
+# round 3: paddle already at 120; launch — this shot clears the last bottom-row brick (row 3,
+# col 3) at tick 421 — then paddle 120 -> 60, which is what turns the catch into the fourth
+# miss (at x=120 the paddle would have caught this ball dead centre). Life 4 lost at tick 475.
+370:O,371:,380:L,410:,
+
+# round 4: paddle at 60, so the ball sits at x=78.5 and straddles brick columns 1 and 2. Row 3
+# is gone by now, so the ball flies 5 ticks further up than in any earlier round and takes a
+# row-2 brick at tick 536 instead — the flight time itself is the proof that the bottom row was
+# cleared. Paddle 60 -> 0 gets out of the way; the fifth miss at tick 595 spends the last life
+# and the run ends in GameOver.
+480:O,481:,490:L,520:

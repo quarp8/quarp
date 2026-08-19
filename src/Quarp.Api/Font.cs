@@ -17,15 +17,15 @@ public enum Font
 {
     /// <summary>
     /// The 3x5 glyph in a 4x6 cell — the original QUARP-8 font and the default of every
-    /// <c>Print</c> overload. 32 columns x 12 rows on a 128x72 screen; the densest text the
-    /// console can hold, and what HUDs, scores and labels are laid out in.
+    /// <c>Print</c> overload. 40 columns x 15 rows on the 160x90 screen, both whole; the densest
+    /// text the console can hold, and what HUDs, scores and labels are laid out in.
     /// </summary>
     Small = 0,
 
     /// <summary>
-    /// The 4x6 glyph in a 5x7 cell: 25 columns x 10 rows on a 128x72 screen. It costs about a
-    /// third of the characters per line and buys real descenders and wider letter shapes, which
-    /// is the trade prose wants and a HUD does not.
+    /// The 4x6 glyph in a 5x7 cell: 32 columns x 12 rows on the 160x90 screen. It costs a fifth
+    /// of the characters per line and buys real descenders and wider letter shapes, which is the
+    /// trade prose wants and a HUD does not.
     /// </summary>
     Large = 1,
 }

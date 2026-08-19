@@ -7,12 +7,13 @@
 # What makes the proof worth anything is *which* replay and *how many* hashes:
 #
 #   * `carts/snake/replays/golden.qrpr` is 3000 ticks (50 seconds) of live play: the snake
-#     walks a Hamiltonian cycle of the 16x8 field, never dies, and eats 15 apples on the way.
-#     An idle recording will not do. Left alone, carts/snake hits a wall around tick 64 and
-#     shows the game-over panel from then on, so `quarp sim carts/snake` prints the *same*
-#     hash 37c481f3e17fab02 at --ticks 100, 300 and 600. A simulation that broke after tick
-#     100 used to pass this workflow. The golden's 150 checkpoints are all distinct, and the
-#     job below asserts that — a golden that goes stale fails loudly instead of going quiet.
+#     walks a Hamiltonian cycle of the 20x10 field (160x90 since ADR-021), never dies, and
+#     eats 6 apples on the way. An idle recording will not do. Left alone, carts/snake hits
+#     a wall around tick 88 and shows the game-over panel from then on, so `quarp sim
+#     carts/snake` prints the *same* hash e7005109e18c6962 at --ticks 100, 300 and 600.
+#     A simulation that broke after tick 100 used to pass this workflow. The golden's 150
+#     checkpoints are all distinct, and the job below asserts that — a golden that goes
+#     stale fails loudly instead of going quiet.
 #   * Every comparison below is over a *sequence* of checkpoints, never a single final hash.
 #     `--every N` makes quarp print `tick <n> <frame> <audio>` lines; a final hash cannot tell
 #     "identical the whole way" from "diverged at tick 40 and converged again", and a
@@ -73,7 +74,7 @@ env:
   GOLDEN_CHECKPOINTS: '150'
 
   # --- the smoke test: an idle headless run, kept because it is cheap, not because it
-  #     proves anything. See the note at the top about 37c481f3e17fab02. ---
+  #     proves anything. See the note at the top about e7005109e18c6962. ---
   SIM_TICKS: '600'
   SIM_EVERY: '100'
 

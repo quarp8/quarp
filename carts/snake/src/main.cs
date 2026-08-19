@@ -4,7 +4,8 @@ namespace Snake;
 
 /// <summary>
 /// Classic snake — the first QUARP-8 demo cartridge (milestone M1).
-/// Play field is 16x8 cells of 8px (screen rows 1-8); row 0 is the score HUD.
+/// The play field is whatever the console leaves under the one-row score HUD: 20x10 cells
+/// of 8px on QUARP-8's 160x90 screen (ADR-021), and the field is measured, never assumed.
 /// The snake speeds up with every apple; the best score persists in Dget/Dset slot 0.
 /// Drawn with primitives only — no gfx.png.
 /// Sound (M3): a blip on the apple, a noise thud on death, and a four-pattern theme that
@@ -12,17 +13,15 @@ namespace Snake;
 /// </summary>
 public sealed class SnakeGame : Cartridge
 {
-    // --- geometry (SPEC-8 §1: 128x72, 16x9 tiles of 8px) ---
-    private const int GridW = 16;
-    private const int GridH = 8;                // rows 1-8 of the screen; row 0 is the HUD
-    private const int CellCount = GridW * GridH;
+    // --- geometry (SPEC-8 §1) ---
+    // Only the pieces that do not depend on the screen are constants. Grid size comes from
+    // ScreenWidth/ScreenHeight in Init: a cart that bakes in its console's size lays itself
+    // out for that console forever, which is the one thing the screen API exists to prevent.
     private const int CellPx = 8;
-    private const int FieldTopPx = 8;
+    private const int FieldTopPx = 8;           // screen row 0 is the score HUD
     private const int GlyphW = 4;               // 4x6 system font: 4px advance per glyph
 
     // --- tuning ---
-    private const int StartHeadX = 8;
-    private const int StartHeadY = 4;
     private const int StartLength = 3;
     private const int StartStepInterval = 8;    // ticks per snake step at game start
     private const int MinStepInterval = 3;      // fastest speed, reached one apple at a time
@@ -73,11 +72,19 @@ public sealed class SnakeGame : Cartridge
         Win,
     }
 
+    // Field size, taken from the console in Init. Not field initializers and not constants:
+    // the console is attached after the cartridge object exists, so every API call from a
+    // constructor throws (API-8 §2), and a constant would freeze one screen size into the IL.
+    private int _gridW;
+    private int _gridH;
+    private int _cellCount;
+
     // The body is a ring buffer of cells; _cellTaken mirrors it for O(1) collision checks
-    // and free-cell counting. Allocated once — reset only rewrites contents.
-    private readonly int[] _bodyX = new int[CellCount];
-    private readonly int[] _bodyY = new int[CellCount];
-    private readonly bool[] _cellTaken = new bool[CellCount];
+    // and free-cell counting. Allocated once in Init — a reset only rewrites contents, and
+    // the tick path allocates nothing at all.
+    private int[] _bodyX = [];
+    private int[] _bodyY = [];
+    private bool[] _cellTaken = [];
 
     private GameState _state;
     private int _headSlot;
@@ -94,6 +101,16 @@ public sealed class SnakeGame : Cartridge
 
     public override void Init()
     {
+        // Whole cells only: 90 - 8 = 82 px of field is 10 rows and 2 px left over, and that
+        // remainder is permanent on QUARP-8 (ConsoleProfile: 90 is not a multiple of 8).
+        // DrawField spends it on the field's bottom border instead of leaving a black seam.
+        _gridW = ScreenWidth / CellPx;
+        _gridH = (ScreenHeight - FieldTopPx) / CellPx;
+        _cellCount = _gridW * _gridH;
+        _bodyX = new int[_cellCount];
+        _bodyY = new int[_cellCount];
+        _cellTaken = new bool[_cellCount];
+
         _best = (int)Dget(BestScoreSlot);
         if (_best < 0)
         {
@@ -102,7 +119,9 @@ public sealed class SnakeGame : Cartridge
 
         if (_best > 999)
         {
-            _best = 999;                        // a legit score never exceeds 125; treat odd saves as garbage
+            // A legit score cannot exceed _cellCount - StartLength (197 on 160x90), and the
+            // HUD prints three digits; treat anything else as a garbage save.
+            _best = 999;
         }
 
         ResetGame();
@@ -138,7 +157,7 @@ public sealed class SnakeGame : Cartridge
 
     private void ResetGame()
     {
-        for (int i = 0; i < CellCount; i++)
+        for (int i = 0; i < _cellCount; i++)
         {
             _cellTaken[i] = false;
         }
@@ -146,9 +165,13 @@ public sealed class SnakeGame : Cartridge
         _state = GameState.Playing;
         _headSlot = -1;
         _length = 0;
+        // Middle of the field, facing right; with an even number of rows or columns the head
+        // takes the upper-left of the two middle ones, so the whole body fits with room ahead.
+        int startX = (_gridW - 1) / 2;
+        int startY = (_gridH - 1) / 2;
         for (int i = StartLength - 1; i >= 0; i--)
         {
-            PushHead(StartHeadX - i, StartHeadY);
+            PushHead(startX - i, startY);
         }
 
         _dir = DirRight;
@@ -218,7 +241,7 @@ public sealed class SnakeGame : Cartridge
 
         int nx = _bodyX[_headSlot] + DirDx[_dir];
         int ny = _bodyY[_headSlot] + DirDy[_dir];
-        if (nx < 0 || nx >= GridW || ny < 0 || ny >= GridH)
+        if (nx < 0 || nx >= _gridW || ny < 0 || ny >= _gridH)
         {
             EndRun(GameState.GameOver);
             return;
@@ -227,9 +250,9 @@ public sealed class SnakeGame : Cartridge
         bool eating = nx == _appleX && ny == _appleY;
 
         // Moving into the tail tip is legal when the tail vacates that cell this very step.
-        int tailSlot = (_headSlot - _length + 1) & (CellCount - 1);
+        int tailSlot = SlotBehindHead(_length - 1);
         bool tailVacates = !eating && nx == _bodyX[tailSlot] && ny == _bodyY[tailSlot];
-        if (_cellTaken[ny * GridW + nx] && !tailVacates)
+        if (_cellTaken[ny * _gridW + nx] && !tailVacates)
         {
             EndRun(GameState.GameOver);
             return;
@@ -252,7 +275,7 @@ public sealed class SnakeGame : Cartridge
                 _stepInterval--;
             }
 
-            if (_length == CellCount)
+            if (_length == _cellCount)
             {
                 EndRun(GameState.Win);          // the snake fills the field — nowhere left for an apple
                 return;
@@ -262,27 +285,40 @@ public sealed class SnakeGame : Cartridge
         }
     }
 
+    // Ring-buffer indexing. This used to be a bit mask, which worked only because the old
+    // 16x8 field held 128 cells — a power of two. 20x10 is 200, and masking with 199 would
+    // have quietly aliased slots onto each other; the wrap is explicit now and holds for any
+    // field. No caller is ever more than one lap behind the head (steps < _length <=
+    // _cellCount), so a single conditional add is the whole of it — no modulo, no loop.
+    private int NextSlot(int slot) => slot + 1 == _cellCount ? 0 : slot + 1;
+
+    private int SlotBehindHead(int steps)
+    {
+        int slot = _headSlot - steps;
+        return slot < 0 ? slot + _cellCount : slot;
+    }
+
     private void PushHead(int x, int y)
     {
-        _headSlot = (_headSlot + 1) & (CellCount - 1);
+        _headSlot = NextSlot(_headSlot);
         _bodyX[_headSlot] = x;
         _bodyY[_headSlot] = y;
-        _cellTaken[y * GridW + x] = true;
+        _cellTaken[y * _gridW + x] = true;
         _length++;
     }
 
     private void RemoveTail()
     {
-        int tailSlot = (_headSlot - _length + 1) & (CellCount - 1);
-        _cellTaken[_bodyY[tailSlot] * GridW + _bodyX[tailSlot]] = false;
+        int tailSlot = SlotBehindHead(_length - 1);
+        _cellTaken[_bodyY[tailSlot] * _gridW + _bodyX[tailSlot]] = false;
         _length--;
     }
 
     private void SpawnApple()
     {
         // One RndInt over the number of free cells, then walk the grid to the k-th free cell.
-        int k = RndInt(CellCount - _length);
-        for (int i = 0; i < CellCount; i++)
+        int k = RndInt(_cellCount - _length);
+        for (int i = 0; i < _cellCount; i++)
         {
             if (_cellTaken[i])
             {
@@ -291,8 +327,8 @@ public sealed class SnakeGame : Cartridge
 
             if (k == 0)
             {
-                _appleX = i % GridW;
-                _appleY = i / GridW;
+                _appleX = i % _gridW;
+                _appleY = i / _gridW;
                 return;
             }
 
@@ -322,22 +358,28 @@ public sealed class SnakeGame : Cartridge
 
     private void DrawHud()
     {
-        Line(0, FieldTopPx - 1, 127, FieldTopPx - 1, ColDivider);
+        Line(0, FieldTopPx - 1, ScreenWidth - 1, FieldTopPx - 1, ColDivider);
 
         byte scoreColor = _scoreFlash > 0 ? ColHudFlash : ColHud;
         int x = Print("SCORE ", 1, 1, scoreColor);
         PrintInt(_score, x, 1, scoreColor);
 
-        int bestX = 127 - GlyphW * 5 - IntWidth(_best);     // right-aligned "BEST n"
+        int bestX = ScreenWidth - 1 - GlyphW * 5 - IntWidth(_best);     // right-aligned "BEST n"
         bestX = Print("BEST ", bestX, 1, ColHud);
         PrintInt(_best, bestX, 1, ColHud);
     }
 
     private void DrawField()
     {
+        // What is left of the screen under the last whole row — 2 px on 160x90 — is spent on
+        // the field's bottom border, so the leftover reads as a frame instead of a black seam
+        // (ConsoleProfile: the 11.25 tile rows are permanent). On a screen that divides evenly
+        // this line lands one pixel past the bottom edge and is clipped away, drawing nothing.
+        Line(0, FieldTopPx + _gridH * CellPx, ScreenWidth - 1, FieldTopPx + _gridH * CellPx, ColDivider);
+
         for (int i = 1; i < _length; i++)       // i = 0 is the head, drawn separately
         {
-            int slot = (_headSlot - i) & (CellCount - 1);
+            int slot = SlotBehindHead(i);
             RectFill(_bodyX[slot] * CellPx, FieldTopPx + _bodyY[slot] * CellPx, CellPx, CellPx, ColBody);
         }
 
@@ -389,30 +431,35 @@ public sealed class SnakeGame : Cartridge
 
     private void DrawEndPanel()
     {
+        // The panel is sized by its longest line ("PRESS START", 44 px, plus a margin), not
+        // by the screen: text does not grow with the display, and a box stretched to the full
+        // width would just be more emptiness around the same three strings. Where it sits is
+        // asked for — centered horizontally, and centered in the field under the HUD.
         const int panelW = 72;
         const int panelH = 36;
-        const int panelX = (128 - panelW) / 2;
-        const int panelY = FieldTopPx + (72 - FieldTopPx - panelH) / 2;
+        int panelX = (ScreenWidth - panelW) / 2;
+        int panelY = FieldTopPx + (ScreenHeight - FieldTopPx - panelH) / 2;
+        int centerX = ScreenWidth / 2;
 
         RectFill(panelX, panelY, panelW, panelH, ColBg);
         Rect(panelX, panelY, panelW, panelH, ColPanel);
 
         if (_state == GameState.Win)
         {
-            Print("YOU WIN!", 64 - GlyphW * 8 / 2, panelY + 5, ColWinText);
+            Print("YOU WIN!", centerX - GlyphW * 8 / 2, panelY + 5, ColWinText);
         }
         else
         {
-            Print("GAME OVER", 64 - GlyphW * 9 / 2, panelY + 5, ColGameOverText);
+            Print("GAME OVER", centerX - GlyphW * 9 / 2, panelY + 5, ColGameOverText);
         }
 
         int scoreW = GlyphW * 6 + IntWidth(_score);
-        int x = Print("SCORE ", (128 - scoreW) / 2, panelY + 14, ColHud);
+        int x = Print("SCORE ", (ScreenWidth - scoreW) / 2, panelY + 14, ColHud);
         PrintInt(_score, x, panelY + 14, ColHud);
 
         if (Ticks % 40 < 28)                    // blink
         {
-            Print("PRESS START", 64 - GlyphW * 11 / 2, panelY + 25, ColHud);
+            Print("PRESS START", centerX - GlyphW * 11 / 2, panelY + 25, ColHud);
         }
     }
 

@@ -51,10 +51,27 @@ public class AudioGoldenTests
     /// <summary>Ticks the committed golden replay covers: GOLDEN_TICKS in CI.</summary>
     private const int GoldenTicks = 3000;
 
-    private const string SimFrameGolden = "37c481f3e17fab02";
-    private const string SimAudioGolden = "f373b5bfd09755b9";
-    private const string ReplayFrameGolden = "24a6eb974ff922e4";
-    private const string ReplayAudioGolden = "f93bf5cc36b83cba";
+    // Re-pinned in M4 stage 4.0 for ADR-021: the screen went 128x72 -> 160x90, the snake's field
+    // went 16x8 -> 20x10 cells, and the golden replay was re-recorded against the new field. All
+    // four moved together and none of them moved on its own — a frame anchor that moved while its
+    // audio twin stood still (or the other way round) would mean something else broke.
+    //   sim frame    37c481f3e17fab02 -> e7005109e18c6962
+    //   sim audio    f373b5bfd09755b9 -> 368c5099da148c05
+    //   replay frame 24a6eb974ff922e4 -> 77618a204fd261f7
+    //   replay audio f93bf5cc36b83cba -> 44775c6a5b3cbaa7
+    // The three silence digests below did NOT move, and that is the cross-check: they are
+    // properties of the chip and the tick count, not of the screen.
+
+    /// <summary>
+    /// Internal because <see cref="SnakeCartTests"/> asserts this same number by a different route
+    /// — a console built with no gfx, map, flags or audio banks at all, since the snake draws with
+    /// primitives only. Two runs, one fact: the literal lives here, beside the other three and
+    /// beside the history of every re-pin, and is spelled out nowhere else in the suite.
+    /// </summary>
+    internal const string SimFrameGolden = "e7005109e18c6962";
+    private const string SimAudioGolden = "368c5099da148c05";
+    private const string ReplayFrameGolden = "77618a204fd261f7";
+    private const string ReplayAudioGolden = "44775c6a5b3cbaa7";
 
     /// <summary>
     /// The digest of <see cref="SimTicks"/> silent blocks — what

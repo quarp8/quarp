@@ -217,7 +217,7 @@ public static class CartTemplate
 
             public override void Init()
             {
-                // Ask the console how big it is instead of writing 128 and 72 here. The numbers
+                // Ask the console how big it is instead of writing 160 and 90 here. The numbers
                 // are properties, not constants, so the same cartridge fills whatever screen it
                 // is given — which is what lets a game be looked at on two resolutions without
                 // being edited (API-8, "ScreenWidth / ScreenHeight").

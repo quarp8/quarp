@@ -41,9 +41,17 @@ public class RasterizerPixelTests
     public void PgetOffScreenReadsZero()
     {
         var c = NewConsole();
+        int width = c.ScreenWidth;      // 160 since ADR-021; the reads below follow the console
+        int height = c.ScreenHeight;    // 90
+
+        // Painted first, and the last real pixel asserted, so the three soft zeros mean something:
+        // on an empty framebuffer every read answers 0 for the boring reason, and this test would
+        // have stayed green even if Pget started reading past the end of a smaller buffer.
+        c.Cls(5);
+        Assert.Equal(5, c.Pget(width - 1, height - 1));
         Assert.Equal(0, c.Pget(-1, 0));
-        Assert.Equal(0, c.Pget(128, 0));
-        Assert.Equal(0, c.Pget(0, 72));
+        Assert.Equal(0, c.Pget(width, 0));
+        Assert.Equal(0, c.Pget(0, height));
     }
 
     // --- Cls, clip ---
@@ -101,11 +109,16 @@ public class RasterizerPixelTests
     public void ClipIsClampedToScreen()
     {
         var c = NewConsole();
+        // The far corner is taken from the console, not spelled out: the point of the test is that
+        // a clip window far larger than the screen still lets the last real pixel through, and the
+        // last real pixel is (Width-1, Height-1) = (159, 89) on QUARP-8 since ADR-021.
+        int lastX = c.ScreenWidth - 1;
+        int lastY = c.ScreenHeight - 1;
         c.Clip(-100, -100, 1000, 1000);
         c.Pset(0, 0, 5);
-        c.Pset(127, 71, 5);
+        c.Pset(lastX, lastY, 5);
         Assert.Equal(5, Pixel(c, 0, 0));
-        Assert.Equal(5, Pixel(c, 127, 71));
+        Assert.Equal(5, Pixel(c, lastX, lastY));
     }
 
     // --- Pal / Palt ---
@@ -436,7 +449,7 @@ public class RasterizerPixelTests
     public void PrintHonorsCameraAndClip()
     {
         var c = NewConsole();
-        c.Clip(0, 0, 12, 72);
+        c.Clip(0, 0, 12, c.ScreenHeight);   // a full-height column 12 px wide
         c.Print("AA", 10, 10, 7);           // second glyph starts at x=14: fully clipped
         Assert.Equal(7, Pixel(c, 11, 10));
         for (int x = 12; x < 20; x++)

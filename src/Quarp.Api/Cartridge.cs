@@ -29,19 +29,21 @@ public abstract class Cartridge
     // --- screen ---
 
     /// <summary>
-    /// Screen width in pixels, read from the console the cartridge is attached to — 128 on
+    /// Screen width in pixels, read from the console the cartridge is attached to — 160 on
     /// QUARP-8. Deliberately a property and not a <c>const</c>: a constant is baked into the
     /// cartridge's IL at compile time, so a cart built against one screen size would keep
     /// laying itself out for that size no matter which console later loaded it, and the whole
-    /// point of asking is to find out. Use it wherever the number 128 was about to be typed —
+    /// point of asking is to find out. Use it wherever the number 160 was about to be typed —
     /// <c>ScreenWidth / 2</c> to center, <c>ScreenWidth - w</c> to right-align.
     /// </summary>
     protected int ScreenWidth => Q.ScreenWidth;
 
     /// <summary>
-    /// Screen height in pixels, read from the console — 72 on QUARP-8, and a property for
+    /// Screen height in pixels, read from the console — 90 on QUARP-8, and a property for
     /// exactly the reason <see cref="ScreenWidth"/> is. <c>ScreenHeight - 8</c> anchors a HUD
-    /// to the bottom edge on any profile; the literal 72 anchors it to one.
+    /// to the bottom edge on any profile; the literal 90 anchors it to one. Note that 90 is not
+    /// a whole number of 8 px tiles (11.25): a tile game takes its row count from the field it
+    /// draws into, <c>(ScreenHeight - hud) / 8</c>, and draws one row past it.
     /// </summary>
     protected int ScreenHeight => Q.ScreenHeight;
 
@@ -104,14 +106,14 @@ public abstract class Cartridge
     /// <summary>Writes a sprite-sheet pixel (color masked to 0-15); outside the sheet it is ignored.</summary>
     protected void Sset(int x, int y, byte color) => Q.Sset(x, y, color);
 
-    /// <summary>Draws text with the small 4x6 cell (32 columns on QUARP-8) and returns the x after
+    /// <summary>Draws text with the small 4x6 cell (40 columns on QUARP-8) and returns the x after
     /// the last glyph; '\n' starts a new line.</summary>
     protected int Print(string text, int x, int y, byte color) => Q.Print(text, x, y, color);
 
     /// <summary>
     /// Draws text with the named font and returns the x after the last glyph, in that font's
     /// advance: <see cref="Font.Small"/> is the 4x6 cell, <see cref="Font.Large"/> the 5x7 one
-    /// (25 columns on QUARP-8) — prose wants it, a HUD does not.
+    /// (32 columns on QUARP-8) — prose wants it, a HUD does not.
     /// </summary>
     protected int Print(string text, int x, int y, byte color, Font font) => Q.Print(text, x, y, color, font);
 

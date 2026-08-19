@@ -222,8 +222,14 @@ public class SystemFontLargeTests
 
     /// <summary>
     /// The metrics, stated once as numbers: ink 4x6 in a 5x7 cell, which is what every layout
-    /// downstream multiplies by. 128/5 = 25 columns and 72/7 = 10 rows on QUARP-8, against the
-    /// small font's 32 x 12 — the trade the second font exists to offer.
+    /// downstream multiplies by. On QUARP-8's 160x90 screen (ADR-021) that is 160/5 = 32 columns
+    /// and 90/7 = 12 rows, against the small font's 160/4 = 40 x 90/6 = 15 — the trade the second
+    /// font exists to offer, and the reason ADR-022 kept both fonts: 32 columns is a readable
+    /// line of prose, 40 is a dense HUD.
+    /// <para>The move to 160x90 is what these four screen numbers record: on the old 128x72 screen
+    /// the same fonts gave 25 x 10 large and 32 x 12 small. A line of dialogue therefore gained
+    /// seven characters without losing a row, which is the measurement M4-MEASUREMENTS.md put in
+    /// front of the owner.</para>
     /// </summary>
     [Fact]
     public void MetricsAreFourBySixInkInAFiveBySevenCell()
@@ -234,8 +240,9 @@ public class SystemFontLargeTests
         Assert.Equal(7, SystemFontLarge.CellHeight);
         Assert.Equal(SystemFontLarge.GlyphWidth + 1, SystemFontLarge.CellWidth);
         Assert.Equal(SystemFontLarge.GlyphHeight + 1, SystemFontLarge.CellHeight);
-        Assert.Equal(25, ConsoleProfile.Profile8.Width / SystemFontLarge.CellWidth);
-        Assert.Equal(10, ConsoleProfile.Profile8.Height / SystemFontLarge.CellHeight);
-        Assert.Equal(32, ConsoleProfile.Profile8Wide.Width / SystemFontLarge.CellWidth);
+        Assert.Equal(32, ConsoleProfile.Profile8.Width / SystemFontLarge.CellWidth);
+        Assert.Equal(12, ConsoleProfile.Profile8.Height / SystemFontLarge.CellHeight);
+        Assert.Equal(40, ConsoleProfile.Profile8.Width / SystemFont.CellWidth);
+        Assert.Equal(15, ConsoleProfile.Profile8.Height / SystemFont.CellHeight);
     }
 }

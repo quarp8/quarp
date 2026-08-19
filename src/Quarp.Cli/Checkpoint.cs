@@ -20,7 +20,7 @@ namespace Quarp.Cli;
 /// two machines end up in the same place", and nothing more. It cannot tell "identical the
 /// whole way" from "diverged at tick 40 and converged again", and for a cartridge that
 /// reaches a terminal screen it barely asks anything at all: carts/snake left alone walks
-/// into a wall around tick 64, after which every run of 100, 300 or 600 ticks prints the same
+/// into a wall around tick 88, after which every run of 100, 300 or 600 ticks prints the same
 /// hash. A sequence of checkpoints is the difference between "the frames agree" and "the
 /// frames agree, here is where they would have stopped agreeing".</para>
 ///

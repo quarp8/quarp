@@ -229,13 +229,11 @@ public sealed class CartSession : IDisposable
     /// so the author can fix the code and hot-reload.
     /// </summary>
     /// <param name="profile">
-    /// Which console the cartridge runs on. Defaults to <see cref="ConsoleProfile.Profile8"/>;
-    /// the only other value in M4 is the dev-only <see cref="ConsoleProfile.Profile8Wide"/>
-    /// behind <c>--profile 8w</c>, which exists so the resolution verdict can be taken by
-    /// looking at the same game on both screens instead of at thresholds on paper (M4 work
-    /// order, Р6). It has to be threaded through rather than read from a static, because a
-    /// replay resimulated on a different console than it was recorded on would not be the
-    /// same run — the profile is part of what determines every frame.
+    /// Which console the cartridge runs on. Defaults to <see cref="ConsoleProfile.Profile8"/>,
+    /// 160x90 (ADR-021). It is threaded through rather than read from a static because a replay
+    /// resimulated on a different console than it was recorded on would not be the same run —
+    /// the profile is part of what determines every frame, so the choice has to be visible at
+    /// the call that starts the session.
     /// </param>
     public static CartSession Start(string path, ConsoleProfile? profile = null)
     {
@@ -996,7 +994,14 @@ public sealed class CartSession : IDisposable
         DrawCrashBanner();
     }
 
-    /// <summary>Stamps the banner over the last frame via the console's own drawing API.</summary>
+    /// <summary>
+    /// Stamps the banner over the last frame via the console's own drawing API. Laid out from
+    /// the console's own width and height rather than from a screen size written here: this is
+    /// the one frame that has to stay readable when something has already gone wrong, and a
+    /// banner sized for a different console is either a stripe that stops two thirds of the way
+    /// across or text hanging off the edge. Centering asks <see cref="SystemFont"/> for the cell
+    /// width instead of restating it — <c>Print</c> advances by exactly that.
+    /// </summary>
     private void DrawCrashBanner()
     {
         IConsoleApi c = Active.Console;
@@ -1004,11 +1009,17 @@ public sealed class CartSession : IDisposable
         c.Camera();
         c.Clip();
         c.Pal();
-        c.RectFill(0, 24, 128, 24, 10);
-        c.Rect(0, 24, 128, 24, 3);
-        c.Print("CRASHED - SEE TERMINAL", 20, 29, 3);
-        c.Print("EDIT CODE TO RELOAD", 26, 38, 3);
+
+        const int BannerHeight = 24;        // two lines of text with air above, below and between
+        int top = (c.ScreenHeight - BannerHeight) / 2;
+        c.RectFill(0, top, c.ScreenWidth, BannerHeight, 10);
+        c.Rect(0, top, c.ScreenWidth, BannerHeight, 3);
+        PrintCentered(c, "CRASHED - SEE TERMINAL", top + 5);
+        PrintCentered(c, "EDIT CODE TO RELOAD", top + 14);
     }
+
+    private static void PrintCentered(IConsoleApi c, string text, int y) =>
+        c.Print(text, (c.ScreenWidth - (text.Length * SystemFont.CellWidth)) / 2, y, 3);
 
     // --- status line for the shell overlay ---
 

@@ -109,10 +109,15 @@ public class AudioBlockTests
     }
 
     [Fact]
-    public void HashingAFrameStillGivesTheM2Answer()
+    public void HashingAFrameStillGivesTheEmptyScreenAnswer()
     {
         // The frame text form is a contract with .github/workflows/ci.yml and with every golden
         // constant in this suite. Extending FrameHash to reach audio must not have moved it.
-        Assert.Equal("f3fb6a6deb5af325", FrameHash.Of(new Framebuffer(ConsoleProfile.Profile8)));
+        // The value itself is owned by FrameHashTests — it is the hash of an empty 160x90 frame
+        // and it moved with ADR-021, so quoting it a second time here would have been a second
+        // copy of a fact rather than a second check of one.
+        Assert.Equal(
+            FrameHashTests.EmptyProfile8Frame,
+            FrameHash.Of(new Framebuffer(ConsoleProfile.Profile8)));
     }
 }

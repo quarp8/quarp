@@ -2,7 +2,8 @@ namespace Quarp.Core;
 
 /// <summary>
 /// The second system font: 4x6 pixel glyphs in a 5x7 cell (1 px of air right and below),
-/// ASCII 32-126 — 25 columns x 10 rows of text on a 128x72 screen, 32 x 12 on the 160x90 spike.
+/// ASCII 32-126 — 32 columns x 12 rows of text on the 160x90 screen (12 whole cells are 84 px;
+/// the 6 px left over still hold a 13th line's glyphs, only its trailing air row is off-screen).
 /// A cartridge picks it per call through <see cref="Quarp.Api.Font"/>; the small
 /// <see cref="SystemFont"/> stays the default, and neither font can be switched by the player
 /// (Print writes the framebuffer, and the frame hash is the determinism contract).

@@ -80,8 +80,11 @@ public class PipelineTests
         ulong first = RunTicks(assembly, 10);
         ulong second = RunTicks(assembly, 10);
         Assert.Equal(first, second);
-        // And the cart actually drew something: an empty framebuffer hashes differently.
-        Assert.NotEqual(FrameHash.Compute(new byte[128 * 72]), first);
+        // And the cart actually drew something: an empty framebuffer hashes differently. Built
+        // from the profile, not from a byte count — the screen size is ConsoleProfile's to state
+        // (it changed to 160x90 with ADR-021), and a stale literal here would compare against a
+        // buffer of the wrong length and pass for the wrong reason.
+        Assert.NotEqual(FrameHash.Compute(new Framebuffer(ConsoleProfile.Profile8)), first);
     }
 
     [Fact]

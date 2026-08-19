@@ -10,7 +10,7 @@ namespace Quarp.Cli;
 ///
 /// <para>It exists because a reference replay recorded with no input at all proves less than
 /// it looks like it does. A cartridge left alone tends to reach a terminal screen quickly —
-/// carts/snake walks into a wall in about sixty ticks — and after that the frames stop
+/// carts/snake walks into a wall in about ninety ticks — and after that the frames stop
 /// depending on most of the simulation. A scripted track keeps the game actually running for
 /// the length of the recording, so the cross-architecture hash comparison (REPLAY-FORMAT §6)
 /// is comparing live gameplay rather than a game-over screen.</para>

@@ -10,19 +10,35 @@ namespace Quarp.CartKit.Tests;
 /// <para><b>Why this file exists next to the core-level test.</b>
 /// <c>Quarp.Core.Tests.ScreenSizeTests</c> already re-attaches one <c>Cartridge</c> instance to two
 /// consoles and gets two answers, which is the tighter experiment — nothing is rebuilt between the
-/// readings. What it cannot show is the half the milestone actually depends on: that the number
-/// survives <em>Roslyn</em>. A property could read the console perfectly and still be constant-folded
-/// out of the emitted IL if it were ever turned into a <c>const</c>, and the core test — which never
-/// goes near a compiler — would stay green while the resolution spike quietly measured nothing. So
-/// this one compiles a real cartridge once, loads that one assembly once, and runs the same
-/// instance on both profiles.</para>
+/// readings. What it cannot show is the half that decides whether any of this is real: that the
+/// number survives <em>Roslyn</em>. A property could read the console perfectly and still be
+/// constant-folded out of the emitted IL if it were ever turned into a <c>const</c>, and the core
+/// test — which never goes near a compiler — would stay green while every cartridge in the
+/// repository silently froze to one screen. So this one compiles a real cartridge once, loads that
+/// one assembly once, and runs the same instance on two profiles.</para>
 ///
-/// <para>The stake is the M4 verdict itself. Stage 3 decides 128×72 against 160×90 by looking at the
-/// same game on both screens; a cartridge carrying 128 in its IL would draw an identical picture on
-/// both and the comparison would be theatre.</para>
+/// <para><b>The second profile is built here, on purpose.</b> ADR-021 settled QUARP-8 at 160x90
+/// and deleted the spike profile that used to supply the contrast; the claim it existed to prove
+/// did not go with it, so the contrast is now <see cref="Historic"/> — a plain
+/// <c>new ConsoleProfile</c> holding the 128x72 screen this project shipped from M0 to M4 stage 3.
+/// A cartridge that carried its screen size in its IL would draw an identical picture on both and
+/// the difference between the two runs below would vanish.</para>
 /// </summary>
 public class ScreenSizeThroughTheRealPipelineTests
 {
+    /// <summary>
+    /// The console QUARP-8 used to be, kept alive as a test fixture rather than as a shipped
+    /// profile (ADR-021: one spec, one resolution). Two sizes are all this file needs, and using
+    /// the real historic one means the hardcoded cartridge below hardcodes numbers that were once
+    /// correct — which is exactly the mistake being guarded against.
+    /// </summary>
+    private static readonly ConsoleProfile Historic = new()
+    {
+        Name = "QUARP-8 (historic 128x72)",
+        Width = 128,
+        Height = 72,
+    };
+
     /// <summary>
     /// Reports the screen it is running on by plotting one pixel at the far corner and one at a
     /// fixed spot, so the assertions can read the answer out of the framebuffer rather than
@@ -60,6 +76,9 @@ public class ScreenSizeThroughTheRealPipelineTests
         return console.Framebuffer;
     }
 
+    /// <summary>Reads a pixel by coordinates, because an index into a flat buffer of the wrong width is a bug this file is looking for.</summary>
+    private static byte PixelAt(Framebuffer fb, int x, int y) => fb.Pixels[y * fb.Width + x];
+
     [Fact]
     public void OneCompiledAssemblyDrawsToTheCornerOfWhicheverConsoleItIsGiven()
     {
@@ -68,30 +87,36 @@ public class ScreenSizeThroughTheRealPipelineTests
         // One assembly, one load, one cartridge instance — then two consoles.
         using var host = CartHost.Load(assembly);
 
-        Framebuffer narrow = DrawOn(host, ConsoleProfile.Profile8);
-        Assert.Equal(128, narrow.Width);
-        Assert.Equal(72, narrow.Height);
-        Assert.Equal(7, narrow.Pixels[(72 - 1) * 128 + (128 - 1)]);
-        Assert.Equal(7, narrow.Pixels[1 * 128 + 1]);
+        Framebuffer ratified = DrawOn(host, ConsoleProfile.Profile8);
+        Assert.Equal(160, ratified.Width);
+        Assert.Equal(90, ratified.Height);
+        Assert.Equal(7, PixelAt(ratified, 159, 89));
+        Assert.Equal(7, PixelAt(ratified, 1, 1));
 
-        Framebuffer wide = DrawOn(host, ConsoleProfile.Profile8Wide);
-        Assert.Equal(160, wide.Width);
-        Assert.Equal(90, wide.Height);
+        Framebuffer historic = DrawOn(host, Historic);
+        Assert.Equal(128, historic.Width);
+        Assert.Equal(72, historic.Height);
 
-        // The whole milestone in one assertion: the same IL reached a pixel that does not exist
-        // on the narrow console. A cart with 128 baked in would leave this corner background.
-        Assert.Equal(7, wide.Pixels[(90 - 1) * 160 + (160 - 1)]);
-        Assert.Equal(7, wide.Pixels[1 * 160 + 1]);
+        // The whole point in one assertion: the same IL reached a pixel that does not exist on the
+        // other console. A cart with its size baked in would leave one of these two corners empty.
+        Assert.Equal(7, PixelAt(historic, 127, 71));
+        Assert.Equal(7, PixelAt(historic, 1, 1));
+
+        // And it did not merely paint the corner it was born with: on QUARP-8 the historic corner
+        // is an ordinary interior pixel, and it stayed background.
+        Assert.Equal(0, PixelAt(ratified, 127, 71));
     }
 
     /// <summary>
-    /// The negative control. A cartridge that hardcodes 128×72 — exactly what every cart in the
-    /// repository did before Р12 — compiles and runs happily on the wide console and leaves its
-    /// real corner empty. Without this, the test above could pass on a console that simply painted
-    /// its corners for reasons of its own.
+    /// The negative control, and the reason it is phrased as "one answer on two consoles": a
+    /// cartridge that hardcodes 128x72 — exactly what every cart in the repository did before Р12
+    /// — compiles and runs happily on both, drawing the very same picture, and on the console it
+    /// is actually running on that picture has its corner in the middle of the playfield. Without
+    /// this, the test above could pass on a console that simply painted its corners for reasons of
+    /// its own.
     /// </summary>
     [Fact]
-    public void AHardcodedCartridgeLeavesTheWideConsolesCornerEmpty()
+    public void AHardcodedCartridgeDrawsTheSamePictureOnBothConsoles()
     {
         const string hardcoded = """
             using Quarp.Api;
@@ -112,13 +137,20 @@ public class ScreenSizeThroughTheRealPipelineTests
         Assert.True(result.Success, string.Join("\n", result.Diagnostics));
         using var host = CartHost.Load(result.AssemblyBytes!);
 
-        Framebuffer wide = DrawOn(host, ConsoleProfile.Profile8Wide);
+        Framebuffer ratified = DrawOn(host, ConsoleProfile.Profile8);
 
         // It still draws — so the cart is alive and the console is working...
-        Assert.Equal(7, wide.Pixels[1 * 160 + 1]);
+        Assert.Equal(7, PixelAt(ratified, 1, 1));
         // ...but the corner of the screen it is actually on is untouched, and the pixel it did
-        // reach is stranded in the middle of the playfield.
-        Assert.Equal(0, wide.Pixels[(90 - 1) * 160 + (160 - 1)]);
-        Assert.Equal(7, wide.Pixels[71 * 160 + 127]);
+        // reach is stranded 32 px left of and 18 px above the real edge.
+        Assert.Equal(0, PixelAt(ratified, 159, 89));
+        Assert.Equal(7, PixelAt(ratified, 127, 71));
+
+        // The same instance on the smaller console puts that pixel in exactly the same place —
+        // where it now happens to be the corner. Same IL, same picture, no question asked: that
+        // sameness is the failure, and it is what the reporter cart above does not do.
+        Framebuffer historic = DrawOn(host, Historic);
+        Assert.Equal(7, PixelAt(historic, 1, 1));
+        Assert.Equal(7, PixelAt(historic, 127, 71));
     }
 }

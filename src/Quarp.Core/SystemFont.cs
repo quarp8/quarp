@@ -2,7 +2,7 @@ namespace Quarp.Core;
 
 /// <summary>
 /// The built-in 4x6 system font: 3x5 pixel glyphs plus 1 px spacing to the right and
-/// below, ASCII 32-126 — 32 columns x 12 rows of text on a 128x72 screen (SPEC-8 §1).
+/// below, ASCII 32-126 — 40 columns x 15 rows of text on the 160x90 screen (SPEC-8 §1).
 /// Every glyph is drawn from scratch for Quarp; the data below is original and carries
 /// the project's own license — no borrowed fonts.
 /// Encoding: 5 rows x 3 columns packed into the low 15 bits of a uint as

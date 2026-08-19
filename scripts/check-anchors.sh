@@ -12,6 +12,12 @@
 #
 # Девятый якорь — «150 контрольных точек эталона, все различны» — проверяет CI;
 # здесь его нет сознательно: локальный прогон отвечает за хэши, не за раскладку точек.
+#
+# 2026-08-18: пять из восьми значений переприпинены ЕДИНСТВЕННЫЙ раз за историю
+# проекта — вердикт владельца ADR-021 (128×72 → 160×90): змейка переехала на поле
+# 20×10, эталон переигран той же длины (3000 тиков, 150 точек, все различны).
+# Три digest'а тишины не сдвинулись — они функция числа тиков, не пикселей,
+# и это их неподвижность доказала, что PCM-контур развязан с разрешением.
 set -u
 cd "$(dirname "$0")/.." || exit 2
 
@@ -34,19 +40,19 @@ check() { # имя ожидание факт
 }
 
 sim_out="$(q sim carts/snake --ticks 600)" || exit 2
-check "sim-600, кадр" "37c481f3e17fab02" "$(printf '%s\n' "$sim_out" | tail -1)"
-check "sim-600, звук" "f373b5bfd09755b9" "$(printf '%s\n' "$sim_out" | awk '/^audio/{print $2}' | tail -1)"
+check "sim-600, кадр" "e7005109e18c6962" "$(printf '%s\n' "$sim_out" | tail -1)"
+check "sim-600, звук" "368c5099da148c05" "$(printf '%s\n' "$sim_out" | awk '/^audio/{print $2}' | tail -1)"
 
 rep_out="$(q replay play carts/snake/replays/golden.qrpr)" || exit 2
-check "реплей, кадр" "24a6eb974ff922e4" "$(printf '%s\n' "$rep_out" | tail -1)"
-check "реплей, звук" "f93bf5cc36b83cba" "$(printf '%s\n' "$rep_out" | awk '/^audio/{print $2}' | tail -1)"
+check "реплей, кадр" "77618a204fd261f7" "$(printf '%s\n' "$rep_out" | tail -1)"
+check "реплей, звук" "44775c6a5b3cbaa7" "$(printf '%s\n' "$rep_out" | awk '/^audio/{print $2}' | tail -1)"
 
 check "тишина, 0 тиков"    "cbf29ce484222325" "$(q audio silence --ticks 0    | awk '{print $2}')"
 check "тишина, 600 тиков"  "54738d7161a01b25" "$(q audio silence --ticks 600  | awk '{print $2}')"
 check "тишина, 3000 тиков" "220acbc2c817fb25" "$(q audio silence --ticks 3000 | awk '{print $2}')"
 
 check "sha256 golden.qrpr" \
-  "8d6842b337cf3fd8c99b4b0a3c3d9e1a4643c99fba63965a8f6471e49ba9712c" \
+  "30ef4a9b7a12560fd2a1eee2b9e6b2203a6cbbe7b935995b21ad8634c886c031" \
   "$(sha256sum carts/snake/replays/golden.qrpr | awk '{print $1}')"
 
 if [ "$fail" -ne 0 ]; then

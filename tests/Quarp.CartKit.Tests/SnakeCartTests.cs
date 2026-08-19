@@ -72,10 +72,17 @@ public class SnakeCartTests
         ulong first = Simulate(assembly, 600);
         ulong second = Simulate(assembly, 600);
         Assert.Equal(first, second);
-        Assert.NotEqual(FrameHash.Compute(new byte[128 * 72]), first);   // it drew a real frame
-        // Golden cross-checked against `quarp sim carts/snake --ticks 600` (M1 acceptance).
-        // A conscious snake or rasterizer change updates this constant along with it.
-        Assert.Equal("37c481f3e17fab02", FrameHash.Format(first));
+        // It drew a real frame. The empty frame is built from the profile rather than spelled out
+        // as a byte count: a literal here would guard nothing (a hash of the wrong-sized buffer
+        // simply differs, which is what the assertion wants anyway) and would go stale silently.
+        Assert.NotEqual(FrameHash.Compute(new Framebuffer(ConsoleProfile.Profile8)), first);
+        // The milestone anchor: `quarp sim carts/snake --ticks 600`, PLAYBOOK §4. The value is
+        // owned by AudioGoldenTests, which pins all four anchors together with the history of
+        // every re-pin (this one moved from 37c481f3e17fab02 in M4 stage 4.0, when ADR-021 took
+        // the screen to 160x90 and the snake's field to 20x10 cells). Reaching it from here is a
+        // second, independent route to the same number: this console is built with no gfx, map,
+        // flags or audio banks at all, and the snake still draws the same frame.
+        Assert.Equal(AudioGoldenTests.SimFrameGolden, FrameHash.Format(first));
     }
 
     [Fact]

@@ -86,7 +86,10 @@ public class PackageContentsTests : IDisposable
         File.WriteAllBytes(Path.Combine(_folder, "flags.bin"), new byte[CartData.FlagCount]);
         File.WriteAllBytes(Path.Combine(_folder, "sfx.bin"), AudioFormat.WriteSfxFile(AudioFormat.EmptySfxPayload()));
         File.WriteAllBytes(Path.Combine(_folder, "music.bin"), AudioFormat.WriteMusicFile(AudioFormat.EmptyMusicPayload()));
-        File.WriteAllBytes(Path.Combine(_folder, "cover.png"), BuildIndexedPng(128, 72));
+        // Screen-sized by SPEC-8 §6, though nothing validates it ("Известные дыры v1"): the size
+        // follows the profile so this fixture cannot quietly outlive another screen change.
+        File.WriteAllBytes(Path.Combine(_folder, "cover.png"),
+            BuildIndexedPng(ConsoleProfile.Profile8.Width, ConsoleProfile.Profile8.Height));
 
         // --- everything a working folder also accumulates, and none of which ships ---
         File.WriteAllText(Path.Combine(_folder, "sfx.txt"), "# the audio source\n");

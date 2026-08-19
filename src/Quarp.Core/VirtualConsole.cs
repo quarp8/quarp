@@ -91,9 +91,10 @@ public sealed class VirtualConsole : IConsoleApi
     /// <para>This is the cartridge-facing half of "the hardware profile is data"
     /// (ARCHITECTURE §2): the console is constructed around a profile, and the only way a
     /// cartridge can learn its screen size is to ask the console it was attached to. That is
-    /// what makes the 160x90 spike (<see cref="ConsoleProfile.Profile8Wide"/>) a measurement
-    /// rather than a rebuild — the same compiled cartridge, pointed at a different console,
-    /// lays itself out differently without recompiling a line.</para>
+    /// what let the M4 resolution verdict be taken by measurement rather than by rebuild, and
+    /// it is what QUARP-16 will stand on — the same compiled cartridge, pointed at a console
+    /// built from a different <see cref="ConsoleProfile"/>, lays itself out differently without
+    /// recompiling a line.</para>
     /// </summary>
     public int ScreenWidth => _width;
 

@@ -54,11 +54,11 @@ public sealed class QuarpGame : Game
     /// simulation to stop — the CLI rejects that combination before it gets here.
     /// </summary>
     /// <param name="profile">
-    /// Which console to build. Null means <see cref="ConsoleProfile.Profile8"/>, the spec.
-    /// The only other value in M4 is the dev-only <see cref="ConsoleProfile.Profile8Wide"/>
-    /// behind <c>--profile 8w</c> (M4 work order, Р6): it exists so the 128x72 verdict can be
-    /// taken by looking at the same game on both screens rather than at thresholds on paper,
-    /// and it is deliberately not part of the spec, CI, or any golden.
+    /// Which console to build. Null means <see cref="ConsoleProfile.Profile8"/> — 160x90, the
+    /// spec, and the only console the CLI opens today. It stays a parameter rather than a read
+    /// of the static because the profile decides every pixel and every frame hash: QUARP-16
+    /// (M6) and any test that builds a screen of its own have to be able to say which console
+    /// they mean at the one place a console is created.
     /// </param>
     public QuarpGame(string? cartPath = null, int? breakAtTick = null, ConsoleProfile? profile = null)
     {
@@ -87,10 +87,17 @@ public sealed class QuarpGame : Game
             _palette[i] = new Color((byte)(rgb >> 16), (byte)(rgb >> 8), (byte)rgb);
         }
 
+        // x8 of 160x90 is 1280x720 exactly: a whole-pixel scale that is also a standard display
+        // mode, so the window fills a 720p screen with nothing left over and needs no letterbox.
+        // The scale is chosen for the target hardware of M5 — the uConsole's panel is 1280x720 —
+        // and larger desktops get their multiple by resizing, which the presenter already picks
+        // per frame (ARCHITECTURE §5). Only integer scales are ever used: a fractional one
+        // resamples a pixel-art frame into blur.
+        const int WindowScale = 8;
         var graphics = new GraphicsDeviceManager(this)
         {
-            PreferredBackBufferWidth = _profile.Width * 10,   // 1280x720 — pixel-perfect x10
-            PreferredBackBufferHeight = _profile.Height * 10,
+            PreferredBackBufferWidth = _profile.Width * WindowScale,
+            PreferredBackBufferHeight = _profile.Height * WindowScale,
             SynchronizeWithVerticalRetrace = true,            // for the picture, not for the clock
         };
         graphics.ApplyChanges();

@@ -14,13 +14,20 @@
 //
 // --- what it plans -------------------------------------------------------------------
 //
-// The snake follows a Hamiltonian cycle of the 16x8 field: rows are swept right on even
+// The snake follows a Hamiltonian cycle of the 20x10 field: rows are swept right on even
 // rows and left on odd ones, and column 0 is the return lane from the bottom back to the
-// top. That tour visits all 8 + 15*8 = 128 cells and closes, so the snake can never hit a
+// top. That tour visits all 10 + 19*10 = 200 cells and closes, so the snake can never hit a
 // wall and can never hit its own body while the body is shorter than the field — the run
 // stays alive for as long as you ask, and eats every apple that lands in front of it. That
-// is the whole point: an idle recording of this cartridge is dead by tick 64 and its frames
+// is the whole point: an idle recording of this cartridge is dead by tick 88 and its frames
 // stop depending on the simulation (see ci.yml and README.md).
+//
+// Two properties of the field are load-bearing and both hold on 160x90. GridH must be even,
+// or the bottom row would sweep right and walk into the wall instead of into the return
+// lane. And the cart must start on an even row, because the snake starts facing right and
+// the tour can only be joined where it also goes right: a snake that starts on an odd row
+// is asked to reverse, the cartridge refuses the turn (that would be instant death), and
+// the run below dies at the wall with the loud message at the end of the loop.
 //
 // --- why it reads private fields -------------------------------------------------------
 //
@@ -38,8 +45,12 @@ using Quarp.Api;
 using Quarp.CartKit;
 using Quarp.Core;
 
-const int GridW = 16;
-const int GridH = 8;
+// The field the cartridge derives from a 160x90 screen: 160/8 columns, (90-8)/8 whole rows
+// under the HUD (carts/snake/src/main.cs, Init). These two lines are the one place where
+// this fixture repeats a fact that lives in the cart, and the planner is loud when they
+// disagree: the tour would leave the field and the snake would die inside the recording.
+const int GridW = 20;
+const int GridH = 10;
 const int DirLeft = 0, DirRight = 1, DirUp = 2, DirDown = 3, DirNone = -1;
 
 string cartPath = "carts/snake";
@@ -143,7 +154,9 @@ if (aliveThrough != ticks)
 {
     Console.Error.WriteLine(
         $"plan-golden: the snake died at tick {aliveThrough + 1} of {ticks}. The planned track is not "
-        + "a live-gameplay golden; fix the cycle or shorten --ticks before recording.");
+        + "a live-gameplay golden. Check first that GridW/GridH above still match the cart's field "
+        + $"({GridW}x{GridH} here) and that the cart still starts on an even, right-sweeping row; "
+        + "otherwise fix the cycle or shorten --ticks before recording.");
     return 1;
 }
 
@@ -153,9 +166,9 @@ text.Append(CultureInfo.InvariantCulture, $"""
     #
     #     dotnet run carts/snake/replays/plan-golden.cs --ticks {ticks}
     #
-    # The snake walks a Hamiltonian cycle of the 16x8 field: rows swept right on even rows
-    # and left on odd ones, column 0 the return lane back to the top. A closed tour of all
-    # 128 cells cannot hit a wall and cannot hit its own body while the body is shorter than
+    # The snake walks a Hamiltonian cycle of the {GridW}x{GridH} field: rows swept right on even
+    # rows and left on odd ones, column 0 the return lane back to the top. A closed tour of all
+    # {GridW * GridH} cells cannot hit a wall and cannot hit its own body while the body is shorter than
     # the field, so this run is alive from the first tick to the last and eats every apple
     # that lands in front of it. Over {ticks} ticks it scores {score} and grows from 3 to {length}.
     #
@@ -191,7 +204,7 @@ Console.WriteLine(
 return 0;
 
 // The cycle. Every cell has exactly one successor, and following them from any cell walks
-// all 128 and returns to the start.
+// all GridW*GridH of them and returns to the start.
 static int NextDir(int x, int y)
 {
     if (x == 0)

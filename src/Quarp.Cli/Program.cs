@@ -36,34 +36,12 @@ switch (command)
         // it. NumberStyles.None is the strict half: no sign, no whitespace, no separators, so
         // `--break-at +5` and `--break-at 1,000` fail here, naming the value, instead of being
         // read as something the author did not write.
-        const string RunUsage = "usage: quarp run [path] [--break-at N] [--profile 8|8w]";
+        const string RunUsage = "usage: quarp run [path] [--break-at N]";
         string? cartPath = null;
         int? breakAt = null;
-        ConsoleProfile? profile = null;
         for (int i = 1; i < args.Length; i++)
         {
-            // --profile is the dev-only half of the resolution question (M4 work order, Р6).
-            // 8w is 160x90: not in the spec, not in CI, not in any golden — it exists so the
-            // same cartridge can be looked at on both screens before the verdict, because a
-            // verdict taken from thresholds on paper is a verdict nobody can check. After the
-            // verdict this flag and its profile leave in one commit, whichever way it goes.
-            if (args[i] == "--profile")
-            {
-                string? name = i + 1 < args.Length ? args[i + 1] : null;
-                profile = name switch
-                {
-                    "8" => ConsoleProfile.Profile8,
-                    "8w" => ConsoleProfile.Profile8Wide,
-                    _ => null,
-                };
-                if (profile is null)
-                {
-                    Console.Error.WriteLine($"quarp run: --profile takes 8 or 8w ({RunUsage})");
-                    return 1;
-                }
-                i++;
-            }
-            else if (args[i] == "--break-at")
+            if (args[i] == "--break-at")
             {
                 if (i + 1 >= args.Length
                     || !int.TryParse(args[i + 1], NumberStyles.None, CultureInfo.InvariantCulture, out int parsedBreak)
@@ -94,7 +72,7 @@ switch (command)
         QuarpGame game;
         try
         {
-            game = new QuarpGame(cartPath, breakAt, profile);
+            game = new QuarpGame(cartPath, breakAt);
         }
         catch (CartLoadException e)
         {
@@ -286,9 +264,6 @@ switch (command)
         Console.WriteLine("usage:");
         Console.WriteLine("  quarp run [path]             open the console window (test pattern without a path,");
         Console.WriteLine("                               a cart folder or .quarp8 file with one)");
-        Console.WriteLine("  quarp run <path> --profile 8w");
-        Console.WriteLine("                               run on the dev-only 160x90 console instead of 128x72");
-        Console.WriteLine("                               (M4 resolution spike; not part of the spec)");
         Console.WriteLine("  quarp run <path> --break-at N");
         Console.WriteLine("                               same, but pause before Update of tick N and stay there");
         Console.WriteLine("                               (docs/DEBUGGING.md — debugging in time)");

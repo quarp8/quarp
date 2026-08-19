@@ -18,6 +18,18 @@ namespace Quarp.Core.Tests;
 /// </summary>
 public class FrameHashTests
 {
+    /// <summary>
+    /// FNV-1a 64 of an all-zero QUARP-8 frame — 160 x 90 = 14400 zero bytes since ADR-021 moved
+    /// the screen (it read f3fb6a6deb5af325 while the frame was 128 x 72 = 9216 bytes).
+    ///
+    /// <para>It is neither an anchor of the milestone nor a digest of silence: those are pinned in
+    /// docs/PLAYBOOK.md §4 and do not move with the screen. This is the "nothing was drawn" value,
+    /// and it is here rather than in two places because <c>AudioBlockTests</c> asserts the same
+    /// number to show that teaching <see cref="FrameHash"/> about audio did not disturb the frame
+    /// path — one fact, one owner.</para>
+    /// </summary>
+    internal const string EmptyProfile8Frame = "2642655708b56825";
+
     [Theory]
     // FNV-1a 64 reference vectors: the offset basis is the hash of the empty input, and the
     // rest are the standard published cases.
@@ -43,11 +55,12 @@ public class FrameHashTests
     [Fact]
     public void AnEmptyProfile8FrameHashesToAKnownConstant()
     {
-        // 128 x 72 zero bytes. Guards the framebuffer's size as much as the hash: a profile
-        // that quietly changed dimensions would land here first.
+        // 160 x 90 zero bytes. Guards the framebuffer's size as much as the hash: a profile that
+        // quietly changed dimensions would land here first — which is precisely what happened when
+        // ADR-021 changed it on purpose, and this is the test that said so.
         var framebuffer = new Framebuffer(ConsoleProfile.Profile8);
-        Assert.Equal(128 * 72, framebuffer.Pixels.Length);
-        Assert.Equal("f3fb6a6deb5af325", FrameHash.Of(framebuffer));
+        Assert.Equal(160 * 90, framebuffer.Pixels.Length);
+        Assert.Equal(EmptyProfile8Frame, FrameHash.Of(framebuffer));
     }
 
     [Fact]

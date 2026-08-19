@@ -28,7 +28,9 @@ public sealed class ConsoleProfile
     /// of M5.</para>
     ///
     /// <para><b>The 11.25 rows are permanent, not a bug to fix.</b> 90 is not a multiple of 8,
-    /// so a full-screen 8x8 tile grid ends in a row cut to 2 px, the way TIC-80's does. Tile
+    /// so a full-screen 8x8 tile grid ends in a row cut to 2 px — our own trade, with no niche
+    /// precedent: TIC-80 chose the opposite (240x136 keeps the grid whole at 30x17 tiles and
+    /// gives up exact 16:9 and integer display scaling for it). Tile
     /// games are expected to live with it rather than pad the screen: derive the row count from
     /// the field the game actually draws into, <c>visibleRows = fieldH / TileSize</c>, then draw
     /// one cell past it each way — a camera clamped against a field that is not a whole number

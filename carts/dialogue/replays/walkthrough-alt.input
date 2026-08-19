@@ -1,7 +1,7 @@
 # carts/dialogue - walkthrough, second answer: the same reading, the OTHER branch
 # ("Row out with the lantern"), which finishes on the ending THE SHOAL LIGHT.
 #
-#     quarp replay record carts/dialogue -o /tmp/wa.qrpr --ticks 800 #         --input-file carts/dialogue/replays/walkthrough-alt.input
+#     quarp replay record carts/dialogue -o /tmp/wa.qrpr --ticks 800 --input-file carts/dialogue/replays/walkthrough-alt.input
 #
 # Identical to walkthrough.input except for one thing: a Down tap is dropped in between
 # every pair of X taps. Down does nothing at all while a line is being read, and the

@@ -1,7 +1,7 @@
 # carts/dialogue - walkthrough: read the scene to the end and take the FIRST answer
 # ("Burn it all in the tower"), which finishes on the ending THE TOWER HELD.
 #
-#     quarp replay record carts/dialogue -o /tmp/w.qrpr --ticks 800 #         --input-file carts/dialogue/replays/walkthrough.input
+#     quarp replay record carts/dialogue -o /tmp/w.qrpr --ticks 800 --input-file carts/dialogue/replays/walkthrough.input
 #
 # Grammar (quarp replay record --input-file): tick:buttons, entries separated by commas
 # or newlines, '#' starts a comment. Buttons are L R U D O X S; every press is a *tap*

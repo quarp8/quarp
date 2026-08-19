@@ -10,6 +10,15 @@
 // it "regenerate the golden" is not an instruction anyone can follow. It is a .NET 10
 // file-based app (`#:project` above), so it needs no csproj of its own and is not part of
 // the solution. It also lives outside carts/snake/src, so it is not part of the cartridge:
+//
+// KNOWN OFF-BY-ONE (stage-4.0 adversary, 2026-08-18): this planner applies entry `T:` on its
+// own tick T, but `quarp replay record` applies it on cartridge tick T+1 -- so the run the
+// aliveThrough check below validates is shifted one tick from the run that gets recorded.
+// Today that is harmless only because turns are pressed one tick after a step and the minimum
+// step interval is 3, leaving exactly one tick of slack. Do NOT lower MinStepInterval or
+// reorder BufferTurn/Step without fixing this alignment first -- and fixing it changes the
+// emitted bytes, which re-records the golden and re-pins anchors: do it only together with
+// the next planned golden re-record (tasks/open/debt-move-cleanup.md).
 // the loader reads only src/**/*.cs and the cart identity hashes only those plus the assets.
 //
 // --- what it plans -------------------------------------------------------------------

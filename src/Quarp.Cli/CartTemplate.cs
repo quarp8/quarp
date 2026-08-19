@@ -164,7 +164,7 @@ public static class CartTemplate
             "tasks": [
                 {
                     // `quarp build` loads the cart, compiles src/**/*.cs with the same compiler
-                    // `quarp run` uses, checks the 64 KB code budget and the generated banks
+                    // `quarp run` uses, checks the 256 KB code budget and the generated banks
                     // (sfx.bin, music.bin, map.bin) against the text they came from, and stops.
                     // No window, no save.dat, no hashes on stdout - and, unlike the
                     // `sim --ticks 0` this replaced, not a single line of your cartridge's

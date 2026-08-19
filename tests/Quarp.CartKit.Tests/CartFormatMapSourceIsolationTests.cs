@@ -34,10 +34,17 @@ public class CartFormatMapSourceIsolationTests : IDisposable
     /// <summary>
     /// Lowest tile id written into the stand-in <c>map.csv</c>. Every value in it is a
     /// three-digit number, which does two jobs at once: it can never be mistaken for
-    /// <see cref="CompiledMapMarker"/> if the text ever leaked in as the map, and it makes the
-    /// file larger than the 64 KB code budget, so the reverse control below has real teeth.
+    /// <see cref="CompiledMapMarker"/> if the text ever leaked in as the map, and — together
+    /// with the padding <see cref="BuildMapCsv"/> appends — it makes the file larger than the
+    /// current code budget, so the reverse control below has real teeth.
     /// </summary>
     private const int CsvFirstTile = 100;
+
+    /// <summary>
+    /// Repeats of the two-byte token <c>"9,"</c> appended as a trailing padding line in
+    /// <see cref="BuildMapCsv"/>. See the padding remark on that method for why this exists.
+    /// </summary>
+    private const int PaddingTokenRepeats = 150_000;
 
     private readonly string _folder;
 
@@ -81,13 +88,21 @@ public class CartFormatMapSourceIsolationTests : IDisposable
     /// <summary>
     /// A full-size map export the way Tiled writes one on Windows: 72 rows of 256 comma-separated
     /// tile ids, CRLF line endings, no trailing comma, trailing newline (M4 work order Р11).
-    /// Every id is three digits, which puts the file over <see cref="CodeBudget.MaxBytes"/> —
-    /// 72 x 1023 characters of payload — and that size is load-bearing: it is what lets the
-    /// reverse control prove the four claims above can go red.
+    ///
+    /// <para>At the 256 KB code budget the M4 ratification-grill decision set 2026-08-19
+    /// (ADR-024), the row data alone no longer clears it: 72 rows of 256 three-digit ids is
+    /// ~73.8 KB, and even the widest real GID a Tiled CSV export can hold — a flipped tile's
+    /// leading minus sign plus ten digits, eleven characters — would only reach ~221 KB, still
+    /// under the budget. No legitimate single-layer 72x256 export can be the load-bearing
+    /// oversize fixture any more, so a trailing line of repeated digits and commas pads the
+    /// file past the budget. It is not written as a <c>#</c> comment on purpose: this file
+    /// never calls the map compiler, so nothing here needs the padding to look like a legal
+    /// comment, and plain digits/commas are ordinary tokens rather than a trivia kind whose
+    /// classification this test would otherwise have to reason about.</para>
     /// </summary>
     private static string BuildMapCsv()
     {
-        var builder = new StringBuilder(CartData.MapHeight * (CartData.MapWidth * 4 + 2));
+        var builder = new StringBuilder(CartData.MapHeight * (CartData.MapWidth * 4 + 2) + PaddingTokenRepeats * 2);
         for (int y = 0; y < CartData.MapHeight; y++)
         {
             for (int x = 0; x < CartData.MapWidth; x++)
@@ -100,6 +115,14 @@ public class CartFormatMapSourceIsolationTests : IDisposable
             }
             builder.Append("\r\n");
         }
+        // Padding: see the remark above. Plain digits and commas rather than a "#" so nothing
+        // about this depends on how the parser classifies "#" trivia -- every byte here is an
+        // ordinary token, never trivia, so CodeBudget.Measure counts every one of them.
+        for (int i = 0; i < PaddingTokenRepeats; i++)
+        {
+            builder.Append("9,");
+        }
+        builder.Append("\r\n");
         return builder.ToString();
     }
 

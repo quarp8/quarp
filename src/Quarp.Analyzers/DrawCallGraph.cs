@@ -44,7 +44,7 @@ namespace Quarp.Analyzers;
 ///
 /// <para><b>Cost.</b> One pass over every syntax node of the cartridge with a symbol lookup
 /// per name, built at most once per compilation and only when a mutating call actually
-/// appears outside a <c>Draw</c> override. A cartridge is at most 64 KB of code (SPEC-8 §6),
+/// appears outside a <c>Draw</c> override. A cartridge is at most 256 KB of code (SPEC-8 §6),
 /// which puts the pass in the tens of milliseconds.</para>
 /// </summary>
 internal sealed class DrawCallGraph

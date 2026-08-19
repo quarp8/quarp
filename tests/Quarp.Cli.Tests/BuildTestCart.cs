@@ -168,11 +168,14 @@ internal sealed class BuildTestCart : IDisposable
     }
 
     /// <summary>
-    /// More than 64 KB of source that still parses, so the cartridge fails on the code budget
-    /// (SPEC-8 §6) and not on anything else. Fields rather than comments: comments are free by
-    /// design and would produce a cart that passes.
+    /// More than the code budget (SPEC-8 §6) of source that still parses, so the cartridge
+    /// fails on the code budget and not on anything else. Fields rather than comments: comments
+    /// are free by design and would produce a cart that passes. The default field count clears
+    /// the 256 KB budget ratified 2026-08-19 (ADR-024) with margin — about 379 KB of generated
+    /// source against a 256 KB cap — the same ~1.45x headroom the previous 64 KB-era default
+    /// (2500 fields, ~97.5 KB) held over its own cap.
     /// </summary>
-    public static string OversizedSource(int fields = 2500)
+    public static string OversizedSource(int fields = 10000)
     {
         var text = new StringBuilder(fields * 24 + 64);
         text.Append("namespace Fixture;\n\npublic static class Bulk\n{\n");

@@ -14,7 +14,7 @@ namespace Quarp.Api;
 /// permanent, tiny cartridge-facing surface (SPEC-8) and stays that way; <see cref="Std"/> is
 /// ordinary C# compiled once into <c>Quarp.Api.dll</c> that can grow after ratification
 /// without breaking that promise. It also costs a cartridge nothing: a call site is a few
-/// bytes against the 64 KB code budget, not a copy of the loop it used to paste in.</para>
+/// bytes against the 256 KB code budget, not a copy of the loop it used to paste in.</para>
 ///
 /// <para><b>Two shapes.</b> The drawing helpers (<see cref="PrintInt"/>,
 /// <see cref="PrintCentered(IConsoleApi,string,int,byte,Font)"/>,

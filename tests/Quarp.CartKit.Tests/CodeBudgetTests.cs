@@ -4,7 +4,7 @@ using Xunit;
 namespace Quarp.CartKit.Tests;
 
 /// <summary>
-/// The 64 KB code limit (SPEC-8 §6): comments are free, line endings are normalized,
+/// The 256 KB code limit (SPEC-8 §6): comments are free, line endings are normalized,
 /// and the cap itself is enforced through <see cref="CodeBudget.Validate"/>.
 /// </summary>
 public class CodeBudgetTests
@@ -93,7 +93,7 @@ public class CodeBudgetTests
         big.Append("};}");
         var e = Assert.Throws<CartLoadException>(() => CodeBudget.Validate(Sources(big.ToString())));
         Assert.Contains("code budget exceeded", e.Message);
-        Assert.Contains("65536", e.Message);
+        Assert.Contains("262144", e.Message);
     }
 
     [Fact]
@@ -105,7 +105,7 @@ public class CodeBudgetTests
         source.Append(' ', CodeBudget.MaxBytes - codeBytes); // whitespace counts, unlike comments
         var sources = Sources(source.ToString());
         Assert.Equal(CodeBudget.MaxBytes, CodeBudget.Measure(sources));
-        CodeBudget.Validate(sources);           // exactly 65536: allowed
+        CodeBudget.Validate(sources);           // exactly 262144: allowed
         source.Append(' ');
         Assert.Throws<CartLoadException>(() => CodeBudget.Validate(Sources(source.ToString())));
     }

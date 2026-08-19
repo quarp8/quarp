@@ -11,7 +11,7 @@ namespace Quarp.CartKit.Tests;
 ///
 /// <para>The failure this guards against is not theoretical: an IDE that builds the project
 /// fills <c>.quarp/obj/</c> with generated <c>.cs</c> files, and a loader that globbed
-/// <c>**/*.cs</c> would compile <c>AssemblyInfo.cs</c> into the cartridge, blow the 64 KB code
+/// <c>**/*.cs</c> would compile <c>AssemblyInfo.cs</c> into the cartridge, blow the code
 /// budget, and hot-reload in a loop as the IDE rebuilt.</para>
 /// </summary>
 public class DevProjectIsolationTests : IDisposable

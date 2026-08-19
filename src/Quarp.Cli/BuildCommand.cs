@@ -20,7 +20,7 @@ namespace Quarp.Cli;
 /// <para><b>Why it is not a second validator.</b> Every judgement below already existed in
 /// <c>Quarp.CartKit</c> and is reached through the same entry points the console and the packer
 /// reach it through: <see cref="CartSource.Load"/> for the manifest, the asset sizes, the audio
-/// banks and the 64 KB code budget (SPEC-8 §6); <see cref="CartCompiler.Compile"/> for C# errors
+/// banks and the 256 KB code budget (SPEC-8 §6); <see cref="CartCompiler.Compile"/> for C# errors
 /// and the QRP1001-QRP1004 determinism rules; <see cref="CartHost.Load"/> for "exactly one
 /// <c>Cartridge</c> subclass, and it can be constructed"; <see cref="AudioTextCompiler"/> and
 /// <see cref="MapTextCompiler"/> for the banks. This command contributes a report and an exit

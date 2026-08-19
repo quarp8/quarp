@@ -195,7 +195,84 @@ public class CartSourceTests : IDisposable
         string package = Path.Combine(_root, "big.quarp8");
         File.WriteAllBytes(package, new byte[Quarp8Package.MaxPackageBytes + 1]);
         var e = Assert.Throws<CartLoadException>(() => CartSource.Load(package));
-        Assert.Contains("131072", e.Message);
+        Assert.Contains("327680", e.Message);
+    }
+
+    /// <summary>
+    /// The companion to <see cref="OversizedPackageIsRejectedOnLoad"/>: the gate is
+    /// <c>&gt;</c>, not <c>&gt;=</c>, so a file of exactly <see cref="Quarp8Package.MaxPackageBytes"/>
+    /// bytes must clear the size check. It still fails one gate later — raw zero bytes are not
+    /// a valid zip — and that different failure is the proof the size check itself let it
+    /// through rather than the test accidentally passing for the wrong reason.
+    /// </summary>
+    [Fact]
+    public void ExactlyAtTheLimitPassesTheSizeGate()
+    {
+        string package = Path.Combine(_root, "exact.quarp8");
+        File.WriteAllBytes(package, new byte[Quarp8Package.MaxPackageBytes]);
+        var e = Assert.Throws<CartLoadException>(() => CartSource.Load(package));
+        Assert.DoesNotContain("327680", e.Message);
+        Assert.Contains("not a valid .quarp8", e.Message);
+    }
+
+    /// <summary>
+    /// <see cref="Quarp8Package.Pack"/>'s own size gate — distinct from the one
+    /// <see cref="CartSource.Load(string)"/> applies to an already-built <c>.quarp8</c>
+    /// (<see cref="OversizedPackageIsRejectedOnLoad"/> above): this one fires on the file
+    /// <c>Pack</c> itself just zipped, and its message says "packed size" rather than "package
+    /// is". Comments are free for the code budget, but still travel inside the packed <c>.cs</c>
+    /// file — a giant comment is the one way to grow a package past its own limit without
+    /// tripping the (unrelated, and much smaller) code budget first, which is exactly the case
+    /// the ADR-024 arithmetic in <see cref="Quarp8Package"/>'s own doc comment calls out as the
+    /// reason this check exists at all.
+    ///
+    /// <para>The padding is <paramref name="rawBytes"/> hex digits inside a <c>/* ... */</c>
+    /// block comment: a uniform 16-symbol alphabet whose Shannon entropy is exactly 4 bits per
+    /// byte, so no lossless compressor on any platform can pack it below half its raw size —
+    /// that information-theoretic bound, not a number measured on one machine, is what keeps
+    /// <see cref="PackSucceedsUnderTheLimit"/> and <see cref="PackThrowsOverTheLimit"/> honest
+    /// across architectures: 300 KB of padding stays under the package limit even at literally
+    /// <em>zero</em> compression, and 800 KB clears it even at compression's best possible
+    /// outcome, so neither depends on which zlib build did the compressing.</para>
+    /// </summary>
+    private static string HexCommentPadded(int rawBytes)
+    {
+        var rng = new Random(12345);
+        var sb = new StringBuilder(rawBytes + 128);
+        sb.Append("using Quarp.Api;\npublic sealed class TestCart : Cartridge { }\n/*\n");
+        const string hex = "0123456789abcdef";
+        for (int i = 0; i < rawBytes; i++)
+        {
+            sb.Append(hex[rng.Next(hex.Length)]);
+        }
+        sb.Append("\n*/\n");
+        return sb.ToString();
+    }
+
+    /// <summary>
+    /// The control that keeps <see cref="PackThrowsOverTheLimit"/> meaningful: a cart carrying
+    /// real (if padded) content still packs when it is genuinely under the limit, so the throw
+    /// below is the gate doing its job and not a check that fires unconditionally.
+    /// </summary>
+    [Fact]
+    public void PackSucceedsUnderTheLimit()
+    {
+        string folder = MakeCartFolder(mainCs: HexCommentPadded(300_000));
+        string package = Path.Combine(_root, "under.quarp8");
+        Quarp8Package.Pack(folder, package);
+        Assert.True(File.Exists(package));
+        Assert.InRange(new FileInfo(package).Length, 1, Quarp8Package.MaxPackageBytes);
+    }
+
+    [Fact]
+    public void PackThrowsOverTheLimit()
+    {
+        string folder = MakeCartFolder(mainCs: HexCommentPadded(800_000));
+        string package = Path.Combine(_root, "over.quarp8");
+        var e = Assert.Throws<CartLoadException>(() => Quarp8Package.Pack(folder, package));
+        Assert.Contains("packed size is", e.Message);
+        Assert.Contains("327680", e.Message);
+        Assert.False(File.Exists(package), "Pack must delete the oversized file it just wrote");
     }
 
     [Fact]

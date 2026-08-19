@@ -41,7 +41,7 @@ namespace Quarp.CartKit;
 /// running during hot reload.
 ///
 /// Decision (repair pass, D4): cartridges compile with
-/// <see cref="OptimizationLevel.Debug"/>. Carts are at most 64 KB of code, so the
+/// <see cref="OptimizationLevel.Debug"/>. Carts are at most 256 KB of code, so the
 /// micro-performance of optimized IL is irrelevant next to the milestone criterion that
 /// a cart exception shows an accurate line number.
 ///
@@ -190,7 +190,7 @@ public static class CartCompiler
 
         var options = new CSharpCompilationOptions(
             OutputKind.DynamicallyLinkedLibrary,
-            optimizationLevel: OptimizationLevel.Debug,   // D4: accurate stack-trace lines beat micro-perf on a 64 KB cart
+            optimizationLevel: OptimizationLevel.Debug,   // D4: accurate stack-trace lines beat micro-perf on a 256 KB cart
             allowUnsafe: false,
             deterministic: true);
         if (FindCartRoot(sources) is string cartRoot)

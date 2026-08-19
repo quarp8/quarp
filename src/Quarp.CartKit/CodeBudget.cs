@@ -5,13 +5,20 @@ using Microsoft.CodeAnalysis.CSharp;
 namespace Quarp.CartKit;
 
 /// <summary>
-/// The 64 KB code limit (SPEC-8 §6): UTF-8 byte count of all sources after stripping
+/// The 256 KB code limit (SPEC-8 §6): UTF-8 byte count of all sources after stripping
 /// comment trivia via a Roslyn syntax tree (comments are free by design — the limit must
 /// not punish readability) and normalizing \r\n to \n.
+///
+/// <para>Raised from 64 KB by the owner's ratification-grill decision, 2026-08-19 (ADR-024):
+/// measured (not guessed) against this project's own byte-after-comments metric, a from-scratch
+/// Rogue 1980 — the simplest game in its genre — comes to 281 KB, and Pixel Dungeon — the
+/// genre's modern baseline — comes to 1220 KB of pure game logic. 64 KB rejected the genre
+/// outright. 256 KB fits Rogue-depth work written for this platform; Pixel-Dungeon-class scope
+/// is left to profile 16 (draft 512 KB), not stretched into profile 8.</para>
 /// </summary>
 public static class CodeBudget
 {
-    public const int MaxBytes = 65536;
+    public const int MaxBytes = 262144;
 
     /// <summary>Total budgeted bytes across all sources.</summary>
     public static int Measure(IReadOnlyList<CartSourceFile> sources)

@@ -70,7 +70,7 @@ public sealed class BuildCommandTests
     }
 
     /// <summary>
-    /// The 64 KB code budget (SPEC-8 §6), which is a load-time limit rather than a compiler
+    /// The 256 KB code budget (SPEC-8 §6), which is a load-time limit rather than a compiler
     /// error and therefore arrives without a file or a line. It still has to say what happened
     /// in words an author can act on.
     /// </summary>

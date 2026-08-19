@@ -6,12 +6,18 @@ namespace Quarp.CartKit;
 /// Writes .quarp8 packages: a zip of the cart folder layout (manifest.json, src/**/*.cs,
 /// gfx.png, map.bin, flags.bin, sfx.bin, music.bin, cover.png), fully validated before
 /// writing — manifest, code budget, gfx palette, asset sizes, audio banks — and size-capped
-/// after (SPEC-8 §6: the packed file is at most 128 KB). Entry timestamps are fixed so
+/// after (SPEC-8 §6: the packed file is at most 320 KB). Entry timestamps are fixed so
 /// identical input folders pack into identical bytes.
+///
+/// <para>320 KB set by the owner's ratification-grill decision, 2026-08-19 (ADR-024), from
+/// the arithmetic "256 KB of raw code + ~31 KB of raw assets + margin": a cartridge at the
+/// code budget with every optional asset present still fits even with <b>zero</b> compression
+/// benefit, so <see cref="CodeBudget.MaxBytes"/> is the limit an author actually runs into —
+/// this check exists as a predictable backstop, not a limit anyone is meant to design against.</para>
 /// </summary>
 public static class Quarp8Package
 {
-    public const long MaxPackageBytes = 131072;
+    public const long MaxPackageBytes = 327680;
 
     private static readonly DateTimeOffset FixedEntryTime = new(2000, 1, 1, 0, 0, 0, TimeSpan.Zero);
 

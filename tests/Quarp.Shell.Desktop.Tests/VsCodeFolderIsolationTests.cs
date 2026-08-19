@@ -72,7 +72,7 @@ public class VsCodeFolderIsolationTests : IDisposable
 
         // Not something VS Code writes — it is the sharpest probe available for the claim the
         // loader actually makes. If the glob were ever widened from src/ to the whole folder,
-        // this file alone would blow the 64 KB budget *and* add a second Cartridge subclass,
+        // this file alone would blow the code budget *and* add a second Cartridge subclass,
         // so the cart would fail loudly instead of quietly compiling someone's settings.
         var intruder = new StringBuilder(CodeBudget.MaxBytes + 4096);
         intruder.Append("public sealed class VsCodeIntruder : Quarp.Api.Cartridge {\n");

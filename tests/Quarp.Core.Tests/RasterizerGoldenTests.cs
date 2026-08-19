@@ -228,12 +228,12 @@ public class RasterizerGoldenTests
         ["map"] = "2e911b814e5ef34b",
         ["clipcam"] = "c3e382cde046344b",
         ["palette"] = "e50a7b4ebb0452eb",
-        // Re-pinned from 456fbad923d44569 by the lowercase redraw of 2026-08-18
-        // (tasks/open/bug-font-readability.md): this is the only scene here that prints lowercase
-        // ("line one/two/3", "edge", "low"), and 20 of the 26 lowercase glyphs changed shape.
-        // Verified the delta is the font and nothing else — "clipcam" and "combo" print too, in
-        // capitals and digits only, and both kept their hashes, as did every other scene.
-        ["text"] = "c1870e56815f1682",
+        // This pin has a history: re-pinned to c1870e56815f1682 by the 2026-08-18 lowercase
+        // redraw, then re-pinned BACK the same day when the owner's eye rejected the redraw
+        // (common letters like 'e' collapsed into blobs; the original's four weak glyphs were
+        // the lesser evil). The original lowercase set is restored bit-for-bit; point-fixes to
+        // individual glyphs go through the owner's eye before landing — see tasks/DONE.md.
+        ["text"] = "456fbad923d44569",
         // New pin, not a re-pin: the 4x6 font arrived with tasks/open/08-second-font.md and this
         // scene is the first thing that draws it. Nothing above moved — the small font path is
         // byte-for-byte what it was, which the eight anchors and all nine older scenes say too.

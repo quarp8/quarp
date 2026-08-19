@@ -102,9 +102,6 @@ public sealed class ShmupGame : Cartridge
     private const byte ColHud = 7;
     private const byte ColHudFlash = 10;
     private const byte ColDivider = 1;
-    private const byte ColShip = 12;
-    private const byte ColEnemyA = 8;
-    private const byte ColEnemyB = 9;
     private const byte ColPlayerBullet = 10;
     private const byte ColEnemyBullet = 14;
     private const byte ColPanel = 6;
@@ -118,11 +115,15 @@ public sealed class ShmupGame : Cartridge
 
     // Row-major 8x8 pixel patterns for Std.PaintPattern (M4 Р28: sprites are code, not a PNG
     // this cartridge doesn't own). '.' skips the pixel (the sheet's default 0, transparent under
-    // the default Palt); every other character is a hex palette slot — one fixed digit per
-    // sprite here (Std.PaintPattern's canonical dialect is a color per pixel; this cartridge only
-    // ever needs one color per sprite, so every non-'.' character is that sprite's own color:
-    // 'c' = ColShip = 12, '8' = ColEnemyA = 8, '9' = ColEnemyB = 9 — reformatted from the original
-    // '#'-per-pixel dialect, same shapes, same colors, same Sset sequence).
+    // the default Palt); every other character is a hex palette slot written straight into the
+    // rows below, one fixed digit per sprite (Std.PaintPattern's canonical dialect is a color
+    // per pixel; this cartridge only ever needs one color per sprite): 'c' (12) is the ship,
+    // '8' and '9' (the same numbers) are the two enemy rows — reformatted from the original
+    // '#'-per-pixel dialect, same shapes, same colors, same Sset sequence. No ColShip/ColEnemyA/
+    // ColEnemyB constant backs these digits any more (adversary review, M4 stage 4.1 fix wave,
+    // card В1): once BuildSprites moved to Std.PaintPattern and stopped taking a color argument,
+    // nothing else in the file read them, and the only place left to spell the color is the hex
+    // digit next to the pixel it colors.
     private static readonly string[] PlayerPattern =
     {
         "...cc...",

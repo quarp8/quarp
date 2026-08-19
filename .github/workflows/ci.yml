@@ -158,9 +158,11 @@ jobs:
         # build-only version. The 60-tick sim runs Init plus a second of updates; its exit
         # code is the whole assertion. Demo frame/PCM hashes are still deliberately NOT
         # pinned: the original deferral ("until the resolution verdict", R20) has expired --
-        # ADR-021 is decided -- but the demos change once more when the stage-4 standard
-        # library is cut from their repeated code. Pinning lands after that conversion;
-        # tasks/open/16-pin-demo-walkthroughs.md owns the promise.
+        # ADR-021 is decided, and the second condition this comment used to wait on in future
+        # tense ("the demos change once more when the stage-4 standard library is cut from
+        # their repeated code") is met by stage 4.1 (Quarp.Api.Std, all five converted demos'
+        # frame/PCM hashes proven byte-identical to before the conversion). Card 16 --
+        # tasks/open/16-pin-demo-walkthroughs.md -- is the next step, not this workflow's.
         run: |
           set -euo pipefail
           for cart in carts/*/; do

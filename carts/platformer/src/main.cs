@@ -19,9 +19,12 @@ namespace Platformer;
 /// drops you down one, and the bottom of a chimney is a spike pit. Surviving a fall means
 /// steering out of the chimney onto a platform you can see coming — so the honest question is
 /// how many ticks of warning the screen gives at terminal speed. With the camera centering the
-/// player and nothing else, 128x72 gives 28 visible pixels below the feet and terminal fall is
-/// 3 px/tick: <b>9.33 ticks, 156 ms</b>, which is under human reaction time and under the
-/// 15-tick floor Р7 set in advance. The camera therefore leads the fall (see
+/// player and nothing else, 160x90 gives 37 visible pixels below the feet and terminal fall is
+/// 3 px/tick: <b>12.33 ticks, 206 ms</b> — short of the 15-tick floor Р7 set in advance (the
+/// historical 128x72 measurement was worse still, 28 px / 9.33 ticks / 156 ms; the full
+/// arithmetic and the recovery-time comparison built on both numbers, the one that decided
+/// ADR-021, is worked out in this cartridge's own <c>README.md</c> and preserved as history in
+/// <c>docs/milestones/M4-MEASUREMENTS.md</c>, not repeated here). The camera therefore leads the fall (see
 /// <see cref="CamLeadTicks"/>), and that lead is measured and reported rather than hidden: the
 /// physics below was chosen to be genre-typical and was not moved to meet the threshold (Р19).
 /// </para>

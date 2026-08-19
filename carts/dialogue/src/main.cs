@@ -168,12 +168,16 @@ public sealed class TwoLights : Cartridge
 
     // --- portrait art ------------------------------------------------------------------
     // One character per pixel, Std.PaintPattern's canonical dialect (M4 Р28): '.' skips the
-    // pixel, 'a'-'f' write a palette slot. The two eye pixels in each portrait were written as
-    // literal '0' before this cartridge used Std.PaintPattern — this file's own painter treated
-    // '0' as "leave it transparent" too (color 0 is never a real write here, unlike the
-    // platformer's canonical dialect where '0' is a real color), so converting those two
-    // characters to '.' reproduces the exact same Sset sequence rather than growing a second
-    // "'0' means skip" dialect for Std.PaintPattern to support.
+    // pixel; every hex digit '0'-'9'/'a'-'f' writes that palette slot, '0' included -- it is a
+    // real, opaque write, not a second spelling of skip (adversary review, M4 stage 4.1 fix
+    // wave, card З3: the previous wording here only mentioned 'a'-'f', which underclaimed what
+    // the dialect actually accepts and this art actually uses, e.g. '6', '3', '4', '2', '9'
+    // below). That is a real change from this cartridge's own painter before the Std
+    // conversion, which DID treat '0' as "leave it transparent" (color 0 was never a real write
+    // there, unlike the platformer's canonical dialect where '0' is a real color): the two eye
+    // pixels in each portrait were literal '0' under that old rule, and converting them to '.'
+    // reproduces the exact same Sset sequence under Std.PaintPattern's rule instead of growing
+    // a second "'0' means skip" dialect for the library to support.
 
     private static readonly string[] MaraArt =
     {
@@ -211,9 +215,11 @@ public sealed class TwoLights : Cartridge
         "...2222222222...",
         "....22222222....",
         ".....222222.....",
-        // Rows 14-15 sit at y=22-23, at or below the horizon (DrawSea starts at
-        // _horizonY=20 for the 128x72 layout): '4' there is ColSea, the exact slot the
-        // sea itself is filled with, so whenever Osk is undimmed (he is speaking, or
+        // Rows 14-15 sit at y=22-23, at or below the horizon (DrawSea starts at _horizonY,
+        // computed from ScreenHeight in ComputeLayout -- 29 px at 160x90, not the 20 px this
+        // comment named before the console's one resolution move, ADR-021): '4' there is
+        // ColSea, the exact slot the sea itself is filled with, so whenever Osk is undimmed (he
+        // is speaking, or
         // Draw is in the ending, where CurrentSpeaker is Nobody and nobody is dimmed)
         // that collar trim renders in the sea's own master color and vanishes into it —
         // tasks/open/bug-dialogue-portrait-flicker.md, hat/body flicker. '2' (steel,

@@ -721,14 +721,27 @@ public sealed class DiggerGame : Cartridge
     /// Half the rows above rather than a third is deliberate: on eight visible rows that buys
     /// four cells of warning about what is coming down, and everything in this game comes
     /// down.</para>
+    ///
+    /// <para><b>A cave no bigger than the screen pins the camera to 0</b> rather than clamping
+    /// into a negative range (adversary review, M4 stage 4.1 fix wave, card В2): the limit each
+    /// axis clamps against is <c>levelSize - screenSize</c>, which goes negative once the level
+    /// is smaller than the window, and <c>Std.Clamp(value, 0, negativeLimit)</c> alone does not
+    /// reliably pin to 0 for every <c>value</c> — see <see cref="Std.Clamp(int,int,int)"/>'s own
+    /// doc comment for why. <c>carts/platformer/src/main.cs</c>'s <c>CameraX</c>/<c>CameraY</c>
+    /// already guard the same way (<c>limit &lt;= 0 ? 0 : Std.Clamp(...)</c>); this cartridge's
+    /// 40x24 cave is bigger than every screen size QUARP-8 has ever reported, so the guard is
+    /// dormant on every real level, and the fix moves none of this cartridge's frame or audio
+    /// hashes — it only stops the camera from anything unreasonable on a smaller map.</para>
     /// </summary>
     private void DrawCave()
     {
         int fieldH = ScreenHeight - HudH;
         int visibleCols = ScreenWidth / TileSize;
         int visibleRows = fieldH / TileSize;
-        int camX = Std.Clamp((_px - (visibleCols / 2)) * TileSize, 0, (_levelW * TileSize) - ScreenWidth);
-        int camY = Std.Clamp((_py - (visibleRows / 2)) * TileSize, 0, (_levelH * TileSize) - fieldH);
+        int limitX = (_levelW * TileSize) - ScreenWidth;
+        int limitY = (_levelH * TileSize) - fieldH;
+        int camX = limitX <= 0 ? 0 : Std.Clamp((_px - (visibleCols / 2)) * TileSize, 0, limitX);
+        int camY = limitY <= 0 ? 0 : Std.Clamp((_py - (visibleRows / 2)) * TileSize, 0, limitY);
 
         Clip(0, HudH, ScreenWidth, fieldH);
         Camera(camX, camY - HudH);              // world y = camY lands on the first row under the HUD

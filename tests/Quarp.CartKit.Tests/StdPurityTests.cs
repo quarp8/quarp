@@ -1,4 +1,8 @@
+using System.Buffers.Binary;
+using System.Collections.Immutable;
+using System.Linq;
 using System.Reflection;
+using System.Reflection.Emit;
 using Quarp.Api;
 using Xunit;
 
@@ -12,9 +16,13 @@ namespace Quarp.CartKit.Tests;
 ///     through the same <see cref="CartCompiler"/> a real cartridge compiles through, and
 ///     does it stay quiet when the same call is made from <c>Init</c> or <c>Update</c>,
 ///     where SPEC-8 §7 rule 2 says it belongs;</item>
-///   <item>does <c>Quarp.Api</c>'s public surface stay free of float/double/decimal, and does
-///     the assembly stay free of mutable static state — the two determinism invariants a
-///     library that grows without an ADR (ADR-019) needs enforced by a test, not by review.</item>
+///   <item>does <c>Quarp.Api</c>'s public surface stay free of float/double/decimal, does the
+///     compiled assembly stay free of float/double anywhere at all — including a private
+///     helper's local variable, which no signature-only scan can see (M4 stage 4.1 adversary
+///     review, card Б2) — and does the assembly stay free of mutable static state, including
+///     a <c>readonly</c> field whose declared type is itself a mutable container such as a
+///     plain array (card З4): the determinism invariants a library that grows without an ADR
+///     (ADR-019) needs enforced by a test, not by review.</item>
 /// </list>
 /// </summary>
 public class StdPurityTests
@@ -239,6 +247,217 @@ public class StdPurityTests
 
         Assert.True(offenders.Count == 0, "mutable static field(s): " + string.Join(", ", offenders));
     }
+
+    /// <summary>
+    /// <c>NoQuarpApiTypeHasAMutableStaticField</c> above accepts any <c>readonly</c> field
+    /// regardless of its type, including a plain array — but a <c>readonly</c> field reference
+    /// only stops the field itself from being reassigned; <c>Digits[0] = "oops"</c> still
+    /// compiles against a <c>private static readonly string[] Digits</c>, which is exactly the
+    /// hidden cross-run, cross-instance mutation SPEC-8 §7 cannot allow. <b>Adversary review, M4
+    /// stage 4.1 fix wave, card З4.</b> Scoped to <see cref="Std"/> itself rather than the whole
+    /// assembly: <c>Quarp.Api.SMath</c>'s precomputed sine/atan lookup tables are the same shape
+    /// (<c>private static readonly int[]</c>) and are out of this stage's file zone and out of
+    /// scope for this rule (SMath is not touched by M4 stage 4.1 — "SMath не трогаем", Р27) — a
+    /// whole-assembly version of this check would redden on code nobody asked this stage to
+    /// revisit. The permitted shapes are exactly the ones named in the work order: <c>string</c>,
+    /// primitives/enums, and other genuinely immutable types such as
+    /// <see cref="ImmutableArray{T}"/> (a value type with no indexer setter, unlike a CLR array —
+    /// <see cref="Type.IsArray"/> is <c>false</c> for it) or <see cref="Fix"/>.
+    /// </summary>
+    [Fact]
+    public void StdHasNoMutableStaticContainerField()
+    {
+        var offenders = new List<string>();
+        const BindingFlags flags =
+            BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.DeclaredOnly;
+
+        foreach (FieldInfo field in typeof(Std).GetFields(flags))
+        {
+            if (field.IsLiteral)
+            {
+                continue;   // const: baked into callers, no storage to mutate.
+            }
+            if (!field.IsInitOnly)
+            {
+                offenders.Add($"{field.Name} (not readonly)");
+                continue;
+            }
+            if (!IsAllowedImmutableStaticFieldType(field.FieldType))
+            {
+                offenders.Add($"{field.Name} (readonly, but {field.FieldType} is a mutable container)");
+            }
+        }
+
+        Assert.True(offenders.Count == 0, "Std static field(s) with hidden mutable state: " + string.Join(", ", offenders));
+    }
+
+    private static bool IsAllowedImmutableStaticFieldType(Type type)
+    {
+        if (type.IsArray)
+        {
+            return false;   // a plain CLR array: readonly reference, mutable contents.
+        }
+        if (type == typeof(string) || type.IsPrimitive || type.IsEnum || type == typeof(Fix))
+        {
+            return true;
+        }
+        // ImmutableArray<T> and friends: a value type, no indexer setter, genuinely immutable.
+        return type.IsGenericType && type.GetGenericTypeDefinition() == typeof(ImmutableArray<>);
+    }
+
+    // --- (г): IL-level float scan of the compiled Quarp.Api assembly (card Б2) -----------------
+
+    /// <summary>
+    /// <see cref="PublicSurfaceHasNoFloatingPointTypes"/> only sees signatures a caller can
+    /// reference — a <em>private</em> helper's <c>double</c> local, or a float computed and
+    /// converted away without ever naming a type in a signature, is invisible to it. This is the
+    /// same second net <c>Quarp.CartKit.CartCompiler.ScanFloats</c> (<c>CartCompiler.cs</c>
+    /// around line 760) runs against every compiled cartridge, aimed here at
+    /// <c>Quarp.Api.dll</c> itself: walk every method and constructor body — public and private
+    /// alike, via <see cref="BindingFlags.NonPublic"/> — for a <c>float</c>/<c>double</c> local
+    /// variable type (<see cref="IsFloatingPoint"/>, the same helper the signature scan above
+    /// uses) or a float-only opcode (<c>ldc.r4</c>/<c>ldc.r8</c>/<c>conv.r4</c>/<c>conv.r8</c>).
+    /// <para><b>Why this does not just call <c>CartCompiler.ScanFloats</c>.</b> That scanner and
+    /// its <c>IlFloatScan</c>/<c>FloatSignatureProbe</c> helpers are <c>internal</c> to
+    /// <c>Quarp.CartKit</c>, this test project has no <c>InternalsVisibleTo</c> grant for them,
+    /// and adding one is out of this stage's file zone (<c>Quarp.CartKit.csproj</c> is not owned
+    /// here) — so, per the work order, this is a second, independent, much smaller reader. It
+    /// does not hand-roll an ECMA-335 operand-length table the way <c>IlFloatScan</c> does:
+    /// every legal opcode's <see cref="OperandType"/> is already sitting in
+    /// <see cref="OpCodes"/> as BCL metadata, so <see cref="OperandLength"/> below is a ~10-case
+    /// switch over that enum, not a copy of <c>IlFloatScan</c>'s table — a different, smaller
+    /// fact, not a second copy of the same one.</para>
+    /// <para><b>Red-form negative control (M4 stage 4.1 fix wave report):</b> a temporary
+    /// <c>private static int Half(int v) { double f = v / 2.0; return (int)f; }</c> called from
+    /// <see cref="Std.PrintCentered(IConsoleApi,string,int,byte,Font)"/> turned this test red
+    /// (both a <c>double</c> local and <c>conv.r8</c>/<c>ldc.r8</c> opcodes), then was removed —
+    /// shown with a sha256 of <c>Std.cs</c> before and after in the report, not just asserted.</para>
+    /// </summary>
+    [Fact]
+    public void CompiledAssemblyHasNoFloatOpcodesOrLocalsAnywhereIncludingPrivateMembers()
+    {
+        var offenders = new List<string>();
+        const BindingFlags flags = BindingFlags.Public | BindingFlags.NonPublic
+            | BindingFlags.Instance | BindingFlags.Static | BindingFlags.DeclaredOnly;
+
+        foreach (Type type in typeof(Cartridge).Assembly.GetTypes())
+        {
+            IEnumerable<MethodBase> members =
+                type.GetMethods(flags).Cast<MethodBase>().Concat(type.GetConstructors(flags));
+            foreach (MethodBase method in members)
+            {
+                MethodBody? body;
+                try
+                {
+                    body = method.GetMethodBody();
+                }
+                catch (InvalidOperationException)
+                {
+                    continue;   // e.g. a P/Invoke or otherwise body-less member.
+                }
+                if (body is null)
+                {
+                    continue;   // abstract, extern, or an interface member: nothing to walk.
+                }
+
+                string methodName = $"{type.FullName}.{method.Name}";
+
+                foreach (LocalVariableInfo local in body.LocalVariables)
+                {
+                    if (IsFloatingPoint(local.LocalType))
+                    {
+                        offenders.Add($"{methodName} (local #{local.LocalIndex}: {local.LocalType})");
+                    }
+                }
+
+                byte[]? il = body.GetILAsByteArray();
+                if (il is not null && TryFindFloatOpcode(il, out string opcodeName, out int offset))
+                {
+                    offenders.Add($"{methodName} (IL '{opcodeName}' at offset 0x{offset:X4})");
+                }
+            }
+        }
+
+        Assert.True(offenders.Count == 0, "float opcode or local reaches Quarp.Api.dll: " + string.Join(", ", offenders));
+    }
+
+    /// <summary>Every legal opcode, keyed by its <see cref="OpCode.Value"/>, built once from <see cref="OpCodes"/>'s own fields.</summary>
+    private static readonly Dictionary<short, OpCode> OpcodesByValue = BuildOpcodeTable();
+
+    private static Dictionary<short, OpCode> BuildOpcodeTable()
+    {
+        var table = new Dictionary<short, OpCode>();
+        foreach (FieldInfo field in typeof(OpCodes).GetFields(BindingFlags.Public | BindingFlags.Static))
+        {
+            if (field.FieldType != typeof(OpCode))
+            {
+                continue;
+            }
+            var opcode = (OpCode)field.GetValue(null)!;
+            table[opcode.Value] = opcode;
+        }
+        return table;
+    }
+
+    /// <summary>
+    /// Walks <paramref name="il"/> instruction by instruction using <see cref="OpcodesByValue"/>
+    /// for both opcode identification and operand length, stopping at the first
+    /// <c>ldc.r4</c>/<c>ldc.r8</c>/<c>conv.r4</c>/<c>conv.r8</c>. An opcode this table does not
+    /// recognize throws rather than silently ending the walk — a desynchronized walk that just
+    /// stops is a silent false negative, not a safe default.
+    /// </summary>
+    private static bool TryFindFloatOpcode(byte[] il, out string opcodeName, out int offset)
+    {
+        int position = 0;
+        while (position < il.Length)
+        {
+            int start = position;
+            short value = il[position];
+            if (value == 0xFE)
+            {
+                value = (short)(0xFE00 | il[position + 1]);
+            }
+            if (!OpcodesByValue.TryGetValue(value, out OpCode opcode))
+            {
+                throw new InvalidOperationException(
+                    $"unrecognized IL opcode 0x{value:X4} at offset 0x{start:X4} in a Quarp.Api "
+                    + "method -- extend this reader's table rather than trust a silent stop.");
+            }
+            position = start + opcode.Size;
+
+            if (opcode == OpCodes.Ldc_R4 || opcode == OpCodes.Conv_R4)
+            {
+                opcodeName = "ldc.r4/conv.r4";
+                offset = start;
+                return true;
+            }
+            if (opcode == OpCodes.Ldc_R8 || opcode == OpCodes.Conv_R8)
+            {
+                opcodeName = "ldc.r8/conv.r8";
+                offset = start;
+                return true;
+            }
+
+            position += OperandLength(opcode.OperandType, il, position);
+        }
+        opcodeName = string.Empty;
+        offset = 0;
+        return false;
+    }
+
+    /// <summary>Operand byte length for every <see cref="OperandType"/> Roslyn can emit; <c>InlineSwitch</c> is 4 bytes of jump-target count plus 4 bytes per target.</summary>
+    private static int OperandLength(OperandType type, byte[] il, int position) => type switch
+    {
+        OperandType.InlineNone => 0,
+        OperandType.ShortInlineBrTarget or OperandType.ShortInlineI or OperandType.ShortInlineVar => 1,
+        OperandType.InlineVar => 2,
+        OperandType.InlineBrTarget or OperandType.InlineField or OperandType.InlineI or OperandType.InlineMethod
+            or OperandType.InlineSig or OperandType.InlineString or OperandType.InlineTok
+            or OperandType.InlineType or OperandType.ShortInlineR => 4,
+        OperandType.InlineI8 or OperandType.InlineR => 8,
+        OperandType.InlineSwitch => 4 + (4 * BinaryPrimitives.ReadInt32LittleEndian(il.AsSpan(position, 4))),
+        _ => throw new InvalidOperationException($"unhandled IL operand type {type} -- extend this reader's switch."),
+    };
 
     private static bool IsFloatingPoint(Type type)
     {

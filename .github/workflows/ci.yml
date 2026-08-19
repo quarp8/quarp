@@ -208,6 +208,31 @@ jobs:
       - name: Build the CLI
         run: dotnet build src/Quarp.Cli -c Release
 
+      - name: Demo walkthroughs replay to their pinned hashes
+        # Card 16 (M4 stage 4.1): the five demo carts' scripted walkthroughs are pinned at
+        # last. Stage 3 deferred this until the resolution verdict (R20), stage 4.1 deferred
+        # it until the library conversion; both conditions are met, and the twelve hashes in
+        # carts/demo-goldens.tsv were verified bit-identical through both of those upheavals.
+        # Running in this job means both architectures replay all six tracks — the cross-arch
+        # determinism proof widens from one game to six. A broken .input, a gameplay change,
+        # or an engine regression that only a real game exercises all land here, loudly.
+        run: |
+          set -euo pipefail
+          fail=0
+          while IFS=$'\t' read -r cart input ticks frame audio; do
+            case "$cart" in \#*|"") continue ;; esac
+            out="$(dotnet "$QUARP_DLL" replay record "$cart" -o "$RUNNER_TEMP/demo.qrpr" --ticks "$ticks" --input-file "$cart/$input")" || { echo "::error title=Replay failed::$cart/$input exited non-zero"; fail=1; continue; }
+            got_frame="$(printf '%s\n' "$out" | tr -d '\r' | grep -Eo '^[0-9a-f]{16}$' | tail -n 1 || true)"
+            got_audio="$(printf '%s\n' "$out" | tr -d '\r' | grep -Eo '^audio [0-9a-f]{16}$' | tail -n 1 | cut -d' ' -f2 || true)"
+            if [ -z "$got_frame" ] || [ "$got_frame" != "$frame" ] || [ "$got_audio" != "$audio" ]; then
+              echo "::error title=Demo walkthrough diverged::$cart/$input: frame ${got_frame:-none} (pinned $frame), audio ${got_audio:-none} (pinned $audio)"
+              fail=1
+            else
+              echo "ok  $cart/$input  $frame  $audio"
+            fi
+          done < <(tr -d '\r' < carts/demo-goldens.tsv)
+          exit "$fail"
+
       - name: Audio banks are in sync with their text
         # sfx.bin and music.bin are generated files that have to live in the repository (a
         # .quarp8 must be packable without the tooling installed), and the only thing keeping

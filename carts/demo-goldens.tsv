@@ -1,0 +1,12 @@
+# Demo walkthrough goldens — the single owner of these values (tasks: card 16, M4 stage 4.1).
+# CI's "Demo walkthroughs replay to their pinned hashes" step replays every row on both
+# architectures and compares the final frame and audio hashes. Snake is deliberately absent:
+# its golden.qrpr is the determinism job's own proof. Re-pin a row only with the same
+# ceremony as any anchor: say what changed, old value, new value, why (PLAYBOOK §4).
+# cart	input	ticks	frame	audio
+carts/platformer	replays/walkthrough.input	1274	4c59928f9725624b	980ef0c50aa1cee7
+carts/dialogue	replays/walkthrough.input	800	8cdebaf2ed836bd5	66eb99109c4a622a
+carts/dialogue	replays/walkthrough-alt.input	800	d1497f0a7698a85b	c1547bd7e9aa9476
+carts/breakout	replays/walkthrough.input	660	2b3a069484e1102a	b2e6f34db9b6024f
+carts/digger	replays/walkthrough.input	996	676568bb2f07e5ce	16e1f75b4046cfab
+carts/shmup	replays/walkthrough.input	900	0b373c49ea7d56d3	2178dd539eb6d1d0

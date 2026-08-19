@@ -116,43 +116,47 @@ public sealed class ShmupGame : Cartridge
     private static readonly string[] Digits =
         { "0", "1", "2", "3", "4", "5", "6", "7", "8", "9" };
 
-    // Row-major 8x8 pixel patterns for Sset (M4 work order Р16: sprites are code, not a PNG
-    // this cartridge doesn't own). '.' is left as the sheet's default 0 (transparent under the
-    // default Palt); every other character is drawn in the sprite's one color.
+    // Row-major 8x8 pixel patterns for Std.PaintPattern (M4 Р28: sprites are code, not a PNG
+    // this cartridge doesn't own). '.' skips the pixel (the sheet's default 0, transparent under
+    // the default Palt); every other character is a hex palette slot — one fixed digit per
+    // sprite here (Std.PaintPattern's canonical dialect is a color per pixel; this cartridge only
+    // ever needs one color per sprite, so every non-'.' character is that sprite's own color:
+    // 'c' = ColShip = 12, '8' = ColEnemyA = 8, '9' = ColEnemyB = 9 — reformatted from the original
+    // '#'-per-pixel dialect, same shapes, same colors, same Sset sequence).
     private static readonly string[] PlayerPattern =
     {
-        "...##...",
-        "...##...",
-        "..####..",
-        "..####..",
-        ".######.",
-        "########",
-        "#.####.#",
-        "#......#",
+        "...cc...",
+        "...cc...",
+        "..cccc..",
+        "..cccc..",
+        ".cccccc.",
+        "cccccccc",
+        "c.cccc.c",
+        "c......c",
     };
 
     private static readonly string[] EnemyAPattern =
     {
-        "..####..",
-        ".######.",
-        "##.##.##",
-        "########",
-        ".######.",
-        "..#..#..",
-        ".#....#.",
-        "#......#",
+        "..8888..",
+        ".888888.",
+        "88.88.88",
+        "88888888",
+        ".888888.",
+        "..8..8..",
+        ".8....8.",
+        "8......8",
     };
 
     private static readonly string[] EnemyBPattern =
     {
-        "########",
-        "#.####.#",
-        "########",
-        "..####..",
-        ".######.",
-        "##....##",
-        ".#.##.#.",
-        "..#..#..",
+        "99999999",
+        "9.9999.9",
+        "99999999",
+        "..9999..",
+        ".999999.",
+        "99....99",
+        ".9.99.9.",
+        "..9..9..",
     };
 
     private enum RunState { Playing, Win, GameOver }
@@ -199,8 +203,8 @@ public sealed class ShmupGame : Cartridge
     public override void Init()
     {
         // Read the console's actual size once; everything below is derived, never literal
-        // (API-8 §3 — this is the whole point of the M4 resolution spike: the same cartridge
-        // has to lay out correctly on 128x72 and on --profile 8w's 160x90).
+        // (API-8 §3), so the cartridge lays out correctly on whatever screen size QUARP-8
+        // reports — not just the one it happened to be built against.
         _fieldTop = HudHeight;
         _playerY = ScreenHeight - PlayerSize - PlayerBottomMargin;
         _playerMinX = 0;
@@ -567,11 +571,11 @@ public sealed class ShmupGame : Cartridge
 
         byte scoreColor = _invuln > 0 ? ColHudFlash : ColHud;
         int x = Print("SCORE ", 1, 1, scoreColor);
-        PrintInt(_score, x, 1, scoreColor);
+        Q.PrintInt(_score, x, 1, scoreColor);
 
         int livesW = GlyphW * 6 + GlyphW;                 // "LIVES " + one digit
         Print("LIVES ", ScreenWidth - livesW, 1, ColHud);
-        PrintInt(_lives, ScreenWidth - GlyphW, 1, ColHud);
+        Q.PrintInt(_lives, ScreenWidth - GlyphW, 1, ColHud);
     }
 
     private void DrawField()
@@ -632,11 +636,11 @@ public sealed class ShmupGame : Cartridge
     {
         string label = "WAVE " + Digits[_wave + 1];
         int bannerY = _fieldTop + 24;
-        Print(label, (ScreenWidth - label.Length * GlyphW) / 2, bannerY, ColHud);
+        Q.PrintCentered(label, bannerY, ColHud);
         if (Ticks % 40 < 28)
         {
             const string ready = "GET READY";
-            Print(ready, (ScreenWidth - ready.Length * GlyphW) / 2, bannerY + 10, ColHudFlash);
+            Q.PrintCentered(ready, bannerY + 10, ColHudFlash);
         }
     }
 
@@ -653,74 +657,31 @@ public sealed class ShmupGame : Cartridge
         if (_state == RunState.Win)
         {
             const string label = "ALL WAVES CLEAR";
-            Print(label, (ScreenWidth - label.Length * GlyphW) / 2, panelY + 5, ColWinText);
+            Q.PrintCentered(label, panelY + 5, ColWinText);
         }
         else
         {
             const string label = "SHIP LOST";
-            Print(label, (ScreenWidth - label.Length * GlyphW) / 2, panelY + 5, ColLoseText);
+            Q.PrintCentered(label, panelY + 5, ColLoseText);
         }
 
-        int scoreW = GlyphW * 6 + IntWidth(_score);
+        int scoreW = GlyphW * 6 + Std.IntWidth(_score);
         int sx = Print("SCORE ", (ScreenWidth - scoreW) / 2, panelY + 14, ColHud);
-        PrintInt(_score, sx, panelY + 14, ColHud);
+        Q.PrintInt(_score, sx, panelY + 14, ColHud);
 
         if (Ticks % 40 < 28)
         {
             const string restart = "PRESS START";
-            Print(restart, (ScreenWidth - restart.Length * GlyphW) / 2, panelY + 23, ColHud);
+            Q.PrintCentered(restart, panelY + 23, ColHud);
         }
     }
-
-    /// <summary>Prints 0-9999 without allocating; returns the x after the last digit.</summary>
-    private int PrintInt(int value, int x, int y, byte color)
-    {
-        if (value >= 1000)
-        {
-            x = Print(Digits[value / 1000 % 10], x, y, color);
-        }
-
-        if (value >= 100)
-        {
-            x = Print(Digits[value / 100 % 10], x, y, color);
-        }
-
-        if (value >= 10)
-        {
-            x = Print(Digits[value / 10 % 10], x, y, color);
-        }
-
-        return Print(Digits[value % 10], x, y, color);
-    }
-
-    private static int IntWidth(int value) =>
-        value >= 1000 ? GlyphW * 4 : value >= 100 ? GlyphW * 3 : value >= 10 ? GlyphW * 2 : GlyphW;
 
     // ================= sprites =================
 
     private void BuildSprites()
     {
-        DrawSpritePattern(SprPlayer, PlayerPattern, ColShip);
-        DrawSpritePattern(SprEnemyA, EnemyAPattern, ColEnemyA);
-        DrawSpritePattern(SprEnemyB, EnemyBPattern, ColEnemyB);
-    }
-
-    /// <summary>Stamps an 8x8 ASCII pattern into the sprite sheet with Sset (M4 work order
-    /// Р16 — art from code, no gfx.png this cartridge would have to own and keep in sync by hand).</summary>
-    private void DrawSpritePattern(int sprite, string[] rows, byte color)
-    {
-        int baseX = sprite % 16 * 8;
-        int baseY = sprite / 16 * 8;
-        for (int y = 0; y < 8; y++)
-        {
-            string row = rows[y];
-            for (int x = 0; x < 8; x++)
-            {
-                if (row[x] != '.')
-                {
-                    Sset(baseX + x, baseY + y, color);
-                }
-            }
-        }
+        Q.PaintPattern(SprPlayer % 16 * 8, SprPlayer / 16 * 8, PlayerPattern);
+        Q.PaintPattern(SprEnemyA % 16 * 8, SprEnemyA / 16 * 8, EnemyAPattern);
+        Q.PaintPattern(SprEnemyB % 16 * 8, SprEnemyB / 16 * 8, EnemyBPattern);
     }
 }

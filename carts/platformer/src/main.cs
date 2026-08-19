@@ -7,8 +7,8 @@ namespace Platformer;
 /// leans on hardest (M4 Р7): a game whose fairness is a direct function of how far below
 /// himself the player can see.
 ///
-/// <para>The tower is 24 tiles wide and fills the whole 72-row map — eight screens of climbing
-/// at 128x72. It is drawn from <c>map.csv</c> through <c>quarp map build</c> (tools/tower.py
+/// <para>The tower is 24 tiles wide and fills the whole 72-row map — about seven screens of
+/// climbing at 160x90. It is drawn from <c>map.csv</c> through <c>quarp map build</c> (tools/tower.py
 /// generates the CSV); the sprite sheet is painted pixel by pixel with <see cref="Sset"/> in
 /// <see cref="Init"/>, so the cartridge carries no <c>gfx.png</c>. What each tile *does* comes
 /// from sprite flags set in <see cref="Init"/> — solid, one-way platform, deadly, gem, goal —
@@ -28,9 +28,10 @@ namespace Platformer;
 ///
 /// <para>Everything positional is derived from <see cref="ScreenWidth"/> and
 /// <see cref="ScreenHeight"/> — the HUD strip, the play field under it, both camera axes and
-/// every panel — so the same compiled cartridge lays itself out on the 160x90 spike profile
-/// (Р6) without an edit. The literals 8, 16 and 24 that do appear are tile size, sprites per
-/// sheet row and the width of this tower; none of them is a screen dimension.</para>
+/// every panel — so the same compiled cartridge lays itself out on whatever screen size the
+/// console reports (Р6) without an edit. The literals 8, 16 and 24 that do appear are tile
+/// size, sprites per sheet row and the width of this tower; none of them is a screen
+/// dimension.</para>
 /// </summary>
 public sealed class TowerClimb : Cartridge
 {
@@ -158,103 +159,133 @@ public sealed class TowerClimb : Cartridge
         SprIdle, SprRunA, SprRunB, SprAir,
     };
 
-    private static readonly string[] Art =
+    // One string[] per sprite in ArtSprites, same index — passed straight to Std.PaintPattern
+    // (M4 Р28), which is this exact loop-and-Sset shape lifted out to Quarp.Api (this file was
+    // its canonical source, per Std.PaintPattern's doc comment).
+    private static readonly string[][] Art =
     {
         // SprWall — offset brick courses; the mortar is color 0, so the backdrop shows through it
-        "ddd0dddd",
-        "ddd0dddd",
-        "ddd0dddd",
-        "00000000",
-        "ddddddd0",
-        "ddddddd0",
-        "ddddddd0",
-        "00000000",
+        new[]
+        {
+            "ddd0dddd",
+            "ddd0dddd",
+            "ddd0dddd",
+            "00000000",
+            "ddddddd0",
+            "ddddddd0",
+            "ddddddd0",
+            "00000000",
+        },
         // SprPlatform — three pixels of lit stone and nothing under it: a one-way ledge has to
         // *look* like something you can pass through, or the rule feels like a bug
-        "22222222",
-        "11111111",
-        "10111101",
-        "........",
-        "........",
-        "........",
-        "........",
-        "........",
+        new[]
+        {
+            "22222222",
+            "11111111",
+            "10111101",
+            "........",
+            "........",
+            "........",
+            "........",
+            "........",
+        },
         // SprSpike
-        "........",
-        ".2.2.2.2",
-        ".2.2.2.2",
-        "22222222",
-        "22222222",
-        "11111111",
-        "11111111",
-        "11111111",
+        new[]
+        {
+            "........",
+            ".2.2.2.2",
+            ".2.2.2.2",
+            "22222222",
+            "22222222",
+            "11111111",
+            "11111111",
+            "11111111",
+        },
         // SprGem
-        "........",
-        "...66...",
-        "..6556..",
-        ".653556.",
-        ".655556.",
-        "..6556..",
-        "...66...",
-        "........",
+        new[]
+        {
+            "........",
+            "...66...",
+            "..6556..",
+            ".653556.",
+            ".655556.",
+            "..6556..",
+            "...66...",
+            "........",
+        },
         // SprBanner
-        "..8888..",
-        ".888888.",
-        ".8a88a8.",
-        ".888888.",
-        ".888888.",
-        "..8888..",
-        "...88...",
-        "..9999..",
+        new[]
+        {
+            "..8888..",
+            ".888888.",
+            ".8a88a8.",
+            ".888888.",
+            ".888888.",
+            "..8888..",
+            "...88...",
+            "..9999..",
+        },
         // SprStone
-        "22222222",
-        "11111111",
-        "11011111",
-        "11111111",
-        "11111101",
-        "11111111",
-        "11011111",
-        "11111111",
+        new[]
+        {
+            "22222222",
+            "11111111",
+            "11011111",
+            "11111111",
+            "11111101",
+            "11111111",
+            "11011111",
+            "11111111",
+        },
         // SprIdle
-        "..dddd..",
-        "..dfff..",
-        "..d4f4..",
-        "...fff..",
-        "..aaaa..",
-        ".aaaaaa.",
-        "..4..4..",
-        "..4..4..",
+        new[]
+        {
+            "..dddd..",
+            "..dfff..",
+            "..d4f4..",
+            "...fff..",
+            "..aaaa..",
+            ".aaaaaa.",
+            "..4..4..",
+            "..4..4..",
+        },
         // SprRunA
-        "..dddd..",
-        "..dfff..",
-        "..d4f4..",
-        "...fff..",
-        "..aaaa..",
-        ".aaaaaa.",
-        ".44..4..",
-        ".4...44.",
+        new[]
+        {
+            "..dddd..",
+            "..dfff..",
+            "..d4f4..",
+            "...fff..",
+            "..aaaa..",
+            ".aaaaaa.",
+            ".44..4..",
+            ".4...44.",
+        },
         // SprRunB
-        "..dddd..",
-        "..dfff..",
-        "..d4f4..",
-        "...fff..",
-        "..aaaa..",
-        ".aaaaaa.",
-        "..4.44..",
-        ".44...4.",
+        new[]
+        {
+            "..dddd..",
+            "..dfff..",
+            "..d4f4..",
+            "...fff..",
+            "..aaaa..",
+            ".aaaaaa.",
+            "..4.44..",
+            ".44...4.",
+        },
         // SprAir
-        "..dddd..",
-        "..dfff..",
-        "..d4f4..",
-        "...fff..",
-        ".aaaaaa.",
-        "..aaaa..",
-        ".4....4.",
-        "4......4",
+        new[]
+        {
+            "..dddd..",
+            "..dfff..",
+            "..d4f4..",
+            "...fff..",
+            ".aaaaaa.",
+            "..aaaa..",
+            ".4....4.",
+            "4......4",
+        },
     };
-
-    // Cached digit strings: printing a score in the tick path should not allocate.
-    private static readonly string[] Digits = { "0", "1", "2", "3", "4", "5", "6", "7", "8", "9" };
 
     private readonly int[] _gemX = new int[MaxGems];
     private readonly int[] _gemY = new int[MaxGems];
@@ -691,7 +722,7 @@ public sealed class TowerClimb : Cartridge
     {
         int target = (int)_x + BoxW / 2 - ScreenWidth / 2;
         int limit = TowerPixelWidth - ScreenWidth;
-        return limit <= 0 ? 0 : Clamp(target, limit);
+        return limit <= 0 ? 0 : Std.Clamp(target, 0, limit);
     }
 
     private int CameraY()
@@ -699,11 +730,8 @@ public sealed class TowerClimb : Cartridge
         int field = FieldHeight;
         int target = (int)_y + BoxH / 2 - field / 2 + (int)_camLead;
         int limit = TowerPixelHeight - field;
-        return limit <= 0 ? 0 : Clamp(target, limit);
+        return limit <= 0 ? 0 : Std.Clamp(target, 0, limit);
     }
-
-    private static int Clamp(int value, int high) =>
-        value < 0 ? 0 : value > high ? high : value;
 
     // --- drawing ------------------------------------------------------------------------------
 
@@ -753,15 +781,17 @@ public sealed class TowerClimb : Cartridge
         Line(0, HudH - 1, ScreenWidth - 1, HudH - 1, ColHudLine);
 
         int x = Print("GEM ", 1, 1, ColGem);
-        x = PrintInt(_gems, x, 1, ColHudText);
+        x = Q.PrintInt(_gems, x, 1, ColHudText);
         x = Print("/", x, 1, ColHudDim);
-        PrintInt(_gemTotal, x, 1, ColHudDim);
+        Q.PrintInt(_gemTotal, x, 1, ColHudDim);
 
         // Height climbed, centered: 4 glyphs of "H nn", so the box is 4 * GlyphW wide.
+        // Std.IntWidth (M4 Р28) already returns pixels, unlike this file's old digit-count
+        // IntWidth — see the arithmetic note on Std.IntWidth's doc comment.
         int climbed = ClimbedTiles();
-        int center = (ScreenWidth - (2 + IntWidth(climbed)) * GlyphW) / 2;
+        int center = (ScreenWidth - 2 * GlyphW - Std.IntWidth(climbed)) / 2;
         center = Print("H ", center, 1, ColHudDim);
-        PrintInt(climbed, center, 1, ColHudText);
+        Q.PrintInt(climbed, center, 1, ColHudText);
 
         DrawClock(ScreenWidth - 1 - ClockWidth(_timerTicks), 1);
     }
@@ -783,10 +813,10 @@ public sealed class TowerClimb : Cartridge
     private void DrawClock(int x, int y)
     {
         int hundredths = ClockHundredths(_timerTicks);
-        x = PrintInt(hundredths / 100, x, y, ColHudText);
+        x = Q.PrintInt(hundredths / 100, x, y, ColHudText);
         x = Print(".", x, y, ColHudText);
-        x = Print(Digits[hundredths / 10 % 10], x, y, ColHudText);
-        Print(Digits[hundredths % 10], x, y, ColHudText);
+        x = Q.PrintInt(hundredths / 10 % 10, x, y, ColHudText);
+        Q.PrintInt(hundredths % 10, x, y, ColHudText);
     }
 
     /// <summary>
@@ -802,7 +832,7 @@ public sealed class TowerClimb : Cartridge
     }
 
     private static int ClockWidth(int ticks) =>
-        (IntWidth(ClockHundredths(ticks) / 100) + 3) * GlyphW;
+        Std.IntWidth(ClockHundredths(ticks) / 100) + 3 * GlyphW;
 
     private void DrawPanel()
     {
@@ -819,9 +849,9 @@ public sealed class TowerClimb : Cartridge
         Print(title, panelX + (panelW - title.Length * GlyphW) / 2, panelY + 4, won ? ColWin : ColLose);
 
         int x = Print("GEMS ", panelX + 5, panelY + 13, ColGem);
-        x = PrintInt(_gems, x, panelY + 13, ColHudText);
+        x = Q.PrintInt(_gems, x, panelY + 13, ColHudText);
         x = Print("/", x, panelY + 13, ColHudDim);
-        PrintInt(_gemTotal, x, panelY + 13, ColHudDim);
+        Q.PrintInt(_gemTotal, x, panelY + 13, ColHudDim);
 
         x = Print("TIME ", panelX + 5, panelY + 20, ColHudDim);
         DrawClock(x, panelY + 20);
@@ -835,22 +865,6 @@ public sealed class TowerClimb : Cartridge
             Print(prompt, panelX + (panelW - prompt.Length * GlyphW) / 2, panelY + 27, ColPanel);
         }
     }
-
-    /// <summary>Prints 0-999 without allocating; returns the x after the last digit.</summary>
-    private int PrintInt(int value, int x, int y, byte color)
-    {
-        if (value >= 100)
-        {
-            x = Print(Digits[value / 100 % 10], x, y, color);
-        }
-        if (value >= 10)
-        {
-            x = Print(Digits[value / 10 % 10], x, y, color);
-        }
-        return Print(Digits[value % 10], x, y, color);
-    }
-
-    private static int IntWidth(int value) => value >= 100 ? 3 : value >= 10 ? 2 : 1;
 
     // --- one-time setup -----------------------------------------------------------------------
 
@@ -866,32 +880,8 @@ public sealed class TowerClimb : Cartridge
             int sprite = ArtSprites[i];
             int originX = (sprite % SheetColumns) * Tile;
             int originY = (sprite / SheetColumns) * Tile;
-            for (int y = 0; y < Tile; y++)
-            {
-                string line = Art[(i * Tile) + y];
-                for (int x = 0; x < Tile; x++)
-                {
-                    int color = HexValue(line[x]);
-                    if (color >= 0)
-                    {
-                        Sset(originX + x, originY + y, (byte)color);
-                    }
-                }
-            }
+            Q.PaintPattern(originX, originY, Art[i]);
         }
-    }
-
-    private static int HexValue(char c)
-    {
-        if (c >= '0' && c <= '9')
-        {
-            return c - '0';
-        }
-        if (c >= 'a' && c <= 'f')
-        {
-            return 10 + (c - 'a');
-        }
-        return -1;                               // '.' — leave the pixel transparent
     }
 
     private void TagTiles()

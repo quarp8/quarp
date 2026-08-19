@@ -9,11 +9,16 @@ quarp build carts/platformer      # compile and check, no window, no tick
 quarp run   carts/platformer      # play it
 ```
 
-Made of: `map.csv` → `quarp map build` → `map.bin` for the tower; `Sset` in `Init` for every
-sprite (no `gfx.png`); `sfx.txt` / `music.txt` → `quarp audio build` for five effects and a
-four-pattern theme. Nothing here is shared with another demo — copy-paste between demos is the
-point at this stage (Р18), so that the standard library of M4 stage 4 is cut from repetitions
-somebody actually observed.
+Made of: `map.csv` → `quarp map build` → `map.bin` for the tower; `Quarp.Api.Std.PaintPattern`
+(M4 stage 4.1, Р28) paints every sprite from the hex-digit art in `src/main.cs` — this cartridge
+was the canonical source that method was cut from; `sfx.txt` / `music.txt` → `quarp audio build`
+for five effects and a four-pattern theme. Through M4 stage 3 nothing here was shared with
+another demo on purpose — copy-paste between demos was the point (Р18), so that the standard
+library could be cut from repetitions somebody actually observed rather than designed ahead of
+evidence. Stage 4.1 wave 2 is that cut: the local `PrintInt`/`IntWidth`/`Clamp`/sprite-painting
+copies are gone from `src/main.cs`, replaced by calls into `Std`, and every frame and audio hash
+below is unchanged byte-for-byte from before the conversion — the point of a library extracted
+from repeats is that using it changes nothing about what the cartridge does.
 
 ## Rebuilding the assets
 

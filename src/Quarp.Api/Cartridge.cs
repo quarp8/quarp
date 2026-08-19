@@ -14,7 +14,17 @@ public abstract class Cartridge
     /// <summary>Called by the runtime before <see cref="Init"/>. Not for cartridge code.</summary>
     public void Attach(IConsoleApi console) => _console = console;
 
-    private IConsoleApi Q => _console
+    /// <summary>
+    /// The console this cartridge is attached to, as the raw <see cref="IConsoleApi"/> — the
+    /// same surface the <c>protected</c> wrappers below forward to. Protected rather than
+    /// private since M4 stage 4.1 (ADR-019, Р27): the standard library in <c>Quarp.Api.Std</c>
+    /// is a set of <c>IConsoleApi</c> extension methods (<c>Q.PrintInt(...)</c>,
+    /// <c>Q.PaintPattern(...)</c>), and an extension method needs a receiver it can see. A
+    /// subclass written by a cartridge author gets the same access for the same reason — nothing
+    /// on <see cref="Cartridge"/> keeps growing to carry every library convenience (ADR-019: the
+    /// hardware surface stays crib-small; the library is where growth happens instead).
+    /// </summary>
+    protected IConsoleApi Q => _console
         ?? throw new InvalidOperationException("Cartridge is not attached to a console.");
 
     /// <summary>Sets up the game once, as tick 0 of the simulation. Override it; the default does nothing.</summary>

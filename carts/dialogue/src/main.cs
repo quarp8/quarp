@@ -12,9 +12,10 @@ namespace Dialogue;
 ///
 /// <para>Everything on screen is placed from <see cref="IConsoleApi.ScreenWidth"/> and
 /// <see cref="IConsoleApi.ScreenHeight"/>; the numbers 128 and 72 appear nowhere. That is
-/// the whole point of the demo for the resolution verdict — the same build has to re-wrap
-/// itself when it is run on the 160x90 spike (`quarp run carts/dialogue --profile 8w`),
-/// otherwise the comparison would be measuring the source code instead of the screen.</para>
+/// the whole point of the demo for the resolution verdict — the same build re-wraps itself
+/// for whatever screen size it is given, which is exactly what let it survive QUARP-8's own
+/// move from 128x72 to 160x90 (ADR-021) without a single line changing, otherwise the
+/// comparison would be measuring the source code instead of the screen.</para>
 ///
 /// <para>The two 16x16 portraits are painted pixel by pixel with <see cref="IConsoleApi.Sset"/>
 /// in <see cref="Init"/> from the hex-digit art below (Р16: no hand-drawn binaries), so the
@@ -166,9 +167,13 @@ public sealed class TwoLights : Cartridge
     private static readonly int[] PortraitSprite = { 0, 2 };
 
     // --- portrait art ------------------------------------------------------------------
-    // One character per pixel: '.' is the transparent color 0, '0'-'9' and 'a'-'f' are
-    // palette slots 0-15. Sixteen rows of sixteen characters; ColorOf does the decoding and
-    // Sset does the painting, both in Init.
+    // One character per pixel, Std.PaintPattern's canonical dialect (M4 Р28): '.' skips the
+    // pixel, 'a'-'f' write a palette slot. The two eye pixels in each portrait were written as
+    // literal '0' before this cartridge used Std.PaintPattern — this file's own painter treated
+    // '0' as "leave it transparent" too (color 0 is never a real write here, unlike the
+    // platformer's canonical dialect where '0' is a real color), so converting those two
+    // characters to '.' reproduces the exact same Sset sequence rather than growing a second
+    // "'0' means skip" dialect for Std.PaintPattern to support.
 
     private static readonly string[] MaraArt =
     {
@@ -178,7 +183,7 @@ public sealed class TwoLights : Cartridge
         "..dddffffffddd..",
         "..ddffffffffdd..",
         "..ddffffffffdd..",
-        "..dff0ffff0ffd..",
+        "..dff.ffff.ffd..",
         "..dffffffffffd..",
         "..dfffefffffd...",
         "..dffffaaffffd..",
@@ -198,7 +203,7 @@ public sealed class TwoLights : Cartridge
         ".44444444444444.",
         "..2eeeeeeeeee2..",
         "..2eeeeeeeeee2..",
-        "..2ee0eeee0ee2..",
+        "..2ee.eeee.ee2..",
         "..2eeeeeeeeee2..",
         "..2eeee99eeee2..",
         "..22eeeeeeee22..",
@@ -560,36 +565,8 @@ public sealed class TwoLights : Cartridge
         // exactly the 2x2 block that Spr(PortraitSprite[p], x, y, 2, 2) draws.
         for (int p = 0; p < Portraits.Length; p++)
         {
-            string[] art = Portraits[p];
-            int originX = p * PortraitPx;
-            for (int row = 0; row < art.Length; row++)
-            {
-                string source = art[row];
-                for (int col = 0; col < source.Length; col++)
-                {
-                    byte color = ColorOf(source[col]);
-                    if (color != 0)
-                    {
-                        Sset(originX + col, row, color);
-                    }
-                }
-            }
+            Q.PaintPattern(p * PortraitPx, 0, Portraits[p]);
         }
-    }
-
-    private static byte ColorOf(char c)
-    {
-        if (c >= '0' && c <= '9')
-        {
-            return (byte)(c - '0');
-        }
-
-        if (c >= 'a' && c <= 'f')
-        {
-            return (byte)(c - 'a' + 10);
-        }
-
-        return 0;                               // '.' and anything else: transparent
     }
 
     private void PlaceStars()

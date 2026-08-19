@@ -115,8 +115,6 @@ public sealed class DiggerGame : Cartridge
     // written down (both the "went down" and the "still held" reads walk this one array).
     private static readonly Button[] DirButtons = { Button.Left, Button.Right, Button.Up, Button.Down };
 
-    private static readonly string[] Digits = { "0", "1", "2", "3", "4", "5", "6", "7", "8", "9" };
-
     /// <summary>
     /// Sprite art, one string per pixel row, one hex digit per palette slot 0-15 (SPEC-8 §2).
     /// Kept as text because a diff of a redrawn rock should look like a redrawn rock. Index
@@ -298,14 +296,7 @@ public sealed class DiggerGame : Cartridge
 
             int originX = sprite % SheetColumns * TileSize;
             int originY = sprite / SheetColumns * TileSize;
-            for (int y = 0; y < TileSize; y++)
-            {
-                string row = art[y];
-                for (int x = 0; x < TileSize; x++)
-                {
-                    Sset(originX + x, originY + y, ColorOf(row[x]));
-                }
-            }
+            Q.PaintPattern(originX, originY, art);
         }
 
         int fromX = TileBoulder % SheetColumns * TileSize;
@@ -320,9 +311,6 @@ public sealed class DiggerGame : Cartridge
             }
         }
     }
-
-    /// <summary>Hex digit to palette slot; the art is written with 0-9 and a-f.</summary>
-    private static byte ColorOf(char c) => (byte)(c <= '9' ? c - '0' : c - 'a' + 10);
 
     /// <summary>
     /// Tile properties live in sprite flags, not in an <c>if</c> chain, because that is where
@@ -713,21 +701,20 @@ public sealed class DiggerGame : Cartridge
     private void DrawHud()
     {
         int x = Print("GEMS ", 1, 1, ColHud);
-        x = PrintInt(_gems, x, 1, _gems >= _gemsNeeded ? ColHudOpen : ColHudWarn);
+        x = Q.PrintInt(_gems, x, 1, _gems >= _gemsNeeded ? ColHudOpen : ColHudWarn);
         x = Print("/", x, 1, ColHud);
-        PrintInt(_gemsNeeded, x, 1, ColHud);
+        Q.PrintInt(_gemsNeeded, x, 1, ColHud);
 
         string status = _gems >= _gemsNeeded ? "EXIT OPEN" : "EXIT SHUT";
-        Print(status, ScreenWidth - 1 - (status.Length * GlyphW), 1,
-            _gems >= _gemsNeeded ? ColHudOpen : ColDivider);
+        Q.PrintRight(status, 1, _gems >= _gemsNeeded ? ColHudOpen : ColDivider);
         Line(0, HudH - 1, ScreenWidth - 1, HudH - 1, ColDivider);
     }
 
     /// <summary>
     /// Draws the visible window of the cave. The window is whatever the console has left under
     /// the HUD — every number here comes from <see cref="Cartridge.ScreenWidth"/> and
-    /// <see cref="Cartridge.ScreenHeight"/>, so the same build lays itself out on 128x72 and on
-    /// the 160x90 spike (M4 Р5/Р6) without an edit.
+    /// <see cref="Cartridge.ScreenHeight"/>, so the same build lays itself out on whatever screen
+    /// size the console reports (M4 Р5/Р6) without an edit.
     ///
     /// <para>The camera keeps the player on a fixed cell of that window — half the visible rows
     /// above him, half the visible columns to his left — and clamps at the edges of the cave.
@@ -740,8 +727,8 @@ public sealed class DiggerGame : Cartridge
         int fieldH = ScreenHeight - HudH;
         int visibleCols = ScreenWidth / TileSize;
         int visibleRows = fieldH / TileSize;
-        int camX = Clamp((_px - (visibleCols / 2)) * TileSize, (_levelW * TileSize) - ScreenWidth);
-        int camY = Clamp((_py - (visibleRows / 2)) * TileSize, (_levelH * TileSize) - fieldH);
+        int camX = Std.Clamp((_px - (visibleCols / 2)) * TileSize, 0, (_levelW * TileSize) - ScreenWidth);
+        int camY = Std.Clamp((_py - (visibleRows / 2)) * TileSize, 0, (_levelH * TileSize) - fieldH);
 
         Clip(0, HudH, ScreenWidth, fieldH);
         Camera(camX, camY - HudH);              // world y = camY lands on the first row under the HUD
@@ -754,17 +741,6 @@ public sealed class DiggerGame : Cartridge
         Spr(SprPlayer, _px * TileSize, _py * TileSize);
         Camera();
         Clip();
-    }
-
-    /// <summary>Clamps a camera coordinate into [0, max]; a cave smaller than the screen pins to 0.</summary>
-    private static int Clamp(int value, int max)
-    {
-        if (value > max)
-        {
-            value = max;
-        }
-
-        return value < 0 ? 0 : value;
     }
 
     private void DrawPanel()
@@ -784,16 +760,5 @@ public sealed class DiggerGame : Cartridge
         {
             Print(prompt, panelX + ((panelW - (prompt.Length * GlyphW)) / 2), panelY + 4 + (GlyphH * 2), ColHud);
         }
-    }
-
-    /// <summary>Prints 0-99 without allocating; returns the x after the last digit.</summary>
-    private int PrintInt(int value, int x, int y, byte color)
-    {
-        if (value >= 10)
-        {
-            x = Print(Digits[value / 10 % 10], x, y, color);
-        }
-
-        return Print(Digits[value % 10], x, y, color);
     }
 }

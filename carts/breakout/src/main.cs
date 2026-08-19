@@ -13,9 +13,9 @@ namespace Breakout;
 /// <para><b>Every geometric constant below is either a fixed pixel design choice (HUD height,
 /// brick thickness, ball size — numbers that do not scale with the screen) or derived from
 /// <see cref="ScreenWidth"/>/<see cref="ScreenHeight"/> at <see cref="Init"/> time. There is no
-/// 128, 72, 160 or 90 anywhere in this file</b> — the work order's non-goal (M4 stage 3, Р19)
-/// and the whole reason the resolution spike (<c>--profile 8w</c>) is worth running at all: a
-/// cartridge that baked in one screen size would look identical on both and prove nothing.</para>
+/// 128, 72, 160 or 90 anywhere in this file</b> — the work order's non-goal (M4 stage 3, Р19):
+/// a cartridge that baked in one screen size would have needed an edit the day QUARP-8's own
+/// screen size changed (ADR-021), and this one did not.</para>
 ///
 /// <para>Sprites: none — every shape is a primitive (<see cref="RectFill"/>/<see cref="CircFill"/>),
 /// same choice <c>carts/snake</c> made, for the same reason (Р16: "Sset в Init() или примитивы";
@@ -109,10 +109,6 @@ public sealed class BreakoutGame : Cartridge
     private Fix _ballVY;
     private int _lives;
     private int _score;
-
-    // Cached digit strings so the HUD prints without allocating in the tick path (same trick
-    // carts/snake uses for its score/best readout).
-    private static readonly string[] Digits = { "0", "1", "2", "3", "4", "5", "6", "7", "8", "9" };
 
     public override void Init()
     {
@@ -337,10 +333,10 @@ public sealed class BreakoutGame : Cartridge
                 _score += 10;
                 Sfx(SfxBrick);
 
-                // System.Math is banned in cartridge code (SPEC-8 §7, QRP1002), so the
-                // penetration depths are min/max'd by hand rather than through it.
-                int overlapX = MinInt(ballRight, brickRight) - MaxInt(ballLeft, brickLeft);
-                int overlapY = MinInt(ballBottom, brickBottom) - MaxInt(ballTop, brickTop);
+                // System.Math is banned in cartridge code (SPEC-8 §7, QRP1002); Std.Min/Max
+                // (Quarp.Api, M4 Р28) is the shared int min/max every cartridge used to hand-roll.
+                int overlapX = Std.Min(ballRight, brickRight) - Std.Max(ballLeft, brickLeft);
+                int overlapY = Std.Min(ballBottom, brickBottom) - Std.Max(ballTop, brickTop);
                 if (overlapX < overlapY)
                 {
                     _ballVX = -_ballVX;
@@ -440,13 +436,13 @@ public sealed class BreakoutGame : Cartridge
         Line(0, _fieldTop - 1, _screenW - 1, _fieldTop - 1, ColDivider);
 
         int x = Print("SCORE ", 1, 1, ColHud);
-        PrintInt(_score, x, 1, ColHud);
+        Q.PrintInt(_score, x, 1, ColHud);
 
         byte livesColor = _lives <= 1 ? ColHudLow : ColHud;
-        int livesW = GlyphW * 6 + IntWidth(_lives);          // "LIVES n" right-aligned
+        int livesW = GlyphW * 6 + Std.IntWidth(_lives);          // "LIVES n" right-aligned
         int livesX = _screenW - 1 - livesW;
         livesX = Print("LIVES ", livesX, 1, livesColor);
-        PrintInt(_lives, livesX, 1, livesColor);
+        Q.PrintInt(_lives, livesX, 1, livesColor);
     }
 
     private void DrawBricks()
@@ -484,36 +480,16 @@ public sealed class BreakoutGame : Cartridge
         Rect(panelX, panelY, panelW, panelH, ColHud);
 
         string headline = _state == GameState.Win ? "YOU WIN!" : "GAME OVER";
-        Print(headline, (_screenW - headline.Length * GlyphW) / 2, panelY + 5, ColHud);
+        Q.PrintCentered(headline, panelY + 5, ColHud);
 
-        int scoreW = GlyphW * 6 + IntWidth(_score);
+        int scoreW = GlyphW * 6 + Std.IntWidth(_score);
         int x = Print("SCORE ", (_screenW - scoreW) / 2, panelY + 14, ColHud);
-        PrintInt(_score, x, panelY + 14, ColHud);
+        Q.PrintInt(_score, x, panelY + 14, ColHud);
 
         if (Ticks % 40 < 28)                                  // blink, same period as carts/snake
         {
             const string Prompt = "PRESS START";
-            Print(Prompt, (_screenW - Prompt.Length * GlyphW) / 2, panelY + 25, ColHud);
+            Q.PrintCentered(Prompt, panelY + 25, ColHud);
         }
     }
-
-    /// <summary>Prints a non-negative int without allocating; returns the x after the last digit.</summary>
-    private int PrintInt(int value, int x, int y, byte color)
-    {
-        if (value >= 100)
-        {
-            x = Print(Digits[value / 100 % 10], x, y, color);
-        }
-        if (value >= 10)
-        {
-            x = Print(Digits[value / 10 % 10], x, y, color);
-        }
-        return Print(Digits[value % 10], x, y, color);
-    }
-
-    private static int IntWidth(int value) => value >= 100 ? GlyphW * 3 : value >= 10 ? GlyphW * 2 : GlyphW;
-
-    private static int MinInt(int a, int b) => a < b ? a : b;
-
-    private static int MaxInt(int a, int b) => a > b ? a : b;
 }

@@ -4,20 +4,34 @@ using Quarp.Core;
 namespace Quarp.Shell.Desktop;
 
 /// <summary>
-/// The sprite editor's whole state and policy, with no window attached (M9 stage 2, wave 2b) —
-/// the same split that made <see cref="ShellModeMachine"/> testable: <c>QuarpGame</c> routes
-/// keys and mouse hits here, <see cref="SpriteEditorRenderer"/> paints what this says, and
-/// every claim the work order makes (one stroke = one undo step, a clean session never touches
-/// the disk, nothing above palette index 15 can enter the sheet) is provable headless.
+/// Which mouse tool the canvas click means (M9 stage 2, wave 2c). Two values and not a
+/// toolbar: the eraser is the pencil with color 0 and the eyedropper is the right button in
+/// either tool, so pencil↔bucket is the only genuine mode the mouse has. The state lives in
+/// the session, not the window, so the footer's "what is active" line is provable headless.
+/// </summary>
+public enum SpriteEditorTool
+{
+    Pencil,
+    Fill,
+}
+
+/// <summary>
+/// The sprite editor's whole state and policy, with no window attached (M9 stage 2, waves
+/// 2b/2c) — the same split that made <see cref="ShellModeMachine"/> testable: <c>QuarpGame</c>
+/// routes keys and mouse hits here, <see cref="SpriteEditorRenderer"/> paints what this says,
+/// and every claim the work order makes (one stroke = one undo step, a clean session never
+/// touches the disk, nothing above palette index 15 can enter the sheet) is provable headless.
 ///
-/// <para><b>The 0-15 invariant has exactly three doors.</b> Pixels enter the sheet through
+/// <para><b>The 0-15 invariant has exactly four doors.</b> Pixels enter the sheet through
 /// (1) the load in the constructor — <see cref="PngDecoder.DecodeToPaletteIndices"/> only ever
-/// emits matches against the 16 visible palette colors; (2) the pencil — which writes
-/// <see cref="CurrentColor"/>, and <see cref="SelectColor"/> throws on anything outside 0-15
-/// while <see cref="PickColor"/> copies a value already in the sheet; (3) undo/redo — which
-/// swap whole arrays that were themselves sheets. There is no fourth setter, so the byte cast
-/// in the plot routine can never truncate. <see cref="PngEncoder"/> re-checks on save as the
-/// owner of its own input contract; that check is unreachable from here by construction.</para>
+/// emits matches against the 16 visible palette colors; (2) the pencil and the bucket — which
+/// write <see cref="CurrentColor"/>, and <see cref="SelectColor"/> throws on anything outside
+/// 0-15 while <see cref="PickColor"/> copies a value already in the sheet; (3) undo/redo —
+/// which swap whole arrays that were themselves sheets; (4) the region edits — flips and the
+/// rotation only permute values already in the sheet, and the clear writes the literal 0.
+/// There is no fifth setter, so the byte casts in the plot and fill routines can never
+/// truncate. <see cref="PngEncoder"/> re-checks on save as the owner of its own input
+/// contract; that check is unreachable from here by construction.</para>
 ///
 /// <para><b>Dirty is content, not history.</b> <see cref="IsDirty"/> compares the live sheet
 /// against a snapshot of what the disk holds (or held nothing — an all-zero sheet), because
@@ -26,11 +40,12 @@ namespace Quarp.Shell.Desktop;
 /// would change nothing. A 16 KB compare per query costs microseconds and cannot drift out of
 /// sync the way a depth counter under an undo/redo/new-stroke braid can.</para>
 ///
-/// <para><b>The region is a concept from day one</b> (work order: wave 2c grows it to 16x16
-/// and 32x32 without rebuilding the canvas): the editable area is <see cref="RegionCells"/>
-/// sprite cells on a side, anchored at a cell the sheet grid selects, and every pixel
-/// coordinate the shell hands in is region-local. Wave 2b pins the size at one cell; the
-/// clamps and the canvas already speak in cells.</para>
+/// <para><b>The region can never hang off the sheet.</b> The size cycle (8/16/32 px a side)
+/// and the grid click are the only two writers of the region, and both go through the same
+/// clamp: the anchor stops at <c>GridCells - RegionCells</c>. That single invariant is what
+/// lets every transform below read and write blindly through <see cref="SheetOffset"/> —
+/// a rotation at the sheet's edge is exactly as safe as one in the middle, because an edge
+/// region that would clip simply cannot be selected.</para>
 /// </summary>
 public sealed class SpriteEditorSession
 {
@@ -86,14 +101,22 @@ public sealed class SpriteEditorSession
     /// <summary>The pencil's ink, always a visible palette index 0-15. Painting with 0 IS the eraser (work order: no separate tool).</summary>
     public int CurrentColor { get; private set; }
 
+    /// <summary>What a left click on the canvas does — the footer names this, so switching tools is always visible.</summary>
+    public SpriteEditorTool Tool { get; private set; } = SpriteEditorTool.Pencil;
+
     /// <summary>Region anchor, in sheet cells 0-15.</summary>
     public int RegionCellX { get; private set; }
 
     /// <summary>Region anchor, in sheet cells 0-15.</summary>
     public int RegionCellY { get; private set; }
 
-    /// <summary>Region side in sprite cells. Pinned to 1 this wave; wave 2c adds the 2/4 steps on top of the same plumbing.</summary>
-    public int RegionCells { get; } = 1;
+    /// <summary>
+    /// Region side in sprite cells — 1, 2 or 4 (the niche's 8/16/32 px "zoom": a bigger slice
+    /// of the sheet under the pencil, not a lens). Written only by <see cref="CycleRegionSize"/>,
+    /// which re-clamps the anchor, so size and position can never disagree about staying inside
+    /// the sheet.
+    /// </summary>
+    public int RegionCells { get; private set; } = 1;
 
     /// <summary>Region side in pixels — what canvas-local coordinates are validated against.</summary>
     public int RegionPixels => RegionCells * VirtualConsole.SpriteSize;
@@ -219,6 +242,136 @@ public sealed class SpriteEditorSession
         ValidateLocal(localX, nameof(localX));
         ValidateLocal(localY, nameof(localY));
         CurrentColor = _sheet[SheetOffset(localX, localY)];
+    }
+
+    /// <summary>B: pencil ↔ bucket. Ends an open stroke first — a gesture that straddles a tool switch would be two tools in one undo step.</summary>
+    public void ToggleTool()
+    {
+        EndStroke();
+        Tool = Tool == SpriteEditorTool.Pencil ? SpriteEditorTool.Fill : SpriteEditorTool.Pencil;
+    }
+
+    /// <summary>
+    /// Tab: region side 1 → 2 → 4 → 1 cells. Re-clamps the anchor through
+    /// <see cref="SelectRegionCell"/> — growing at the sheet's edge pulls the region back
+    /// inside rather than letting it clip, which is the invariant every transform relies on.
+    /// Ends an open stroke first: the stroke's last-point memory is in old region coordinates,
+    /// and joining a line across a size change could leave the shrunk region's bounds.
+    /// </summary>
+    public void CycleRegionSize()
+    {
+        EndStroke();
+        RegionCells = RegionCells switch { 1 => 2, 2 => 4, _ => 1 };
+        SelectRegionCell(RegionCellX, RegionCellY);
+    }
+
+    /// <summary>
+    /// The bucket: repaints the 4-connected area of one color around a region-local pixel with
+    /// <see cref="CurrentColor"/>, walls at the region's border (work order: the region bounds
+    /// the fill). One undo step, like a stroke — and filling a color with itself changes
+    /// nothing, so it never happened as far as undo and dirt are concerned.
+    /// </summary>
+    public void Fill(int localX, int localY)
+    {
+        ValidateLocal(localX, nameof(localX));
+        ValidateLocal(localY, nameof(localY));
+        EndStroke();    // A stray open gesture commits as its own step before the fill becomes one.
+        byte target = _sheet[SheetOffset(localX, localY)];
+        if (target == CurrentColor)
+        {
+            return;
+        }
+        // target != CurrentColor guarantees at least the seed pixel changes, so the undo
+        // snapshot is taken unconditionally — there is no "nothing changed" path from here.
+        _undo.Add((byte[])_sheet.Clone());
+        _redo.Clear();
+        int n = RegionPixels;
+        // An explicit stack instead of recursion: a 32x32 single-color region is a 1024-deep
+        // recursion worst case, and the repaint itself marks pixels visited (they stop
+        // matching target), so no separate visited set is needed.
+        var pending = new Stack<(int X, int Y)>();
+        pending.Push((localX, localY));
+        while (pending.Count > 0)
+        {
+            (int x, int y) = pending.Pop();
+            if (x < 0 || x >= n || y < 0 || y >= n)
+            {
+                continue;   // the region border is the fill's wall
+            }
+            int offset = SheetOffset(x, y);
+            if (_sheet[offset] != target)
+            {
+                continue;
+            }
+            _sheet[offset] = (byte)CurrentColor;
+            pending.Push((x + 1, y));
+            pending.Push((x - 1, y));
+            pending.Push((x, y + 1));
+            pending.Push((x, y - 1));
+        }
+        Version++;
+    }
+
+    /// <summary>F: mirror the region left↔right. One undo step; a symmetric region is a no-op and stays invisible.</summary>
+    public void FlipHorizontal() => ApplyRegionEdit(static (src, n, x, y) => src[y * n + (n - 1 - x)]);
+
+    /// <summary>V: mirror the region top↔bottom.</summary>
+    public void FlipVertical() => ApplyRegionEdit(static (src, n, x, y) => src[(n - 1 - y) * n + x]);
+
+    /// <summary>
+    /// R: rotate the region 90° clockwise — the top row becomes the right column. Always legal
+    /// without remapping cells because the region is square by construction (the whole reason
+    /// the work order pins it square).
+    /// </summary>
+    public void RotateClockwise() => ApplyRegionEdit(static (src, n, x, y) => src[(n - 1 - x) * n + y]);
+
+    /// <summary>Delete: the region to color 0 — the sheet's "nothing", same as the eraser writes.</summary>
+    public void ClearRegion() => ApplyRegionEdit(static (_, _, _, _) => 0);
+
+    /// <summary>
+    /// The one mechanism under all four region edits: read the region out, build its
+    /// replacement (<paramref name="source"/> answers "what goes at dest (x, y)" from the old
+    /// region, side n), and commit only if the result differs — so an edit that changes
+    /// nothing is invisible to undo and dirt, exactly like an idle stroke. Reads and writes go
+    /// through <see cref="SheetOffset"/> on region-local coordinates, so pixels outside the
+    /// region are unreachable by construction — the transforms cannot touch neighbouring
+    /// sprites no matter where the region sits, because the anchor clamp keeps the whole
+    /// square inside the sheet.
+    /// </summary>
+    private void ApplyRegionEdit(Func<byte[], int, int, int, byte> source)
+    {
+        EndStroke();    // A transform mid-drag commits the gesture first — two clean undo steps, no braid.
+        int n = RegionPixels;
+        var before = new byte[n * n];
+        for (int y = 0; y < n; y++)
+        {
+            for (int x = 0; x < n; x++)
+            {
+                before[y * n + x] = _sheet[SheetOffset(x, y)];
+            }
+        }
+        var after = new byte[n * n];
+        for (int y = 0; y < n; y++)
+        {
+            for (int x = 0; x < n; x++)
+            {
+                after[y * n + x] = source(before, n, x, y);
+            }
+        }
+        if (after.AsSpan().SequenceEqual(before))
+        {
+            return;
+        }
+        _undo.Add((byte[])_sheet.Clone());
+        _redo.Clear();
+        for (int y = 0; y < n; y++)
+        {
+            for (int x = 0; x < n; x++)
+            {
+                _sheet[SheetOffset(x, y)] = after[y * n + x];
+            }
+        }
+        Version++;
     }
 
     /// <summary>

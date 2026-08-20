@@ -353,6 +353,30 @@ public sealed class QuarpGame : Game
         {
             editor.Save();                       // failure lands in SaveError; the footer shows it
         }
+        if (commands.EditorToolToggle)
+        {
+            editor.ToggleTool();
+        }
+        if (commands.EditorRegionCycle)
+        {
+            editor.CycleRegionSize();            // before the layout below — the canvas must resize this same frame
+        }
+        if (commands.EditorFlipH)
+        {
+            editor.FlipHorizontal();
+        }
+        if (commands.EditorFlipV)
+        {
+            editor.FlipVertical();
+        }
+        if (commands.EditorRotate)
+        {
+            editor.RotateClockwise();
+        }
+        if (commands.EditorClear)
+        {
+            editor.ClearRegion();
+        }
 
         // The same layout the renderer will draw this frame — geometry has one owner.
         var layout = SpriteEditorLayout.Compute(
@@ -371,8 +395,17 @@ public sealed class QuarpGame : Game
             }
             else if (layout.TryCanvasPixel(mouse.X, mouse.Y, out int pressX, out int pressY))
             {
-                editor.BeginStroke();
-                editor.Paint(pressX, pressY);
+                if (editor.Tool == SpriteEditorTool.Fill)
+                {
+                    // The bucket is a click, not a gesture: no stroke opens, so the drag
+                    // branch below stays naturally dead until the tool is the pencil again.
+                    editor.Fill(pressX, pressY);
+                }
+                else
+                {
+                    editor.BeginStroke();
+                    editor.Paint(pressX, pressY);
+                }
             }
         }
         else if (mouse.LeftDown && editor.StrokeActive)

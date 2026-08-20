@@ -164,22 +164,35 @@ public sealed class SpriteEditorRenderer : IDisposable
     {
         if (editor.SaveError is string error)
         {
+            // Above both footer rows, so an error is never traded for a hint.
             _font.Draw(
                 batch, $"SAVE FAILED: {error}".ToUpperInvariant(),
-                layout.Margin, layout.FooterY - PixelFontAtlas.LineHeight(layout.Ui) - layout.Ui,
+                layout.Margin, layout.StatusY - PixelFontAtlas.LineHeight(layout.Ui) - layout.Ui,
                 layout.Ui, Error);
         }
         if (editor.ExitPromptShown)
         {
             // The work order's exact contract, as a footer line and not a modal: Z saves and
-            // leaves, X leaves without saving, Esc stays.
+            // leaves, X leaves without saving, Esc stays. It replaces both footer rows —
+            // while it is up the keys it names are the only live ones, so hints would lie.
             _font.Draw(
                 batch, "UNSAVED CHANGES:  Z SAVE AND EXIT   X EXIT WITHOUT SAVING   ESC STAY",
                 layout.Margin, layout.FooterY, layout.Ui, Warn);
             return;
         }
+        // Status row: what a click will do right now. The tool name is bright because it is
+        // state, not a hint — the pencil↔bucket switch must be visible at a glance (wave 2c).
+        bool fill = editor.Tool == SpriteEditorTool.Fill;
+        string tool = fill ? "FILL" : "PENCIL";
+        _font.Draw(batch, tool, layout.Margin, layout.StatusY, layout.Ui, Bright);
         _font.Draw(
-            batch, "LMB DRAW   RMB PICK   CTRL+Z UNDO   CTRL+Y REDO   CTRL+S SAVE   ESC BACK",
+            batch,
+            $"   {editor.RegionPixels}X{editor.RegionPixels}   {(fill ? "LMB FILL" : "LMB DRAW")}"
+            + "   RMB PICK   CTRL+Z UNDO   CTRL+Y REDO   CTRL+S SAVE",
+            layout.Margin + PixelFontAtlas.MeasureWidth(tool, layout.Ui),
+            layout.StatusY, layout.Ui, Dim);
+        _font.Draw(
+            batch, "B TOOL   TAB REGION   F FLIP-H   V FLIP-V   R ROTATE   DEL CLEAR   ESC BACK",
             layout.Margin, layout.FooterY, layout.Ui, Dim);
     }
 

@@ -37,8 +37,16 @@ public readonly struct SpriteEditorLayout
     /// <summary>Baseline of the header text.</summary>
     public int HeaderY { get; private init; }
 
-    /// <summary>Baseline of the footer hint / prompt line.</summary>
+    /// <summary>Baseline of the footer key-hint / prompt line (the lower of the two footer rows).</summary>
     public int FooterY { get; private init; }
+
+    /// <summary>
+    /// Baseline of the status row above the hints — active tool, region size, mouse meanings
+    /// (wave 2c). Owned by the layout rather than improvised in the renderer so the canvas
+    /// bottom is computed above it: an always-on second footer row that overlapped the canvas
+    /// would hide the very pixels being edited.
+    /// </summary>
+    public int StatusY { get; private init; }
 
     /// <summary>The zoomed region view — the surface the pencil paints on.</summary>
     public Rectangle Canvas { get; private init; }
@@ -67,8 +75,9 @@ public readonly struct SpriteEditorLayout
         int margin = 4 * ui;
         int headerY = margin;
         int footerY = height - margin - PixelFontAtlas.LineHeight(ui);
+        int statusY = footerY - PixelFontAtlas.LineHeight(ui) - ui;
         int top = headerY + PixelFontAtlas.LineHeight(2 * ui) + 2 * ui;
-        int bottom = footerY - 2 * ui;
+        int bottom = statusY - 2 * ui;
         int regionPixels = regionCells * VirtualConsole.SpriteSize;
 
         // The canvas takes the left half: pixel-art editing lives or dies by target size, so
@@ -102,6 +111,7 @@ public readonly struct SpriteEditorLayout
             Margin = margin,
             HeaderY = headerY,
             FooterY = footerY,
+            StatusY = statusY,
             Canvas = canvas,
             CanvasScale = canvasScale,
             Sheet = sheet,

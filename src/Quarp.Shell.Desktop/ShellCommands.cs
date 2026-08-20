@@ -70,6 +70,24 @@ public readonly struct ShellCommands
 
     /// <summary>Editor: Ctrl+S — save the sheet (a no-op on a clean session, by the save contract).</summary>
     public bool EditorSave { get; init; }
+
+    /// <summary>Editor: B — pencil ↔ bucket. Bare key, so Ctrl-guarded like every editor letter (wave 2c).</summary>
+    public bool EditorToolToggle { get; init; }
+
+    /// <summary>Editor: Tab — cycle the region size 8/16/32 px.</summary>
+    public bool EditorRegionCycle { get; init; }
+
+    /// <summary>Editor: F — flip the region horizontally (PICO-8's key, per the niche survey).</summary>
+    public bool EditorFlipH { get; init; }
+
+    /// <summary>Editor: V — flip the region vertically.</summary>
+    public bool EditorFlipV { get; init; }
+
+    /// <summary>Editor: R — rotate the region 90° clockwise.</summary>
+    public bool EditorRotate { get; init; }
+
+    /// <summary>Editor: Delete — clear the region to color 0.</summary>
+    public bool EditorClear { get; init; }
 }
 
 /// <summary>
@@ -104,6 +122,15 @@ public sealed class ShellCommandReader
             EditorUndo = ctrl && Pressed(keyboard, Keys.Z),
             EditorRedo = ctrl && Pressed(keyboard, Keys.Y),
             EditorSave = ctrl && Pressed(keyboard, Keys.S),
+            // The editor letters carry the !ctrl guard for the same reason MenuConfirm does:
+            // a chord must not double as its bare key, today (Ctrl+S over a future S-binding)
+            // or when a chord lands on these letters later.
+            EditorToolToggle = !ctrl && Pressed(keyboard, Keys.B),
+            EditorRegionCycle = Pressed(keyboard, Keys.Tab),
+            EditorFlipH = !ctrl && Pressed(keyboard, Keys.F),
+            EditorFlipV = !ctrl && Pressed(keyboard, Keys.V),
+            EditorRotate = !ctrl && Pressed(keyboard, Keys.R),
+            EditorClear = Pressed(keyboard, Keys.Delete),
         };
         _previous = keyboard;
         return commands;

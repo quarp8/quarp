@@ -31,7 +31,12 @@ public class SelectStampToolbarTests : IDisposable
 
     // ---- the digits ----
 
-    /// <summary>The select group's digit mechanism, same as the shape's: the first press selects, a repeat cycles the variant.</summary>
+    /// <summary>
+    /// The select group's digit mechanism, same as the shape's: the first press selects, a
+    /// repeat cycles the variant. The cycle grew in wave 2g — the owner's third review added
+    /// the wand as the third variant, so the old two-step wrap (brush → rectangle) was pinning
+    /// a variant set the owner overruled; the walk is rectangle → brush → wand → rectangle now.
+    /// </summary>
     [Fact]
     public void TheSelectDigitSelectsFirstThenCycles()
     {
@@ -45,7 +50,10 @@ public class SelectStampToolbarTests : IDisposable
         Assert.Equal(SelectionVariant.Brush, session.CurrentSelection);         // the repeat cycles
 
         EditorIcons.PressToolDigit(session, 1);
-        Assert.Equal(SelectionVariant.Rectangle, session.CurrentSelection);
+        Assert.Equal(SelectionVariant.Wand, session.CurrentSelection);          // 2g: the wand is stop three
+
+        EditorIcons.PressToolDigit(session, 1);
+        Assert.Equal(SelectionVariant.Rectangle, session.CurrentSelection);     // and the wrap comes after it
     }
 
     [Fact]
@@ -82,7 +90,11 @@ public class SelectStampToolbarTests : IDisposable
         Assert.Equal(SpriteEditorTool.Select, session.Tool);        // the author asked for that marker, not a note about it
     }
 
-    /// <summary>The slot's face is the current variant — the same VariantIcon cast the shape slot pins.</summary>
+    /// <summary>
+    /// The slot's face is the current variant — the same VariantIcon cast the shape slot pins.
+    /// Wave 2g moved the out-of-range boundary from 2 to 3: index 2 is the owner's wand now,
+    /// with its own glyph and a tooltip naming both the digit and what a click takes.
+    /// </summary>
     [Fact]
     public void SelectVariantIconsAndTooltipsFollowTheEnum()
     {
@@ -92,10 +104,16 @@ public class SelectStampToolbarTests : IDisposable
         Assert.Equal(
             EditorIcon.SelectBrush,
             EditorIcons.VariantIcon(EditorButton.ToolSelect, (int)SelectionVariant.Brush));
+        Assert.Equal(
+            EditorIcon.Wand,
+            EditorIcons.VariantIcon(EditorButton.ToolSelect, (int)SelectionVariant.Wand));
         Assert.Contains(
             "1", EditorIcons.VariantTooltip(EditorButton.ToolSelect, (int)SelectionVariant.Brush),
             StringComparison.Ordinal);
-        Assert.Throws<ArgumentOutOfRangeException>(() => EditorIcons.VariantIcon(EditorButton.ToolSelect, 2));
+        Assert.Contains(
+            "WAND", EditorIcons.VariantTooltip(EditorButton.ToolSelect, (int)SelectionVariant.Wand),
+            StringComparison.Ordinal);
+        Assert.Throws<ArgumentOutOfRangeException>(() => EditorIcons.VariantIcon(EditorButton.ToolSelect, 3));
     }
 
     // ---- tooltips: alive, with hotkeys, honest about an empty stamp ----

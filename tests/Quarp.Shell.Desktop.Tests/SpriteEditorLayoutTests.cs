@@ -222,7 +222,7 @@ public class SpriteEditorLayoutTests
     /// centres hit themselves — the same roundtrip discipline as every clickable rectangle.
     /// </summary>
     [Theory]
-    [InlineData(EditorButton.ToolSelect, 2)]
+    [InlineData(EditorButton.ToolSelect, 3)]    // 2 → 3 in wave 2g: the owner's wand is the select group's third variant
     [InlineData(EditorButton.ToolShape, 2)]
     [InlineData(EditorButton.ToolTransform, 3)]
     public void FlyoutVariantsRoundTripThroughTheirRectangles(EditorButton slot, int count)

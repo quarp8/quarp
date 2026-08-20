@@ -41,15 +41,18 @@ public enum ShapeVariant
 }
 
 /// <summary>
-/// The select group slot's variants (wave 2f) — same contract as <see cref="TransformVariant"/>:
-/// the rectangle drags a box over the mask, the brush strokes the mask the way the pencil
-/// strokes pixels. The variant decides what a fresh press MARKS; a press over an existing
-/// selection grabs and moves regardless of variant.
+/// The select group slot's variants (wave 2f; the wand joined in 2g — the owner's third
+/// review) — same contract as <see cref="TransformVariant"/>: the rectangle drags a box over
+/// the mask, the brush strokes the mask the way the pencil strokes pixels, the wand takes the
+/// 4-connected area of one color around the click (the bucket's own connectivity and walls —
+/// one flood, two tools). The variant decides what a fresh press MARKS; a press over an
+/// existing selection grabs and moves regardless of variant.
 /// </summary>
 public enum SelectionVariant
 {
     Rectangle,
     Brush,
+    Wand,
 }
 
 /// <summary>
@@ -128,9 +131,9 @@ public sealed class SpriteEditorSession
     private readonly List<(int X, int Y)> _shapePoints = new();
 
     /// <summary>
-    /// What an open select-tool press currently means. Rectangle and Brush are marking a NEW
-    /// mask (the kind is fixed at the press — half a box cannot become half a stroke); Move is
-    /// dragging the selected pixels by an offset. Exactly one can be open, like the shape
+    /// What an open select-tool press currently means. Rectangle, Brush and Wand are marking a
+    /// NEW mask (the kind is fixed at the press — half a box cannot become half a stroke); Move
+    /// is dragging the selected pixels by an offset. Exactly one can be open, like the shape
     /// gesture, and none of them touches <c>_sheet</c> — only <see cref="CommitSelect"/> does.
     /// </summary>
     private enum SelectGesture
@@ -138,6 +141,7 @@ public sealed class SpriteEditorSession
         None,
         Rectangle,
         Brush,
+        Wand,
         Move,
     }
 
@@ -150,7 +154,7 @@ public sealed class SpriteEditorSession
     private bool[]? _selection;
     private int _selectionCount;
     private SelectGesture _selectGesture;
-    private int _selectAnchorX;     // rectangle anchor / the brush's last marked point / the grab point
+    private int _selectAnchorX;     // rectangle anchor / the brush's last marked point / the wand's last pick / the grab point
     private int _selectAnchorY;
     private int _moveDx;
     private int _moveDy;
@@ -440,22 +444,26 @@ public sealed class SpriteEditorSession
     }
 
     /// <summary>
-    /// B: pencil ↔ bucket, its wave-2c contract untouched by the third tool — from Shape it
-    /// lands on the pencil, the opening tool. Interrupts an open gesture first: a stroke that
-    /// straddles a tool switch would be two tools in one undo step, and a shape preview
-    /// belongs to the tool that opened it.
+    /// B: pencil ↔ bucket, its wave-2c contract untouched by the later tools — from any of
+    /// them it lands on the pencil, the opening tool. Routed through <see cref="SelectTool"/>
+    /// so the whole switch discipline (commit the open gesture, park a floating move, drop the
+    /// mask) has exactly one owner and B can never mean less than a toolbar click does.
     /// </summary>
-    public void ToggleTool()
-    {
-        InterruptGesture();
-        Tool = Tool == SpriteEditorTool.Pencil ? SpriteEditorTool.Fill : SpriteEditorTool.Pencil;
-    }
+    public void ToggleTool() =>
+        SelectTool(Tool == SpriteEditorTool.Pencil ? SpriteEditorTool.Fill : SpriteEditorTool.Pencil);
 
     /// <summary>
-    /// Direct tool selection — the real select the wave-2b comment in <c>QuarpGame.SetTool</c>
-    /// promised once a third tool existed. Same gesture discipline as <see cref="ToggleTool"/>;
-    /// selecting the tool already active is a visible no-op on purpose, so a toolbar click
-    /// cannot eat an open gesture for nothing.
+    /// Direct tool selection — every path to a tool (toolbar click, digit, B) funnels here.
+    /// The gesture discipline of the earlier waves stands, plus the owner's third-review law:
+    /// <b>the selection lives only under the select tool</b>. Leaving it parks an open float
+    /// as its own committed drop first (a tool switch is a change of subject, not an Esc —
+    /// silently snapping the fragment home would throw away an arrangement the author can
+    /// see), and then the mask dies with the switch — which is what returns Delete and every
+    /// region edit to their whole-region meaning (the review's "очистка не работает" was a
+    /// mask surviving invisibly under the pencil and quietly narrowing Clear). The stamp
+    /// source stands untouched: it is the memory taken at the selection's commit, not the
+    /// selection itself. Selecting the tool already active is a visible no-op on purpose, so
+    /// a toolbar click cannot eat an open gesture — or a live selection — for nothing.
     /// </summary>
     public void SelectTool(SpriteEditorTool tool)
     {
@@ -463,7 +471,12 @@ public sealed class SpriteEditorSession
         {
             return;
         }
+        if (MoveActive)
+        {
+            CommitSelect();     // the float parks where the author left it — one undo step, like any drop
+        }
         InterruptGesture();
+        ClearSelection();
         Tool = tool;
     }
 
@@ -631,19 +644,20 @@ public sealed class SpriteEditorSession
     /// <summary>Flyout pick for the select slot — remembered for the next press. An open gesture keeps the kind it was pressed with.</summary>
     public void SelectSelectionVariant(SelectionVariant variant) => CurrentSelection = variant;
 
-    /// <summary>The digit's repeat-press on the select slot: rectangle ↔ brush.</summary>
+    /// <summary>The digit's repeat-press on the select slot: rectangle → brush → wand → rectangle.</summary>
     public void CycleSelectionVariant() =>
-        CurrentSelection = CurrentSelection == SelectionVariant.Rectangle
-            ? SelectionVariant.Brush
-            : SelectionVariant.Rectangle;
+        CurrentSelection = (SelectionVariant)(((int)CurrentSelection + 1) % 3);
 
     /// <summary>
     /// Select button pressed on the canvas (mouse press or Z/Space — one dispatch in the
     /// shell). Over the selection it grabs: the pixels float and the drag carries them (the
     /// order's "повторное Z над выделением берёт и двигает"). Anywhere else it starts marking
     /// a NEW mask — which is how "клик новым выделением снимает старое" happens: the old mask
-    /// dies at the press, not at the release. Throws outside the region like
-    /// <see cref="Paint"/> — the shell's clamp is the contract.
+    /// dies at the press, not at the release. The rectangle and the brush mark a point and
+    /// grow with the drag; the wand marks its whole area right here, through the very flood
+    /// the bucket repaints with (<see cref="VisitConnectedColor"/> — one owner of "same color,
+    /// 4-connected, walled by the region"). Throws outside the region like <see cref="Paint"/> —
+    /// the shell's clamp is the contract.
     /// </summary>
     public void BeginSelect(int localX, int localY)
     {
@@ -662,10 +676,21 @@ public sealed class SpriteEditorSession
         }
         _selection = new bool[RegionPixels * RegionPixels];
         _selectionCount = 0;
-        _selectGesture = CurrentSelection == SelectionVariant.Rectangle
-            ? SelectGesture.Rectangle
-            : SelectGesture.Brush;
-        MarkSelected(localX, localY);
+        switch (CurrentSelection)
+        {
+            case SelectionVariant.Rectangle:
+                _selectGesture = SelectGesture.Rectangle;
+                MarkSelected(localX, localY);
+                break;
+            case SelectionVariant.Brush:
+                _selectGesture = SelectGesture.Brush;
+                MarkSelected(localX, localY);
+                break;
+            default:
+                _selectGesture = SelectGesture.Wand;
+                VisitConnectedColor(localX, localY, MarkSelected);
+                break;
+        }
     }
 
     /// <summary>
@@ -691,7 +716,9 @@ public sealed class SpriteEditorSession
     /// One frame of an open select gesture, fed the canvas cursor — both input worlds steer
     /// the cursor, so this is their meeting point, like <see cref="UpdateShape"/>. The
     /// rectangle re-marks its box, the brush strokes the mask through the pencil's own line
-    /// tracer, the move re-clamps its offset. Nothing here touches the sheet.
+    /// tracer, the wand re-picks at the new point (sliding onto another color shows that
+    /// color's area live, so the release commits what is on screen, never a stale press), the
+    /// move re-clamps its offset. Nothing here touches the sheet.
     /// </summary>
     public void UpdateSelect(int localX, int localY)
     {
@@ -710,6 +737,16 @@ public sealed class SpriteEditorSession
                 TraceLine(_selectAnchorX, _selectAnchorY, localX, localY, MarkSelected);
                 _selectAnchorX = localX;
                 _selectAnchorY = localY;
+                break;
+            case SelectGesture.Wand:
+                if (localX != _selectAnchorX || localY != _selectAnchorY)
+                {
+                    _selectAnchorX = localX;
+                    _selectAnchorY = localY;
+                    Array.Clear(_selection!);
+                    _selectionCount = 0;
+                    VisitConnectedColor(localX, localY, MarkSelected);
+                }
                 break;
             default:
                 _moveDx = Math.Clamp(localX - _selectAnchorX, _moveMinDx, _moveMaxDx);
@@ -737,6 +774,7 @@ public sealed class SpriteEditorSession
         {
             case SelectGesture.Rectangle:
             case SelectGesture.Brush:
+            case SelectGesture.Wand:
                 CaptureStampSource();
                 break;
             case SelectGesture.Move:
@@ -926,7 +964,7 @@ public sealed class SpriteEditorSession
     {
         _shapeActive = false;
         _shapePoints.Clear();
-        if (_selectGesture is SelectGesture.Rectangle or SelectGesture.Brush)
+        if (_selectGesture is SelectGesture.Rectangle or SelectGesture.Brush or SelectGesture.Wand)
         {
             _selection = null;
             _selectionCount = 0;
@@ -956,8 +994,9 @@ public sealed class SpriteEditorSession
     /// <summary>
     /// The bucket: repaints the 4-connected area of one color around a region-local pixel with
     /// <see cref="CurrentColor"/>, walls at the region's border (work order: the region bounds
-    /// the fill). One undo step, like a stroke — and filling a color with itself changes
-    /// nothing, so it never happened as far as undo and dirt are concerned.
+    /// the fill) — the walk itself lives in <see cref="VisitConnectedColor"/>, shared with the
+    /// wand. One undo step, like a stroke — and filling a color with itself changes nothing,
+    /// so it never happened as far as undo and dirt are concerned.
     /// </summary>
     public void Fill(int localX, int localY)
     {
@@ -973,31 +1012,46 @@ public sealed class SpriteEditorSession
         // snapshot is taken unconditionally — there is no "nothing changed" path from here.
         _undo.Add((byte[])_sheet.Clone());
         _redo.Clear();
+        VisitConnectedColor(localX, localY, (x, y) => _sheet[SheetOffset(x, y)] = (byte)CurrentColor);
+        Version++;
+    }
+
+    /// <summary>
+    /// The 4-connected same-color walk the bucket repaints with and the wand marks with — one
+    /// owner of the flood (playbook: a second copy of "same color, 4-connected, walled by the
+    /// region" would let the two tools drift apart about what "this area" means). An explicit
+    /// stack instead of recursion: a 32x32 single-color region is a 1024-deep recursion worst
+    /// case. The visited set makes the walk independent of what <paramref name="visit"/> does
+    /// to the sheet: the bucket repaints mid-walk, the wand writes nothing at all, and both
+    /// cover the same pixels because membership is decided by the color as it was read before
+    /// any visit could change it. Coordinates are validated by the callers, like every canvas
+    /// verb.
+    /// </summary>
+    private void VisitConnectedColor(int localX, int localY, Action<int, int> visit)
+    {
+        byte target = _sheet[SheetOffset(localX, localY)];
         int n = RegionPixels;
-        // An explicit stack instead of recursion: a 32x32 single-color region is a 1024-deep
-        // recursion worst case, and the repaint itself marks pixels visited (they stop
-        // matching target), so no separate visited set is needed.
+        var seen = new bool[n * n];
         var pending = new Stack<(int X, int Y)>();
         pending.Push((localX, localY));
         while (pending.Count > 0)
         {
             (int x, int y) = pending.Pop();
-            if (x < 0 || x >= n || y < 0 || y >= n)
+            if (x < 0 || x >= n || y < 0 || y >= n || seen[y * n + x])
             {
-                continue;   // the region border is the fill's wall
+                continue;   // the region border is the wall — for the fill and the wand alike
             }
-            int offset = SheetOffset(x, y);
-            if (_sheet[offset] != target)
+            if (_sheet[SheetOffset(x, y)] != target)
             {
                 continue;
             }
-            _sheet[offset] = (byte)CurrentColor;
+            seen[y * n + x] = true;
+            visit(x, y);
             pending.Push((x + 1, y));
             pending.Push((x - 1, y));
             pending.Push((x, y + 1));
             pending.Push((x, y - 1));
         }
-        Version++;
     }
 
     /// <summary>

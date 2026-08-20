@@ -660,40 +660,22 @@ public sealed class QuarpGame : Game
     }
 
     /// <summary>
-    /// A click on a live, non-group icon-button, routed to the same session calls the keys
-    /// use — parity by construction (group slots go through <see cref="ToolbarFlyout"/>'s
-    /// arm/click path instead, because their press has two possible meanings). Returns true
-    /// when the button may have changed the shell mode (the exit tab), telling the caller to
-    /// stop touching the editor this frame.
+    /// A click on a live, non-group icon-button (group slots go through
+    /// <see cref="ToolbarFlyout"/>'s arm/click path instead, because their press has two
+    /// possible meanings). The routing table itself is <see cref="EditorIcons.ClickButton"/> —
+    /// moved there in wave 2g after the stamp shipped placed-but-unwired, so the contract test
+    /// can click every placed button without a window; this wrapper owns the one verb a
+    /// session cannot perform: leaving the mode. Returns true when the button may have changed
+    /// the shell mode (the exit tab), telling the caller to stop touching the editor this frame.
     /// </summary>
     private bool HandleEditorButton(SpriteEditorSession editor, EditorButton button)
     {
-        switch (button)
+        if (EditorIcons.ClickButton(editor, button))
         {
-            case EditorButton.ExitTab:
-                _modes.HandleEscape();           // clean → library; dirty → the prompt, same as Esc
-                return true;
-            case EditorButton.ToolPencil:
-                editor.SelectTool(SpriteEditorTool.Pencil);
-                return false;
-            case EditorButton.ToolFill:
-                editor.SelectTool(SpriteEditorTool.Fill);
-                return false;
-            case EditorButton.Clear:
-                editor.ClearRegion();            // in the status bar since the owner's second review; Del unchanged
-                return false;
-            case EditorButton.Save:
-                editor.Save();                   // the modified/saved icon IS this button — click = Ctrl+S
-                return false;
-            case EditorButton.Undo:
-                editor.Undo();
-                return false;
-            case EditorButton.Redo:
-                editor.Redo();
-                return false;
-            default:
-                return false;                    // SpritesTab: already the mode on screen
+            _modes.HandleEscape();               // clean → library; dirty → the prompt, same as Esc
+            return true;
         }
+        return false;
     }
 
     protected override void Draw(GameTime gameTime)
@@ -712,6 +694,8 @@ public sealed class QuarpGame : Game
                     _modes.LibraryMessage);
                 break;
             case ShellMode.Editor:
+                // The draw clock feeds the marching ants' phase — host chrome animating in
+                // host time, like the tooltip delay; no simulation or hash can see it.
                 _editorUi.Draw(
                     _spriteBatch,
                     GraphicsDevice.PresentationParameters.BackBufferWidth,
@@ -719,7 +703,8 @@ public sealed class QuarpGame : Game
                     _modes.Editor!,
                     _hover.Target,
                     _hover.TooltipVisible,
-                    _flyout.OpenSlot);
+                    _flyout.OpenSlot,
+                    gameTime.TotalGameTime.TotalSeconds);
                 break;
         }
         base.Draw(gameTime);        // the game loop presents for us

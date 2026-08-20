@@ -38,7 +38,12 @@ public class EditorIconsTests
 
     // ---- group slots ----
 
-    /// <summary>Exactly the three variant groups carry the marker-and-flyout mechanism (select joined in wave 2f); a stub can never be a group.</summary>
+    /// <summary>
+    /// Exactly the three variant groups carry the marker-and-flyout mechanism (select joined
+    /// in wave 2f); a stub can never be a group. Counts updated in wave 2g: the owner's third
+    /// review added the wand as the select group's third variant, so the old "select has 2"
+    /// pin was pinning behavior the owner cancelled — shape alone stays at two.
+    /// </summary>
     [Fact]
     public void ExactlyTheThreeGroupSlotsCarryVariants()
     {
@@ -47,7 +52,7 @@ public class EditorIconsTests
             bool group = button is EditorButton.ToolSelect or EditorButton.ToolShape or EditorButton.ToolTransform;
             Assert.Equal(group, EditorIcons.IsGroupSlot(button));
             Assert.Equal(
-                group ? button == EditorButton.ToolTransform ? 3 : 2 : 0,
+                group ? button == EditorButton.ToolShape ? 2 : 3 : 0,
                 EditorIcons.GroupVariantCount(button));
             if (group)
             {

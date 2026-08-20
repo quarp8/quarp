@@ -68,6 +68,7 @@ public enum EditorIcon
     // Appended past the wave-2e set: the mask array below is indexed by this enum's values,
     // so new glyphs only ever join at the end.
     SelectBrush,
+    Wand,
 }
 
 /// <summary>
@@ -322,6 +323,17 @@ public static class EditorIcons
             0b11110000,
             0b01100000,
         },
+        new byte[] // Wand: a four-point sparkle at the tip of a thin diagonal handle — the select slot's wand face
+        {
+            0b00000100,
+            0b00001010,
+            0b00000100,
+            0b00001000,
+            0b00010000,
+            0b00100000,
+            0b01000000,
+            0b10000000,
+        },
     };
 
     /// <summary>How many glyphs exist — the atlas sizes its strip from this.</summary>
@@ -354,7 +366,7 @@ public static class EditorIcons
     /// <summary>How many variants a group slot's flyout shows; 0 for everything that is not a group.</summary>
     public static int GroupVariantCount(EditorButton button) => button switch
     {
-        EditorButton.ToolSelect => 2,       // SelectionVariant: rectangle, brush
+        EditorButton.ToolSelect => 3,       // SelectionVariant: rectangle, brush, wand (2g)
         EditorButton.ToolShape => 2,        // ShapeVariant: oval, rectangle
         EditorButton.ToolTransform => 3,    // TransformVariant: flip H, flip V, rotate
         _ => 0,
@@ -370,6 +382,7 @@ public static class EditorIcons
     {
         (EditorButton.ToolSelect, (int)SelectionVariant.Rectangle) => EditorIcon.SelectRect,
         (EditorButton.ToolSelect, (int)SelectionVariant.Brush) => EditorIcon.SelectBrush,
+        (EditorButton.ToolSelect, (int)SelectionVariant.Wand) => EditorIcon.Wand,
         (EditorButton.ToolShape, (int)ShapeVariant.Oval) => EditorIcon.ShapeOval,
         (EditorButton.ToolShape, (int)ShapeVariant.Rectangle) => EditorIcon.ShapeRect,
         (EditorButton.ToolTransform, (int)TransformVariant.FlipH) => EditorIcon.FlipH,
@@ -383,6 +396,7 @@ public static class EditorIcons
     {
         (EditorButton.ToolSelect, (int)SelectionVariant.Rectangle) => "RECTANGLE SELECT  1 CYCLES",
         (EditorButton.ToolSelect, (int)SelectionVariant.Brush) => "BRUSH SELECT  1 CYCLES",
+        (EditorButton.ToolSelect, (int)SelectionVariant.Wand) => "WAND SELECT  1 CYCLES   CLICK PICKS ONE COLOR AREA",
         (EditorButton.ToolShape, (int)ShapeVariant.Oval) => "OVAL  5 CYCLES",
         (EditorButton.ToolShape, (int)ShapeVariant.Rectangle) => "RECTANGLE  5 CYCLES",
         (EditorButton.ToolTransform, (int)TransformVariant.FlipH) => "FLIP H  F",
@@ -519,6 +533,51 @@ public static class EditorIcons
             case EditorButton.ToolTransform:
                 session.CycleTransform();
                 break;
+        }
+    }
+
+    /// <summary>
+    /// A click on a live, non-group icon-button, routed to the same session calls the keys use
+    /// (the parity law). Pulled out of the shell in wave 2g so the routing table itself is
+    /// headless-testable: the stamp shipped in 2f placed by the layout but absent from this
+    /// switch (the third review's bug 1), and the only mechanism that closes the whole defect
+    /// class is a contract test that clicks every placed button — which needs the table to
+    /// exist where no graphics device is required. Returns true when the click means "leave
+    /// the editor" (the exit tab): leaving is the mode machine's verb, not the session's, so
+    /// the shell executes it. The sprites tab is the one honest no-op — it names the mode
+    /// already on screen. Group slots never come here: their press has two meanings and goes
+    /// through <see cref="ToolbarFlyout"/>'s arm/click path.
+    /// </summary>
+    public static bool ClickButton(SpriteEditorSession session, EditorButton button)
+    {
+        ArgumentNullException.ThrowIfNull(session);
+        switch (button)
+        {
+            case EditorButton.ExitTab:
+                return true;                        // clean → library; dirty → the prompt — the mode machine judges
+            case EditorButton.ToolPencil:
+                session.SelectTool(SpriteEditorTool.Pencil);
+                return false;
+            case EditorButton.ToolFill:
+                session.SelectTool(SpriteEditorTool.Fill);
+                return false;
+            case EditorButton.ToolStamp:
+                session.SelectTool(SpriteEditorTool.Stamp);
+                return false;
+            case EditorButton.Clear:
+                session.ClearRegion();              // in the status bar since the owner's second review; Del unchanged
+                return false;
+            case EditorButton.Save:
+                session.Save();                     // the modified/saved icon IS this button — click = Ctrl+S
+                return false;
+            case EditorButton.Undo:
+                session.Undo();
+                return false;
+            case EditorButton.Redo:
+                session.Redo();
+                return false;
+            default:
+                return false;                       // SpritesTab: already the mode on screen
         }
     }
 

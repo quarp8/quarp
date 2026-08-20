@@ -8,9 +8,9 @@ namespace Quarp.Shell.Desktop;
 /// Draws the sprite editor screen in the owner's verdict shape (M9 stage 2.5, second review
 /// applied): the icon-only tab strip and the status bar as tinted full-width bands, the left
 /// toolbar column with its three group slots (corner-marked, flyout on demand), the zoomed
-/// canvas with the keyboard cursor, the shape preview, the selection mask (holes and floating
-/// fragment during a move) and the stamp ghost — all session-state overlays, never sheet
-/// pixels — the right column (palette,
+/// canvas with the keyboard cursor, the shape preview, the selection as marching ants (plus
+/// the holes and floating fragment during a move) and the stamp ghost — all session-state
+/// overlays, never sheet pixels — the right column (palette,
 /// layers stub, sheet), the status buttons (save/undo/redo/clear), the reserved prompt line
 /// and the hover tooltips. Host UI like <see cref="LibraryRenderer"/> — window-native
 /// resolution, <see cref="Palette.Master32"/> colors, the system font and the icon strip —
@@ -57,10 +57,9 @@ public sealed class SpriteEditorRenderer : IDisposable
     // on top of it.
     private static readonly Color StripBg = PaletteColors.Opaque(16);
 
-    // The selection lift (wave 2f): the library's selection blue at half strength over the
-    // pixels, so the mask reads on any of the 16 colors — a pure white wash would vanish on
-    // white pixels and a dark one on ink. Host-UI alpha only; nothing indexed is touched.
-    private static readonly Color SelectionTint = ActiveBg * 0.5f;
+    // The marching ants' dash buffer, reused every frame: the outline is rebuilt each Draw
+    // (it marches), but the list is not reallocated sixty times a second.
+    private readonly List<AntDash> _ants = new();
 
     public SpriteEditorRenderer(GraphicsDevice device)
     {
@@ -86,10 +85,12 @@ public sealed class SpriteEditorRenderer : IDisposable
     /// immediately, the text label only after the tracker's three seconds.
     /// <paramref name="flyoutSlot"/> is the shell's <see cref="ToolbarFlyout.OpenSlot"/> —
     /// the flyout draws late so it floats over the canvas, and the tooltip still wins over it.
+    /// <paramref name="timeSeconds"/> is the shell's draw clock, consumed only by the marching
+    /// ants' phase — host chrome time, invisible to any simulation or hash.
     /// </summary>
     public void Draw(
         SpriteBatch batch, int width, int height, SpriteEditorSession editor,
-        HoverTarget? hover, bool tooltipVisible, EditorButton? flyoutSlot)
+        HoverTarget? hover, bool tooltipVisible, EditorButton? flyoutSlot, double timeSeconds)
     {
         ArgumentNullException.ThrowIfNull(batch);
         ArgumentNullException.ThrowIfNull(editor);
@@ -103,7 +104,7 @@ public sealed class SpriteEditorRenderer : IDisposable
         batch.Draw(_white, layout.TabStrip, StripBg);
         batch.Draw(_white, layout.StatusBar, StripBg);
 
-        DrawCanvas(batch, layout, editor);
+        DrawCanvas(batch, layout, editor, timeSeconds);
         DrawButtons(batch, layout, editor, hover);
         DrawSwatches(batch, layout, editor);
         DrawLayersStub(batch, layout);
@@ -237,7 +238,7 @@ public sealed class SpriteEditorRenderer : IDisposable
         }
     }
 
-    private void DrawCanvas(SpriteBatch batch, in SpriteEditorLayout layout, SpriteEditorSession editor)
+    private void DrawCanvas(SpriteBatch batch, in SpriteEditorLayout layout, SpriteEditorSession editor, double timeSeconds)
     {
         // The frame is what separates sheet-ink pixels from the ink-cleared window behind them.
         DrawFrame(batch, layout.Canvas, layout.Ui, Dim);
@@ -260,7 +261,7 @@ public sealed class SpriteEditorRenderer : IDisposable
             }
         }
 
-        DrawSelection(batch, layout, editor);
+        DrawSelection(batch, layout, editor, timeSeconds);
         DrawStampGhost(batch, layout, editor);
 
         // The canvas cursor — where the keyboard pencil is and what the status bar's
@@ -276,16 +277,20 @@ public sealed class SpriteEditorRenderer : IDisposable
             layout.CanvasScale, layout.CanvasScale);
 
     /// <summary>
-    /// The selection made visible, straight from the session's mask — a translucent lift over
-    /// every selected pixel plus a bright frame around the mask's bounding box (the order's
-    /// "рамкой/подсветкой", both). While a move floats, the picture splits honestly into what
-    /// the drop would produce: the holes show color 0 and the lifted pixels ride at the
-    /// offset. All of it is overlay quads; none of it is in the sheet or its texture, which is
-    /// why cancelling a move costs nothing and why the mask can never reach a saved PNG.
+    /// The selection made visible — marching ants on the mask's true boundary (the owner's
+    /// third review: the old blue wash and white bounding box are gone), rebuilt from the
+    /// session's mask every frame with the phase <see cref="SelectionOutline"/> derives from
+    /// the draw clock. Drawn only under the select tool, the same gate the stamp ghost keeps:
+    /// the session already guarantees no mask survives a tool switch, and the gate states the
+    /// same law at the one place the overlay could appear. While a move floats, the picture
+    /// still splits honestly into what the drop would produce — the holes show color 0, the
+    /// lifted pixels ride at the offset, and the ants ride with them. All of it is overlay
+    /// quads; none of it is in the sheet or its texture, which is why cancelling a move costs
+    /// nothing and why no outline can ever reach a saved PNG.
     /// </summary>
-    private void DrawSelection(SpriteBatch batch, in SpriteEditorLayout layout, SpriteEditorSession editor)
+    private void DrawSelection(SpriteBatch batch, in SpriteEditorLayout layout, SpriteEditorSession editor, double timeSeconds)
     {
-        if (!editor.TrySelectionBounds(out int minX, out int minY, out int maxX, out int maxY))
+        if (editor.Tool != SpriteEditorTool.Select || !editor.HasSelection)
         {
             return;
         }
@@ -320,22 +325,20 @@ public sealed class SpriteEditorRenderer : IDisposable
                 }
             }
         }
-        for (int y = 0; y < n; y++)
+        // The ants outline the mask as shown — shifted while floating, which the predicate's
+        // one subtraction handles (out-of-range asks answer false, so borders stay honest).
+        // Dash length and thickness scale with the ui unit like every piece of chrome.
+        int dashLength = Math.Max(2, 3 * layout.Ui);
+        SelectionOutline.Collect(
+            (x, y) => editor.IsSelected(x - dx, y - dy), n, layout.CanvasScale, dashLength,
+            Math.Max(1, layout.Ui / 2), SelectionOutline.Phase(timeSeconds, dashLength), _ants);
+        foreach (AntDash dash in _ants)
         {
-            for (int x = 0; x < n; x++)
-            {
-                if (editor.IsSelected(x, y))
-                {
-                    batch.Draw(_white, PixelRect(layout, x + dx, y + dy), SelectionTint);
-                }
-            }
+            batch.Draw(
+                _white,
+                new Rectangle(layout.Canvas.X + dash.X, layout.Canvas.Y + dash.Y, dash.Width, dash.Height),
+                dash.Bright ? Bright : Ink);
         }
-        var box = new Rectangle(
-            layout.Canvas.X + (minX + dx) * layout.CanvasScale,
-            layout.Canvas.Y + (minY + dy) * layout.CanvasScale,
-            (maxX - minX + 1) * layout.CanvasScale,
-            (maxY - minY + 1) * layout.CanvasScale);
-        DrawFrame(batch, box, Math.Max(1, layout.Ui / 2), Bright);
     }
 
     /// <summary>

@@ -7,10 +7,11 @@ using Xunit;
 namespace Quarp.Shell.Desktop.Tests;
 
 /// <summary>
-/// Wave 2c's shell plumbing: the six new editor keys are edge-detected presses with the same
-/// chord discipline the older keys carry, and the layout's new status row (active tool, region
-/// size) sits between the canvas and the key hints without stealing either's pixels — at every
-/// region size, since the canvas is the rectangle that resizes.
+/// The editor's shell plumbing after the stage-2.5 verdict: every editor key is an
+/// edge-detected press with the wave-2b chord discipline, the new keyboard-drawing keys
+/// (arrows, Z/Space, digits, comma/period) report exactly what the parity law needs, and the
+/// verdict layout keeps the canvas clear of the status bar and the reserved prompt line at
+/// every region size — since the canvas is the rectangle that resizes.
 /// </summary>
 public class EditorKeysAndStatusLayoutTests
 {
@@ -59,6 +60,92 @@ public class EditorKeysAndStatusLayoutTests
         Assert.False(commands.EditorRotate);
     }
 
+    // ---- the keyboard pencil (Z/Space) ----
+
+    [Theory]
+    [InlineData(Keys.Z)]
+    [InlineData(Keys.Space)]
+    public void TheKeyboardPencilPressesHoldsAndReleases(Keys key)
+    {
+        var reader = new ShellCommandReader();
+
+        ShellCommands press = reader.Read(new KeyboardState(key));
+        ShellCommands hold = reader.Read(new KeyboardState(key));
+        ShellCommands release = reader.Read(new KeyboardState());
+
+        Assert.True(press.EditorPaintPressed);
+        Assert.True(press.EditorPaintDown);
+        Assert.False(hold.EditorPaintPressed);      // holding is a drag, not sixty strokes
+        Assert.True(hold.EditorPaintDown);
+        Assert.True(release.EditorPaintReleased);   // one release = one committed undo step
+        Assert.False(release.EditorPaintDown);
+    }
+
+    /// <summary>
+    /// Ctrl+Z is undo, never a pixel: with Ctrl held the pencil reports nothing — and pressing
+    /// Ctrl while Z is still physically down counts as the pencil's release, so the open
+    /// gesture closes before the undo lands instead of smearing across it.
+    /// </summary>
+    [Fact]
+    public void CtrlZIsUndoNotAPixel()
+    {
+        var reader = new ShellCommandReader();
+
+        ShellCommands chord = reader.Read(new KeyboardState(Keys.LeftControl, Keys.Z));
+        Assert.False(chord.EditorPaintPressed);
+        Assert.False(chord.EditorPaintDown);
+        Assert.True(chord.EditorUndo);
+
+        reader.Read(new KeyboardState());
+        reader.Read(new KeyboardState(Keys.Z));                          // pencil down, painting
+        ShellCommands ctrlArrives = reader.Read(new KeyboardState(Keys.LeftControl, Keys.Z));
+        Assert.True(ctrlArrives.EditorPaintReleased);                    // the chord takes the key
+        Assert.False(ctrlArrives.EditorPaintDown);
+    }
+
+    // ---- cursor arrows, tool digits, color cycle ----
+
+    [Fact]
+    public void ArrowKeysReportAllFourDirectionsAsPresses()
+    {
+        var reader = new ShellCommandReader();
+
+        ShellCommands press = reader.Read(new KeyboardState(Keys.Up, Keys.Down, Keys.Left, Keys.Right));
+        ShellCommands hold = reader.Read(new KeyboardState(Keys.Up, Keys.Down, Keys.Left, Keys.Right));
+
+        Assert.True(press.MenuUp && press.MenuDown && press.MenuLeft && press.MenuRight);
+        Assert.False(hold.MenuUp || hold.MenuDown || hold.MenuLeft || hold.MenuRight);
+    }
+
+    [Theory]
+    [InlineData(Keys.D1, 1)]
+    [InlineData(Keys.D2, 2)]
+    [InlineData(Keys.D3, 3)]
+    [InlineData(Keys.D4, 4)]
+    [InlineData(Keys.D5, 5)]
+    public void ToolDigitsReportTheirToolbarPosition(Keys key, int digit)
+    {
+        var reader = new ShellCommandReader();
+
+        Assert.Equal(digit, reader.Read(new KeyboardState(key)).EditorToolDigit);
+        Assert.Equal(0, reader.Read(new KeyboardState(key)).EditorToolDigit);   // held ≠ pressed again
+    }
+
+    [Fact]
+    public void CommaAndPeriodCycleTheColorOncePerPress()
+    {
+        var reader = new ShellCommandReader();
+
+        ShellCommands press = reader.Read(new KeyboardState(Keys.OemComma, Keys.OemPeriod));
+        ShellCommands hold = reader.Read(new KeyboardState(Keys.OemComma, Keys.OemPeriod));
+
+        Assert.True(press.EditorColorPrev);
+        Assert.True(press.EditorColorNext);
+        Assert.False(hold.EditorColorPrev || hold.EditorColorNext);
+    }
+
+    // ---- the layout at every region size ----
+
     [Theory]
     [InlineData(1)]
     [InlineData(2)]
@@ -77,19 +164,19 @@ public class EditorKeysAndStatusLayoutTests
     }
 
     /// <summary>
-    /// The status row is always on (it carries the active tool), so unlike the occasional save
-    /// error it may never overlap the canvas — the layout owns that by computing the canvas
-    /// bottom above <see cref="SpriteEditorLayout.StatusY"/>.
+    /// The prompt line is reserved at every region size (it carries the dirty-exit decision
+    /// and save errors), so the canvas — the rectangle that resizes — may never grow into it
+    /// or into the status bar below it.
     /// </summary>
     [Theory]
     [InlineData(1)]
     [InlineData(2)]
     [InlineData(4)]
-    public void TheStatusRowSitsBetweenTheCanvasAndTheKeyHints(int regionCells)
+    public void TheCanvasStopsAboveThePromptLineAndStatusBar(int regionCells)
     {
         var layout = SpriteEditorLayout.Compute(1280, 720, regionCells);
 
-        Assert.True(layout.Canvas.Bottom <= layout.StatusY);
-        Assert.True(layout.StatusY + PixelFontAtlas.LineHeight(layout.Ui) <= layout.FooterY);
+        Assert.True(layout.Canvas.Bottom <= layout.PromptY);
+        Assert.True(layout.PromptY + PixelFontAtlas.LineHeight(layout.Ui) <= layout.StatusBar.Y);
     }
 }

@@ -49,6 +49,7 @@ public sealed class QuarpGame : Game
     private readonly TickAccumulator _accumulator = new();
     private readonly ShellCommandReader _commands = new();
     private readonly EditorMouseReader _mouse = new();
+    private readonly IconHoverTracker _hover = new();
     private readonly ConsoleProfile _profile;
     private readonly ShellModeMachine _modes;
 
@@ -216,7 +217,7 @@ public sealed class QuarpGame : Game
                 UpdateLibrary(commands);
                 break;
             case ShellMode.Editor:
-                UpdateEditor(commands, mouse);
+                UpdateEditor(commands, mouse, gameTime.ElapsedGameTime.TotalSeconds);
                 break;
         }
 
@@ -313,15 +314,25 @@ public sealed class QuarpGame : Game
 
     /// <summary>
     /// One frame of the sprite editor: routes keys and mouse hits into the session, whose
-    /// policy the headless tests own. While the exit prompt is up it owns the keys — Z saves
-    /// and leaves, X discards and leaves, Esc stays — and everything else (including the
-    /// pencil) is deliberately deaf, so a stray click cannot change the sheet mid-decision.
+    /// policy the headless tests own. Input parity is the law of this frame (M9 stage 2.5) —
+    /// every live action has a key path and a click path, and both funnel into the same
+    /// session method so neither can drift. While the exit prompt is up it owns the input —
+    /// Z saves and leaves, X discards and leaves, Esc stays, and the same three verbs are
+    /// clickable on the prompt line — and everything else (including the pencil) is
+    /// deliberately deaf, so a stray click cannot change the sheet mid-decision.
     /// </summary>
-    private void UpdateEditor(in ShellCommands commands, in EditorMouse mouse)
+    private void UpdateEditor(in ShellCommands commands, in EditorMouse mouse, double elapsedSeconds)
     {
         SpriteEditorSession editor = _modes.Editor!;
+        // The same layout the renderer will draw this frame — geometry has one owner.
+        var layout = SpriteEditorLayout.Compute(
+            GraphicsDevice.PresentationParameters.BackBufferWidth,
+            GraphicsDevice.PresentationParameters.BackBufferHeight,
+            editor.RegionCells);
+
         if (editor.ExitPromptShown)
         {
+            _hover.Update(null, elapsedSeconds);    // dead buttons must not grow tooltips
             if (commands.Quit)
             {
                 _modes.HandleEscape();          // Esc lowers the prompt: "stay" — see SpriteEditorSession.RequestClose
@@ -333,6 +344,21 @@ public sealed class QuarpGame : Game
             else if (commands.MenuEditor)
             {
                 _modes.DiscardEditorAndClose();
+            }
+            else if (mouse.LeftPressed && layout.TryPromptVerb(mouse.X, mouse.Y, out EditorPromptVerb verb))
+            {
+                switch (verb)
+                {
+                    case EditorPromptVerb.SaveAndExit:
+                        _modes.SaveEditorAndClose();
+                        break;
+                    case EditorPromptVerb.Discard:
+                        _modes.DiscardEditorAndClose();
+                        break;
+                    default:
+                        _modes.HandleEscape();  // Stay — lowers the prompt, exactly like Esc
+                        break;
+                }
             }
             return;
         }
@@ -351,15 +377,25 @@ public sealed class QuarpGame : Game
         }
         if (commands.EditorSave)
         {
-            editor.Save();                       // failure lands in SaveError; the footer shows it
+            editor.Save();                       // failure lands in SaveError; the prompt line shows it
         }
         if (commands.EditorToolToggle)
         {
             editor.ToggleTool();
         }
+        if (EditorIcons.ToolForDigit(commands.EditorToolDigit) is SpriteEditorTool digitTool)
+        {
+            SetTool(editor, digitTool);          // stub digits return null and switch nothing
+        }
         if (commands.EditorRegionCycle)
         {
-            editor.CycleRegionSize();            // before the layout below — the canvas must resize this same frame
+            editor.CycleRegionSize();
+            // The canvas must resize this same frame, so the mouse hits below test against
+            // the geometry the renderer is about to draw.
+            layout = SpriteEditorLayout.Compute(
+                GraphicsDevice.PresentationParameters.BackBufferWidth,
+                GraphicsDevice.PresentationParameters.BackBufferHeight,
+                editor.RegionCells);
         }
         if (commands.EditorFlipH)
         {
@@ -377,15 +413,80 @@ public sealed class QuarpGame : Game
         {
             editor.ClearRegion();
         }
+        if (commands.EditorColorPrev)
+        {
+            editor.SelectColor((editor.CurrentColor + Palette.VisibleCount - 1) % Palette.VisibleCount);
+        }
+        if (commands.EditorColorNext)
+        {
+            editor.SelectColor((editor.CurrentColor + 1) % Palette.VisibleCount);
+        }
 
-        // The same layout the renderer will draw this frame — geometry has one owner.
-        var layout = SpriteEditorLayout.Compute(
-            GraphicsDevice.PresentationParameters.BackBufferWidth,
-            GraphicsDevice.PresentationParameters.BackBufferHeight,
-            editor.RegionCells);
+        // Keyboard drawing: arrows steer the canvas cursor, Z/Space is the pencil's button,
+        // X the eyedropper — the whole mouse vocabulary without a mouse. The session clamps
+        // the cursor, so painting at it is in-range by construction.
+        int dx = (commands.MenuRight ? 1 : 0) - (commands.MenuLeft ? 1 : 0);
+        int dy = (commands.MenuDown ? 1 : 0) - (commands.MenuUp ? 1 : 0);
+        if (dx != 0 || dy != 0)
+        {
+            editor.MoveCursor(dx, dy);
+            if (editor.StrokeActive && commands.EditorPaintDown)
+            {
+                editor.Paint(editor.CursorX, editor.CursorY);   // held pencil + arrows = a dragged stroke
+            }
+        }
+        if (commands.EditorPaintPressed)
+        {
+            if (editor.Tool == SpriteEditorTool.Fill)
+            {
+                editor.Fill(editor.CursorX, editor.CursorY);
+            }
+            else
+            {
+                editor.BeginStroke();
+                editor.Paint(editor.CursorX, editor.CursorY);
+            }
+        }
+        if (commands.EditorPaintReleased)
+        {
+            editor.EndStroke();                  // the keyboard stroke commits as one undo step, like the mouse's
+        }
+        if (commands.MenuEditor)
+        {
+            editor.PickColor(editor.CursorX, editor.CursorY);
+        }
+
+        // Hover: buttons first (they overlap nothing), then swatches — the only two targets
+        // with tooltips. The tracker shows the frame highlight immediately and holds the
+        // label back for its three seconds.
+        HoverTarget? hover = null;
+        if (layout.TryButton(mouse.X, mouse.Y, out EditorButton hoveredButton))
+        {
+            hover = HoverTarget.OfButton(hoveredButton);
+        }
+        else if (layout.TrySwatch(mouse.X, mouse.Y, out int hoveredSwatch))
+        {
+            hover = HoverTarget.OfSwatch(hoveredSwatch);
+        }
+        _hover.Update(hover, elapsedSeconds);
+
+        // The one cursor: mouse hover parks it where the mouse is, so the status bar's
+        // coordinates read the pointer and a following keyboard stroke starts there.
+        if (layout.TryCanvasPixel(mouse.X, mouse.Y, out int overX, out int overY))
+        {
+            editor.SetCursor(overX, overY);
+        }
+
         if (mouse.LeftPressed)
         {
-            if (layout.TrySwatch(mouse.X, mouse.Y, out int color))
+            if (layout.TryButton(mouse.X, mouse.Y, out EditorButton pressed))
+            {
+                if (!EditorIcons.IsStub(pressed) && HandleEditorButton(editor, pressed))
+                {
+                    return;                      // the exit tab may have left the mode
+                }
+            }
+            else if (layout.TrySwatch(mouse.X, mouse.Y, out int color))
             {
                 editor.SelectColor(color);
             }
@@ -412,8 +513,9 @@ public sealed class QuarpGame : Game
         {
             // Drags are clamped to the canvas: a stroke that wanders off the edge keeps
             // painting along it instead of tearing, and the clamp is what upholds Paint's
-            // in-range contract.
+            // in-range contract. The cursor follows so the readout stays truthful mid-drag.
             layout.ClampCanvasPixel(mouse.X, mouse.Y, out int dragX, out int dragY);
+            editor.SetCursor(dragX, dragY);
             editor.Paint(dragX, dragY);
         }
         if (mouse.LeftReleased)
@@ -423,6 +525,64 @@ public sealed class QuarpGame : Game
         if (mouse.RightPressed && layout.TryCanvasPixel(mouse.X, mouse.Y, out int pickX, out int pickY))
         {
             editor.PickColor(pickX, pickY);
+        }
+    }
+
+    /// <summary>
+    /// A click on a live icon-button, routed to the same session calls the keys use — parity
+    /// by construction. Returns true when the button may have changed the shell mode (the
+    /// exit tab), telling the caller to stop touching the editor this frame.
+    /// </summary>
+    private bool HandleEditorButton(SpriteEditorSession editor, EditorButton button)
+    {
+        switch (button)
+        {
+            case EditorButton.ExitTab:
+                _modes.HandleEscape();           // clean → library; dirty → the prompt, same as Esc
+                return true;
+            case EditorButton.ToolPencil:
+                SetTool(editor, SpriteEditorTool.Pencil);
+                return false;
+            case EditorButton.ToolFill:
+                SetTool(editor, SpriteEditorTool.Fill);
+                return false;
+            case EditorButton.FlipH:
+                editor.FlipHorizontal();
+                return false;
+            case EditorButton.FlipV:
+                editor.FlipVertical();
+                return false;
+            case EditorButton.Rotate:
+                editor.RotateClockwise();
+                return false;
+            case EditorButton.Clear:
+                editor.ClearRegion();
+                return false;
+            case EditorButton.Save:
+                editor.Save();                   // the modified/saved icon IS this button — click = Ctrl+S
+                return false;
+            case EditorButton.Undo:
+                editor.Undo();
+                return false;
+            case EditorButton.Redo:
+                editor.Redo();
+                return false;
+            default:
+                return false;                    // SpritesTab: already the mode on screen
+        }
+    }
+
+    /// <summary>
+    /// Direct tool selection on top of the session's toggle. <see cref="SpriteEditorSession.ToggleTool"/>
+    /// stays the one door (its tests pin the commit-open-stroke discipline); with exactly two
+    /// live tools, "set" is "toggle unless already there". Wave 2e's new tools will need a real
+    /// select in the session — that wave owns the change.
+    /// </summary>
+    private static void SetTool(SpriteEditorSession editor, SpriteEditorTool tool)
+    {
+        if (editor.Tool != tool)
+        {
+            editor.ToggleTool();
         }
     }
 
@@ -446,7 +606,9 @@ public sealed class QuarpGame : Game
                     _spriteBatch,
                     GraphicsDevice.PresentationParameters.BackBufferWidth,
                     GraphicsDevice.PresentationParameters.BackBufferHeight,
-                    _modes.Editor!);
+                    _modes.Editor!,
+                    _hover.Target,
+                    _hover.TooltipVisible);
                 break;
         }
         base.Draw(gameTime);        // the game loop presents for us

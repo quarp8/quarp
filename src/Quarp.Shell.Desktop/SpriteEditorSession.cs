@@ -172,6 +172,31 @@ public sealed class SpriteEditorSession
         RegionCellY = Math.Clamp(cellY, 0, GridCells - RegionCells);
     }
 
+    /// <summary>Canvas cursor, region-local — see <see cref="SetCursor"/> for why it lives here.</summary>
+    public int CursorX { get; private set; }
+
+    /// <summary>Canvas cursor, region-local.</summary>
+    public int CursorY { get; private set; }
+
+    /// <summary>
+    /// Moves the canvas cursor — the position the keyboard pencil paints at, the eyedropper's
+    /// X samples and the status bar reads out (M9 stage 2.5 input parity). It lives in the
+    /// session rather than the window because its one invariant — never outside the region,
+    /// whatever moved (arrows, mouse hover, a region shrink) — is exactly what lets the shell
+    /// call <see cref="Paint"/> at the cursor without a second clamp, and that must be provable
+    /// headless. Clamped, not thrown, like the region anchor: an arrow held at the edge should
+    /// park the cursor there, not crash. It writes no pixels itself, so the 0-15/undo/dirty
+    /// contracts gain no new door.
+    /// </summary>
+    public void SetCursor(int localX, int localY)
+    {
+        CursorX = Math.Clamp(localX, 0, RegionPixels - 1);
+        CursorY = Math.Clamp(localY, 0, RegionPixels - 1);
+    }
+
+    /// <summary>One arrow press: the cursor steps by a pixel, stopping at the region border.</summary>
+    public void MoveCursor(int dx, int dy) => SetCursor(CursorX + dx, CursorY + dy);
+
     /// <summary>
     /// Left button pressed on the canvas. The pre-stroke sheet is snapshotted here and becomes
     /// the undo entry when the stroke ends — which is the whole "one stroke = one undo step"
@@ -263,6 +288,9 @@ public sealed class SpriteEditorSession
         EndStroke();
         RegionCells = RegionCells switch { 1 => 2, 2 => 4, _ => 1 };
         SelectRegionCell(RegionCellX, RegionCellY);
+        // A shrink can strand the cursor outside the new region (31,31 in an 8-px region);
+        // re-clamping here is what keeps "paint at the cursor" throw-free by construction.
+        SetCursor(CursorX, CursorY);
     }
 
     /// <summary>

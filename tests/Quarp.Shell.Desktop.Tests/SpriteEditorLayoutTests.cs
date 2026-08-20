@@ -41,11 +41,10 @@ public class SpriteEditorLayoutTests
         // a fractional scale could not produce these sizes.
         Assert.Equal(layout.RegionPixels * layout.CanvasScale, layout.Canvas.Width);
         Assert.Equal(layout.Canvas.Width, layout.Canvas.Height);        // the region is square, so is its view
-        // The sheet window scales by its height (fourth review): the tallest whole multiple
-        // that fits, floored at 1 — and what it shows is whole sheet pixels on both axes.
-        Assert.True(layout.SheetScale * VirtualConsole.SheetHeight <= layout.Sheet.Height
-            || layout.SheetScale == 1);
-        Assert.True(layout.SheetVisiblePixels >= 1 && layout.SheetVisiblePixels <= VirtualConsole.SheetWidth);
+        // The fifth-review view is exactly four sprite rows high and 64 columns wide. It
+        // shares integer UI scale so pixel art stays crisp and the slider always has work.
+        Assert.Equal(SheetStrip.PixelHeight * layout.SheetScale, layout.Sheet.Height);
+        Assert.True(layout.SheetVisiblePixels >= 1 && layout.SheetVisiblePixels < SheetStrip.PixelWidth);
         // Icon buttons are 8-px masks at scale Ui plus symmetric padding — whole by construction.
         Assert.Equal((EditorIcons.IconPixels + 4) * layout.Ui, layout.ButtonSize);
     }
@@ -172,13 +171,12 @@ public class SpriteEditorLayoutTests
     }
 
     /// <summary>
-    /// The right column after the fourth review: the palette hugs the window's right edge,
-    /// the five layer tabs sit between it and the sheet window, the sheet window is exactly
-    /// palette-wide and half the panel strip tall, and the slider track lies directly under
-    /// it. The size toggle lives in the band between the canvas and the column.
+    /// The right column after the fifth review: palette and tabs retain their positions, but
+    /// the sheet window is now a four-row strip. The freed space below stays empty for future
+    /// blocks, and the live slider remains directly under the strip.
     /// </summary>
     [Fact]
-    public void TheRightColumnFollowsTheFourthReview()
+    public void TheRightColumnFollowsTheFifthReview()
     {
         var layout = Default();
         Rectangle firstTab = layout.ButtonRect(EditorButton.LayerTab1);
@@ -189,10 +187,7 @@ public class SpriteEditorLayoutTests
         Assert.True(layout.Swatches.X >= layout.Canvas.Right);
         Assert.Equal(layout.Swatches.X, layout.Sheet.X);                // the column shares one left edge
         Assert.Equal(layout.Swatches.Width, layout.Sheet.Width);        // sheet window = palette width
-        // Half the panel strip: the space between the tab band and the prompt line.
-        int panelTop = layout.TabStrip.Bottom + 2 * layout.Ui;
-        int panelBottom = layout.PromptY - 2 * layout.Ui;
-        Assert.Equal((panelBottom - panelTop) / 2, layout.Sheet.Height);
+        Assert.Equal(4 * VirtualConsole.SpriteSize * layout.SheetScale, layout.Sheet.Height);
         // Tabs above the sheet window, inside the column, in order 1..5 left to right.
         Assert.Equal(layout.Sheet.X, firstTab.X);
         Assert.True(firstTab.X < lastTab.X);
@@ -202,6 +197,7 @@ public class SpriteEditorLayoutTests
         Assert.Equal(layout.Sheet.X, layout.SheetSlider.X);
         Assert.Equal(layout.Sheet.Width, layout.SheetSlider.Width);
         Assert.True(layout.Sheet.Bottom <= layout.SheetSlider.Y);
+        Assert.True(layout.SheetSlider.Bottom < layout.PromptY);         // freed space is genuinely free
         // The toggle in the band: right of the canvas, left of the column.
         Assert.True(toggle.X >= layout.Canvas.Right);
         Assert.True(toggle.Right <= layout.Swatches.X);
@@ -318,16 +314,47 @@ public class SpriteEditorLayoutTests
     }
 
     [Fact]
-    public void SheetHitTestFindsTheClickedCell()
+    public void SheetHitTestFindsTheSpriteMappedIntoTheStrip()
+    {
+        var layout = Default();
+        int cell = layout.SheetScale * VirtualConsole.SpriteSize;
+        const int sprite = 200;
+        SheetStrip.SpriteToStripCell(sprite, out int stripColumn, out int stripRow);
+        int scroll = stripColumn * VirtualConsole.SpriteSize;
+
+        Assert.True(layout.TrySheetCell(
+            layout.Sheet.X + cell / 2, layout.Sheet.Y + stripRow * cell + cell / 2, scroll,
+            out int cellX, out int cellY));
+
+        Assert.Equal((8, 12), (cellX, cellY));
+        Assert.Equal(sprite, cellY * 16 + cellX);
+    }
+
+    [Fact]
+    public void SixteenPixelRegionAtSprite62SplitsAcrossTwoStripLanes()
     {
         var layout = Default();
         int cell = layout.SheetScale * VirtualConsole.SpriteSize;
 
-        Assert.True(layout.TrySheetCell(
-            layout.Sheet.X + 5 * cell + cell / 2, layout.Sheet.Y + 9 * cell + cell / 2, 0,
-            out int cellX, out int cellY));
+        IReadOnlyList<Rectangle> pieces = layout.SheetRegionHighlights(
+            sheetCellX: 14, sheetCellY: 3, regionCells: 2, scroll: 0);
 
-        Assert.Equal((5, 9), (cellX, cellY));
+        Assert.Equal(2, pieces.Count);
+        Assert.Equal(new Rectangle(layout.Sheet.X + 14 * cell, layout.Sheet.Y + 3 * cell, 2 * cell, cell), pieces[0]);
+        Assert.Equal(new Rectangle(layout.Sheet.X + 30 * cell, layout.Sheet.Y, 2 * cell, cell), pieces[1]);
+    }
+
+    [Fact]
+    public void RegionInsideOneLaneStaysOneRectangle()
+    {
+        var layout = Default();
+        int cell = layout.SheetScale * VirtualConsole.SpriteSize;
+
+        IReadOnlyList<Rectangle> pieces = layout.SheetRegionHighlights(
+            sheetCellX: 5, sheetCellY: 1, regionCells: 2, scroll: 0);
+
+        Rectangle only = Assert.Single(pieces);
+        Assert.Equal(new Rectangle(layout.Sheet.X + 5 * cell, layout.Sheet.Y + cell, 2 * cell, 2 * cell), only);
     }
 
     /// <summary>

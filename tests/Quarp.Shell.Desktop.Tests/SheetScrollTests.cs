@@ -6,133 +6,131 @@ using Xunit;
 namespace Quarp.Shell.Desktop.Tests;
 
 /// <summary>
-/// The sheet window's horizontal scroll (wave 2h): the slider geometry lives in
-/// <see cref="SpriteEditorLayout"/> (the single owner the renderer draws from and the drag
-/// inverts), the surviving state in <see cref="SheetScroll"/>. The wave's named negative
-/// control (г) lives here: remove any clamp — the drag's, the wheel's or the resize
-/// re-clamp — and the matching test frames pixels past the sheet's border and goes red.
-///
-/// <para>Geometry note: the sheet window is palette-wide and the sheet is square, so at the
-/// default 1280x720 nothing overflows and the slider honestly rests (full-track thumb, drags
-/// are no-ops). Overflow needs a window taller than it is wide — 640x1400 here: the ui scale
-/// follows the narrow width while the half-strip sheet window follows the tall height, giving
-/// scale 5 and a 640-px sheet in a ~206-px window.</para>
+/// The wave 2i strip contract: one reversible PICO-8 page mapping and one clamped horizontal
+/// scroll state. These tests pin the premises as well as the answers, because a resting
+/// slider would make the interaction assertions pass without exercising their reason to exist.
 /// </summary>
 public class SheetScrollTests
 {
-    /// <summary>A tall narrow window where the sheet genuinely overflows — see the type comment.</summary>
-    private static SpriteEditorLayout Overflowing() => SpriteEditorLayout.Compute(640, 1400, regionCells: 1);
-
-    /// <summary>The shell's default window: everything fits, the slider rests.</summary>
     private static SpriteEditorLayout Default() => SpriteEditorLayout.Compute(1280, 720, regionCells: 1);
 
     [Fact]
-    public void TheChosenWindowsReallyDoAndDoNotOverflow()
+    public void StripMappingRoundTripsEverySprite()
     {
-        // The premise of every test below, pinned so a layout change cannot quietly turn
-        // the overflow cases into no-op cases that pass green while testing nothing.
-        Assert.True(Overflowing().SheetMaxScroll > 0);
-        Assert.Equal(0, Default().SheetMaxScroll);
+        for (int sprite = 0; sprite < 256; sprite++)
+        {
+            SheetStrip.SpriteToStripCell(sprite, out int stripColumn, out int stripRow);
+
+            Assert.True(SheetStrip.TryStripCellToSheetCell(
+                stripColumn, stripRow, out int sheetX, out int sheetY));
+            Assert.Equal(sprite, sheetY * 16 + sheetX);
+        }
     }
 
-    // ---- geometry: thumb and drag agree ----
-
-    [Fact]
-    public void TheThumbSpansTheTrackAtRestAndHugsTheEndsAtTheExtremes()
+    [Theory]
+    [InlineData(0, 0, 0)]
+    [InlineData(63, 15, 3)]
+    [InlineData(64, 16, 0)]
+    [InlineData(127, 31, 3)]
+    [InlineData(128, 32, 0)]
+    [InlineData(191, 47, 3)]
+    [InlineData(192, 48, 0)]
+    [InlineData(255, 63, 3)]
+    public void PicoPagesAreLaidEndToEnd(int sprite, int expectedColumn, int expectedRow)
     {
-        var fits = Default();
-        Assert.Equal(fits.SheetSlider.Width, fits.SheetThumb(0).Width);     // "everything is on screen"
+        SheetStrip.SpriteToStripCell(sprite, out int column, out int row);
 
-        var over = Overflowing();
-        Assert.True(over.SheetThumb(0).Width < over.SheetSlider.Width);
-        Assert.Equal(over.SheetSlider.X, over.SheetThumb(0).X);
-        Assert.Equal(over.SheetSlider.Right, over.SheetThumb(over.SheetMaxScroll).Right);
+        Assert.Equal((expectedColumn, expectedRow), (column, row));
     }
 
-    /// <summary>Control (г): a drag past either end of the track parks at the sheet's border, never beyond.</summary>
-    [Fact]
-    public void TheSliderDragClampsAtTheSheetBorder()
+    [Theory]
+    [InlineData(-1, 0)]
+    [InlineData(64, 0)]
+    [InlineData(0, -1)]
+    [InlineData(0, 4)]
+    public void InverseMappingRejectsCellsOutsideTheStrip(int column, int row)
     {
-        var layout = Overflowing();
-
-        Assert.Equal(0, layout.SheetScrollForSliderX(layout.SheetSlider.X - 500));
-        Assert.Equal(layout.SheetMaxScroll, layout.SheetScrollForSliderX(layout.SheetSlider.Right + 500));
-        int mid = layout.SheetScrollForSliderX(layout.SheetSlider.X + layout.SheetSlider.Width / 2);
-        Assert.InRange(mid, 1, layout.SheetMaxScroll - 1);      // the middle of the track is a real middle
+        Assert.False(SheetStrip.TryStripCellToSheetCell(column, row, out _, out _));
     }
 
-    /// <summary>On a resting slider a drag means nothing — zero offset wherever the pointer goes.</summary>
     [Fact]
-    public void DraggingARestingSliderIsANoOp()
+    public void DefaultWindowPinsALiveSliderAndUsefulColumnCount()
+    {
+        var layout = Default();
+        int completeColumns = layout.SheetVisiblePixels / VirtualConsole.SpriteSize;
+
+        Assert.Equal(SheetStrip.PixelWidth - layout.SheetVisiblePixels, layout.SheetMaxScroll);
+        Assert.True(layout.SheetMaxScroll > 0);
+        Assert.Equal(12, completeColumns);                              // chosen default: 12 whole + part of 13th
+        Assert.InRange(completeColumns, 12, 16);
+        Assert.Equal(SheetStrip.PixelHeight * layout.SheetScale, layout.Sheet.Height);
+        Assert.True(layout.SheetThumb(0).Width < layout.SheetSlider.Width);
+    }
+
+    [Fact]
+    public void TheThumbHugsTheTrackEndsAndDragInvertsIt()
     {
         var layout = Default();
 
-        Assert.Equal(0, layout.SheetScrollForSliderX(layout.SheetSlider.Right + 500));
-    }
-
-    /// <summary>The thumb the renderer draws and the offset a drag computes invert each other, across the whole range.</summary>
-    [Fact]
-    public void ThumbAndDragRoundTrip()
-    {
-        var layout = Overflowing();
+        Assert.Equal(layout.SheetSlider.X, layout.SheetThumb(0).X);
+        Assert.Equal(layout.SheetSlider.Right, layout.SheetThumb(layout.SheetMaxScroll).Right);
+        int thumbTravel = layout.SheetSlider.Width - layout.SheetThumb(0).Width;
+        int quantization = Math.Max(1, (layout.SheetMaxScroll + thumbTravel - 1) / thumbTravel);
         for (int offset = 0; offset <= layout.SheetMaxScroll; offset += 7)
         {
             Rectangle thumb = layout.SheetThumb(offset);
             int back = layout.SheetScrollForSliderX(thumb.X + thumb.Width / 2);
-            // Integer quantization may lose a pixel of offset, never more than the pixels-per-step ratio.
-            Assert.InRange(Math.Abs(back - offset), 0, Math.Max(1, layout.SheetMaxScroll / Math.Max(1, layout.SheetSlider.Width)));
+            Assert.InRange(Math.Abs(back - offset), 0, quantization);
         }
     }
 
-    // ---- the surviving state ----
+    [Fact]
+    public void SliderAndSteppedScrollClampAtBothStripBorders()
+    {
+        var layout = Default();
+        var scroll = new SheetScroll();
+
+        Assert.Equal(0, layout.SheetScrollForSliderX(layout.SheetSlider.X - 500));
+        Assert.Equal(layout.SheetMaxScroll, layout.SheetScrollForSliderX(layout.SheetSlider.Right + 500));
+
+        scroll.ScrollBy(layout, -VirtualConsole.SpriteSize);
+        Assert.Equal(0, scroll.Offset);
+        scroll.ScrollBy(layout, 10_000);
+        Assert.Equal(layout.SheetMaxScroll, scroll.Offset);
+        scroll.ScrollBy(layout, -VirtualConsole.SpriteSize);
+        Assert.Equal(layout.SheetMaxScroll - VirtualConsole.SpriteSize, scroll.Offset);
+    }
 
     [Fact]
     public void ADragJumpsMovesAndEnds()
     {
-        var layout = Overflowing();
+        var layout = Default();
         var scroll = new SheetScroll();
 
-        scroll.BeginDrag(layout, layout.SheetSlider.Right);     // press at the far end
+        scroll.BeginDrag(layout, layout.SheetSlider.Right);
         Assert.True(scroll.Dragging);
-        Assert.Equal(layout.SheetMaxScroll, scroll.Offset);     // the thumb jumped under the pointer
+        Assert.Equal(layout.SheetMaxScroll, scroll.Offset);
 
         scroll.DragTo(layout, layout.SheetSlider.X);
         Assert.Equal(0, scroll.Offset);
 
         scroll.EndDrag();
         Assert.False(scroll.Dragging);
-        int parked = scroll.Offset;
-        scroll.DragTo(layout, layout.SheetSlider.Right);        // a drag without a press moves nothing
-        Assert.Equal(parked, scroll.Offset);
-    }
-
-    /// <summary>The wheel's and the [ ] keys' path: stepped, clamped at both borders (the other half of control г).</summary>
-    [Fact]
-    public void WheelAndKeyStepsClampAtBothBorders()
-    {
-        var layout = Overflowing();
-        var scroll = new SheetScroll();
-
-        scroll.ScrollBy(layout, -VirtualConsole.SpriteSize);
-        Assert.Equal(0, scroll.Offset);                         // already at the left border
-
-        scroll.ScrollBy(layout, 10_000);
-        Assert.Equal(layout.SheetMaxScroll, scroll.Offset);     // one huge step parks at the right border
-
-        scroll.ScrollBy(layout, -VirtualConsole.SpriteSize);
-        Assert.Equal(layout.SheetMaxScroll - VirtualConsole.SpriteSize, scroll.Offset);
-    }
-
-    /// <summary>A window resize that shrinks the ceiling pulls a standing offset back inside — the per-frame re-clamp.</summary>
-    [Fact]
-    public void AResizeReclampsAStandingOffset()
-    {
-        var scroll = new SheetScroll();
-        scroll.ScrollBy(Overflowing(), 10_000);
-        Assert.True(scroll.Offset > 0);
-
-        scroll.Clamp(Default());                                // the grown window fits the whole sheet
-
+        scroll.DragTo(layout, layout.SheetSlider.Right);
         Assert.Equal(0, scroll.Offset);
+    }
+
+    [Fact]
+    public void ClampReactsWhenAResizeWidensTheVisibleSlice()
+    {
+        var narrow = SpriteEditorLayout.Compute(200, 180, regionCells: 1);
+        var widened = Default();
+        var scroll = new SheetScroll();
+        Assert.True(narrow.SheetMaxScroll > widened.SheetMaxScroll);      // pins the resize premise
+
+        scroll.ScrollBy(narrow, 10_000);
+        scroll.Clamp(widened);
+
+        Assert.Equal(widened.SheetMaxScroll, scroll.Offset);
     }
 }

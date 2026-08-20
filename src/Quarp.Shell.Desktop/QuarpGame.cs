@@ -449,9 +449,9 @@ public sealed class QuarpGame : Game
         {
             editor.SelectLayer(editor.ActiveLayerIndex - 1);
         }
-        // The sheet window's keyboard and wheel scroll (wave 2h): [ ] step one sprite column,
-        // the wheel steps one column per notch, wheel-down meaning rightward like every
-        // horizontal-only scroller. All clamped by the scroll state against this layout.
+        // The PICO-8-style sheet strip's keyboard and wheel scroll (wave 2i): [ ] keep their
+        // one-sprite step, while a vertical wheel naturally advances the horizontal-only
+        // strip. All paths share the scroll state's boundary clamp.
         if (commands.Slower)
         {
             _sheetScroll.ScrollBy(layout, -VirtualConsole.SpriteSize);
@@ -596,6 +596,8 @@ public sealed class QuarpGame : Game
             }
             else if (layout.TrySheetCell(mouse.X, mouse.Y, _sheetScroll.Offset, out int cellX, out int cellY))
             {
+                // Layout reverses the presentation-strip mapping; the session still receives
+                // its canonical 16x16 sheet cell and therefore remains view-agnostic.
                 editor.SelectRegionCell(cellX, cellY);
             }
             else if (layout.SheetSlider.Contains(mouse.X, mouse.Y))

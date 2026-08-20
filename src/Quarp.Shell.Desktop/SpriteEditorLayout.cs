@@ -27,7 +27,7 @@ public enum EditorPromptVerb
 /// these rectangles and <c>QuarpGame</c> hit-tests the mouse against the same ones, so a
 /// button can never be painted in one place and clicked in another.
 ///
-/// <para><b>The shape is the owner's verdict (M9 stage 2.5) through his fourth review.</b>
+/// <para><b>The shape is the owner's verdict (M9 stage 2.5) through his fifth review.</b>
 /// Top: a tab strip of icons only — exit at the left; from the right corner leftwards music,
 /// sounds, tilemaps, sprites, code; no text headers of any kind. Bottom: a status bar —
 /// cursor coordinates, sprite number, the clickable saved/modified icon, undo/redo and (the
@@ -36,19 +36,17 @@ public enum EditorPromptVerb
 /// Left: the tool column alone — select, pencil, fill, stamp, shape, transform. The right
 /// column (fourth review) hugs the window's right edge and the <b>palette owns its width</b>:
 /// swatches at the top, the five layer tabs under them, then the sheet window — exactly as
-/// wide as the palette, as tall as half the panel strip — with its horizontal scroll slider
-/// underneath. The canvas takes the largest whole square between the toolbar and the size
+/// wide as the palette and exactly four sprite rows tall — with its horizontal scroll slider
+/// underneath. The unused space below is deliberately reserved for future blocks. The canvas takes the largest whole square between the toolbar and the size
 /// toggle, which sits in the band just left of the column. The dirty-exit prompt keeps a
 /// reserved text line just above the status bar, so its appearance never moves the canvas.</para>
 ///
 /// <para><b>Every scale is a whole integer</b>, floored at 1: the canvas is the region's
-/// pixels multiplied up, the sheet view is the 128x128 sheet multiplied up, icons are 8-px
+/// pixels multiplied up, the sheet view is the 512x32 presentation strip multiplied up, icons are 8-px
 /// masks multiplied up, and fractional scales would resample pixel art into blur
-/// (ARCHITECTURE §5's rule, applied to host UI). The sheet window scales <b>by its height</b>
-/// (fourth review: the tallest whole multiple that fits) and what the width cannot show
-/// scrolls horizontally — with the palette-wide window and a square sheet that only engages
-/// in tall narrow windows, but the slider is the mechanism either way and clamps at the
-/// sheet's border. In a pathologically small window the parts keep scale 1 and may
+/// (ARCHITECTURE §5's rule, applied to host UI). The strip uses the host UI scale so the
+/// default palette-wide window shows a useful 12-16 sprite columns; its 64 columns therefore
+/// always overflow and keep the slider meaningful. In a pathologically small window the parts keep scale 1 and may
 /// overflow — clipped, not crashed; the shell's default window is 8x the console and the
 /// floor exists for resizes, not for use.</para>
 /// </summary>
@@ -92,13 +90,13 @@ public readonly struct SpriteEditorLayout
     public int CanvasScale { get; private init; }
 
     /// <summary>
-    /// The sheet <b>window</b> (fourth review): palette-wide, half the panel strip tall. The
-    /// sheet draws inside it at <see cref="SheetScale"/>, shifted by the scroll offset; what
+    /// The sheet <b>window</b> (fifth review): palette-wide and four sprite rows tall. The
+    /// presentation strip draws inside it at <see cref="SheetScale"/>, shifted by the scroll offset; what
     /// does not fit horizontally is what <see cref="SheetSlider"/> reaches.
     /// </summary>
     public Rectangle Sheet { get; private init; }
 
-    /// <summary>Window pixels per sheet pixel in the sheet window — the tallest whole multiple its height allows.</summary>
+    /// <summary>Window pixels per strip pixel — tied to UI scale to keep controls and cells visually coherent.</summary>
     public int SheetScale { get; private init; }
 
     /// <summary>The horizontal scroll slider's track, directly under the sheet window.</summary>
@@ -236,17 +234,14 @@ public readonly struct SpriteEditorLayout
             };
         }
 
-        // The sheet window: palette-wide, half the panel strip tall (the review's "половина
-        // свободного вертикального пространства"), never past the prompt line even in
-        // windows too short for the half, and its slider track directly underneath. The
-        // sheet inside scales by the window's height — the tallest whole multiple that fits.
+        // The fifth review replaces the square sheet view with the PICO-8-style 64x4 strip.
+        // UI scale gives the default window 12 complete columns; fixing the height to four
+        // sprite rows leaves the space below untouched for the owner's future blocks.
         int sheetTop = layerTabsY + button + 2 * ui;
         int sliderHeight = 4 * ui;
-        int sheetHeight = Math.Max(
-            VirtualConsole.SpriteSize,
-            Math.Min((bottom - top) / 2, bottom - sheetTop - gap - sliderHeight));
+        int sheetScale = ui;
+        int sheetHeight = SheetStrip.PixelHeight * sheetScale;
         var sheet = new Rectangle(rightX, sheetTop, rightWidth, sheetHeight);
-        int sheetScale = Math.Max(1, sheetHeight / VirtualConsole.SheetHeight);
         var slider = new Rectangle(rightX, sheet.Bottom + gap, rightWidth, sliderHeight);
 
         // The canvas gets the largest whole-integer square left between the toolbar and the
@@ -279,14 +274,14 @@ public readonly struct SpriteEditorLayout
         };
     }
 
-    /// <summary>How many sheet pixels the window shows across — the whole sheet when it fits, the visible slice otherwise.</summary>
-    public int SheetVisiblePixels => Math.Min(VirtualConsole.SheetWidth, Sheet.Width / SheetScale);
+    /// <summary>How many virtual strip pixels the window shows across.</summary>
+    public int SheetVisiblePixels => Math.Min(SheetStrip.PixelWidth, Sheet.Width / SheetScale);
 
-    /// <summary>How many sheet pixels the window shows down. Vertical overflow only happens in windows too short for one x1 sheet — clipped, never scrolled.</summary>
-    public int SheetVisibleRows => Math.Min(VirtualConsole.SheetHeight, Sheet.Height / SheetScale);
+    /// <summary>The strip's fixed four-row pixel height.</summary>
+    public int SheetVisibleRows => SheetStrip.PixelHeight;
 
-    /// <summary>The scroll offset's ceiling, in sheet pixels: 0 when the whole sheet fits — the slider's clamp and the wheel's.</summary>
-    public int SheetMaxScroll => VirtualConsole.SheetWidth - SheetVisiblePixels;
+    /// <summary>The scroll offset's ceiling, in strip pixels — the slider's and wheel's shared clamp.</summary>
+    public int SheetMaxScroll => SheetStrip.PixelWidth - SheetVisiblePixels;
 
     /// <summary>
     /// The slider's thumb for a given scroll offset: proportional width (the visible share of
@@ -296,7 +291,7 @@ public readonly struct SpriteEditorLayout
     /// </summary>
     public Rectangle SheetThumb(int scroll)
     {
-        int thumbWidth = Math.Max(2 * Ui, SheetSlider.Width * SheetVisiblePixels / VirtualConsole.SheetWidth);
+        int thumbWidth = Math.Max(2 * Ui, SheetSlider.Width * SheetVisiblePixels / SheetStrip.PixelWidth);
         int range = SheetSlider.Width - thumbWidth;
         int max = SheetMaxScroll;
         int x = max == 0 ? SheetSlider.X : SheetSlider.X + scroll * range / max;
@@ -316,7 +311,7 @@ public readonly struct SpriteEditorLayout
         {
             return 0;
         }
-        int thumbWidth = Math.Max(2 * Ui, SheetSlider.Width * SheetVisiblePixels / VirtualConsole.SheetWidth);
+        int thumbWidth = Math.Max(2 * Ui, SheetSlider.Width * SheetVisiblePixels / SheetStrip.PixelWidth);
         int range = SheetSlider.Width - thumbWidth;
         if (range <= 0)
         {
@@ -432,10 +427,9 @@ public readonly struct SpriteEditorLayout
     }
 
     /// <summary>
-    /// Window point → sheet grid cell (0-15 each way), or false when the point is off the
-    /// sheet window or in the slack past the sheet's drawn edge. Takes the scroll offset the
-    /// window is currently shifted by — the hit test must agree with the picture, and the
-    /// picture is drawn from the same offset.
+    /// Window point → canonical sheet cell (0-15 each way), or false when the point is off
+    /// the four-row strip. The inverse delegates to <see cref="SheetStrip"/>, because the
+    /// renderer and mouse router must not own competing versions of the lane formula.
     /// </summary>
     public bool TrySheetCell(int x, int y, int scroll, out int cellX, out int cellY)
     {
@@ -445,15 +439,39 @@ public readonly struct SpriteEditorLayout
         {
             return false;
         }
-        int sheetX = (x - Sheet.X) / SheetScale + scroll;
-        int sheetY = (y - Sheet.Y) / SheetScale;
-        if (sheetX >= VirtualConsole.SheetWidth || sheetY >= VirtualConsole.SheetHeight)
+        int stripX = (x - Sheet.X) / SheetScale + scroll;
+        int stripY = (y - Sheet.Y) / SheetScale;
+        return SheetStrip.TryStripCellToSheetCell(
+            stripX / VirtualConsole.SpriteSize,
+            stripY / VirtualConsole.SpriteSize,
+            out cellX,
+            out cellY);
+    }
+
+    /// <summary>
+    /// Highlight rectangles for a canonical square region. A region crossing a
+    /// four-row page boundary intentionally becomes multiple rectangles: it is still one
+    /// model region, but its rows live in separate pieces of the presentation strip.
+    /// </summary>
+    public IReadOnlyList<Rectangle> SheetRegionHighlights(
+        int sheetCellX, int sheetCellY, int regionCells, int scroll)
+    {
+        var highlights = new List<Rectangle>(2);
+        int sheetEndY = sheetCellY + regionCells;
+        int cell = SheetScale * VirtualConsole.SpriteSize;
+        for (int y = sheetCellY; y < sheetEndY;)
         {
-            return false;   // the window can be wider (or, clipped, taller) than the sheet it shows
+            int laneEndY = Math.Min(sheetEndY, ((y >> 2) + 1) << 2);
+            SheetStrip.SpriteToStripCell((y << 4) + sheetCellX, out int stripColumn, out int stripRow);
+            var piece = new Rectangle(
+                Sheet.X + (stripColumn * VirtualConsole.SpriteSize - scroll) * SheetScale,
+                Sheet.Y + stripRow * cell,
+                regionCells * cell,
+                (laneEndY - y) * cell);
+            highlights.Add(piece);
+            y = laneEndY;
         }
-        cellX = sheetX / VirtualConsole.SpriteSize;
-        cellY = sheetY / VirtualConsole.SpriteSize;
-        return true;
+        return highlights;
     }
 
     /// <summary>Window point → visible palette index, or false. Sixteen rectangle checks, on a click, not per frame.</summary>

@@ -1,7 +1,48 @@
 namespace Quarp.Shell.Desktop;
 
 /// <summary>
-/// The sheet window's horizontal scroll state (M9 stage 2.5 wave 2h) — the one piece of the
+/// The one owner of the PICO-8 sheet-strip mapping. The session keeps the canonical 16x16
+/// sheet; only this view lays its four 16x4 pages side by side. Keeping both directions here
+/// prevents rendering and hit-testing from acquiring subtly different page arithmetic.
+/// </summary>
+public static class SheetStrip
+{
+    public const int Rows = 4;
+    public const int Columns = 64;
+    public const int PixelWidth = Columns * Quarp.Core.VirtualConsole.SpriteSize;
+    public const int PixelHeight = Rows * Quarp.Core.VirtualConsole.SpriteSize;
+
+    /// <summary>Canonical sprite number to its cell in the 64x4 presentation strip.</summary>
+    public static void SpriteToStripCell(int sprite, out int column, out int row)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegative(sprite);
+        ArgumentOutOfRangeException.ThrowIfGreaterThanOrEqual(sprite, 256);
+
+        int sheetRow = sprite >> 4;
+        int lane = sheetRow >> 2;
+        column = 16 * lane + (sprite & 15);
+        row = sheetRow & 3;
+    }
+
+    /// <summary>Strip cell back to the canonical sheet cell consumed by the session.</summary>
+    public static bool TryStripCellToSheetCell(int column, int row, out int sheetX, out int sheetY)
+    {
+        sheetX = 0;
+        sheetY = 0;
+        if ((uint)column >= Columns || (uint)row >= Rows)
+        {
+            return false;
+        }
+
+        int lane = column >> 4;
+        sheetX = column & 15;
+        sheetY = 4 * lane + row;
+        return true;
+    }
+}
+
+/// <summary>
+/// The sheet strip's horizontal scroll state (M9 stage 2.5 wave 2i) — the one piece of the
 /// slider that must survive between frames, headless like <see cref="ToolbarFlyout"/> and for
 /// the same reason: the shell feeds it drags, wheel ticks and key presses, and the negative
 /// control ("a drag past the track's end must not scroll past the sheet") is a plain unit
@@ -17,7 +58,7 @@ namespace Quarp.Shell.Desktop;
 /// </summary>
 public sealed class SheetScroll
 {
-    /// <summary>Current offset, sheet pixels 0..<see cref="SpriteEditorLayout.SheetMaxScroll"/>. 0 whenever the whole sheet fits.</summary>
+    /// <summary>Current offset, strip pixels 0..<see cref="SpriteEditorLayout.SheetMaxScroll"/>.</summary>
     public int Offset { get; private set; }
 
     /// <summary>True while a slider drag owns the mouse — the shell must not read the same frames as canvas strokes.</summary>

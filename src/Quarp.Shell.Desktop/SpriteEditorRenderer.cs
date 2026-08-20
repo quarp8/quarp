@@ -429,39 +429,55 @@ public sealed class SpriteEditorRenderer : IDisposable
     private void DrawSheet(SpriteBatch batch, in SpriteEditorLayout layout, SpriteEditorSession editor, int scroll)
     {
         DrawFrame(batch, layout.Sheet, layout.Ui, Dim);
-        // The window shows a slice of the composite: a whole-column source rectangle starting
-        // at the scroll offset, so scrolling never lands between texture pixels. The window
-        // can be wider than the sheet it shows (the palette-wide box against a square sheet) —
-        // then the slice is the whole sheet and the slack to the right stays window ink.
-        var source = new Rectangle(
-            scroll, 0,
-            Math.Min(layout.SheetVisiblePixels, VirtualConsole.SheetWidth - scroll),
-            layout.SheetVisibleRows);
-        var drawn = new Rectangle(
-            layout.Sheet.X, layout.Sheet.Y,
-            source.Width * layout.SheetScale, source.Height * layout.SheetScale);
-        batch.Draw(_sheetTexture, drawn, source, Color.White);
-        // The region cursor: a bright frame around the selected cells, shifted by the scroll
-        // and clipped to the drawn slice — framing cells the window is not showing would
-        // point at nothing.
-        int cell = layout.SheetScale * VirtualConsole.SpriteSize;
-        var selected = new Rectangle(
-            layout.Sheet.X + (editor.RegionCellX * VirtualConsole.SpriteSize - scroll) * layout.SheetScale,
-            layout.Sheet.Y + editor.RegionCellY * cell,
-            editor.RegionCells * cell,
-            editor.RegionCells * cell);
-        Rectangle visible = Rectangle.Intersect(selected, drawn);
-        if (visible.Width > 0 && visible.Height > 0)
+        int visibleRight = scroll + layout.SheetVisiblePixels;
+        for (int lane = 0; lane < 4; lane++)
         {
-            DrawFrame(batch, visible, Math.Max(1, layout.Ui / 2), Bright);
+            // Mapping the lane's first sprite through the shared owner gives both the strip
+            // destination and canonical texture row. Drawing a 16x4 block instead of 64
+            // individual cells keeps the presentation transform cheap without duplicating
+            // its page arithmetic here.
+            int firstSprite = lane * 64;
+            SheetStrip.SpriteToStripCell(firstSprite, out int stripColumn, out _);
+            int laneStart = stripColumn * VirtualConsole.SpriteSize;
+            int laneEnd = laneStart + VirtualConsole.SheetWidth;
+            int clippedStart = Math.Max(scroll, laneStart);
+            int clippedEnd = Math.Min(visibleRight, laneEnd);
+            if (clippedStart >= clippedEnd)
+            {
+                continue;
+            }
+
+            var source = new Rectangle(
+                clippedStart - laneStart,
+                lane * SheetStrip.Rows * VirtualConsole.SpriteSize,
+                clippedEnd - clippedStart,
+                SheetStrip.PixelHeight);
+            var drawn = new Rectangle(
+                layout.Sheet.X + (clippedStart - scroll) * layout.SheetScale,
+                layout.Sheet.Y,
+                source.Width * layout.SheetScale,
+                source.Height * layout.SheetScale);
+            batch.Draw(_sheetTexture, drawn, source, Color.White);
+        }
+
+        // Highlight geometry is cell-derived because one canonical region may straddle two
+        // strip pages. A single bounding box would falsely select the empty gap between them.
+        foreach (Rectangle highlight in layout.SheetRegionHighlights(
+            editor.RegionCellX, editor.RegionCellY, editor.RegionCells, scroll))
+        {
+            Rectangle visible = Rectangle.Intersect(highlight, layout.Sheet);
+            if (visible.Width > 0 && visible.Height > 0)
+            {
+                DrawFrame(batch, visible, Math.Max(1, layout.Ui / 2), Bright);
+            }
         }
     }
 
     /// <summary>
-    /// The sheet window's horizontal scroll slider (wave 2h): the track in the strip tone,
+    /// The sheet window's horizontal scroll slider (wave 2i): the track in the strip tone,
     /// the thumb from the very <see cref="SpriteEditorLayout.SheetThumb"/> the drag inverts.
-    /// A full-track thumb is the honest "everything is on screen"; it brightens under the
-    /// pointer and while dragging, like every hovered control.
+    /// The 64-column strip always overflows its palette-wide window, so the thumb is always
+    /// live; it brightens under the pointer and while dragging, like every hovered control.
     /// </summary>
     private void DrawSlider(SpriteBatch batch, in SpriteEditorLayout layout, SheetScroll scroll, HoverTarget? hover)
     {

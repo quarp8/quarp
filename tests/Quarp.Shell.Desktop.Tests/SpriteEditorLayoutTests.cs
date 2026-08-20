@@ -6,14 +6,15 @@ using Xunit;
 namespace Quarp.Shell.Desktop.Tests;
 
 /// <summary>
-/// The editor screen's geometry contract under the owner's verdict layout (M9 stage 2.5):
-/// whole-integer scales, the dictated strip order (exit left; music-sounds-tilemaps-sprites-
-/// code from the right corner leftwards; toolbar column over the action row; palette over the
-/// layers stub over the sheet; status bar at the bottom), no overlapping panels at the shell's
-/// real window sizes, and — the part that actually bites — hit tests that agree with the
-/// rectangles, because <see cref="SpriteEditorLayout"/> is the single owner both the renderer
-/// draws from and the mouse routing asks. A drift between "where the button is" and "what a
-/// click on it means" is exactly the bug class this file exists to make impossible.
+/// The editor screen's geometry contract under the owner's verdict layout (M9 stage 2.5, the
+/// second review applied): whole-integer scales, the dictated strip order (exit left;
+/// music-sounds-tilemaps-sprites-code from the right corner leftwards; the six-slot toolbar
+/// column with no action row; palette over the layers stub over the sheet; the full-width
+/// tab and status bands), no overlapping panels at the shell's real window sizes, and — the
+/// part that actually bites — hit tests that agree with the rectangles, because
+/// <see cref="SpriteEditorLayout"/> is the single owner both the renderer draws from and the
+/// mouse routing asks. A drift between "where the button is" and "what a click on it means"
+/// is exactly the bug class this file exists to make impossible.
 /// </summary>
 public class SpriteEditorLayoutTests
 {
@@ -70,7 +71,7 @@ public class SpriteEditorLayoutTests
         var layout = Default();
         var window = new Rectangle(0, 0, 1280, 720);
 
-        Assert.Equal(AllButtons.Length, layout.Buttons.Count);          // all 18, none forgotten
+        Assert.Equal(AllButtons.Length, layout.Buttons.Count);          // all 16, none forgotten
         for (int i = 0; i < layout.Buttons.Count; i++)
         {
             Assert.True(window.Contains(layout.Buttons[i].Rect));
@@ -109,9 +110,15 @@ public class SpriteEditorLayoutTests
             tab => Assert.Equal(layout.Margin, tab.Y));
     }
 
-    /// <summary>The toolbar column runs top-to-bottom left of the canvas; the action row sits under it.</summary>
+    /// <summary>
+    /// The toolbar after the owner's second review: ONE column of six slots left of the
+    /// canvas, top-to-bottom select / pencil / fill / stamp / shape / transform — the action
+    /// row is gone (its verbs live in the transform group slot and the status bar's clear).
+    /// An action row reappearing under the column would land buttons right of the margin
+    /// column and turn the All-assert red.
+    /// </summary>
     [Fact]
-    public void TheToolbarColumnAndActionRowSitLeftOfTheCanvas()
+    public void TheToolbarIsOneColumnOfSixLeftOfTheCanvas()
     {
         var layout = Default();
         Rectangle select = layout.ButtonRect(EditorButton.ToolSelect);
@@ -119,23 +126,43 @@ public class SpriteEditorLayoutTests
         Rectangle fill = layout.ButtonRect(EditorButton.ToolFill);
         Rectangle stamp = layout.ButtonRect(EditorButton.ToolStamp);
         Rectangle shape = layout.ButtonRect(EditorButton.ToolShape);
-        Rectangle flipH = layout.ButtonRect(EditorButton.FlipH);
-        Rectangle flipV = layout.ButtonRect(EditorButton.FlipV);
-        Rectangle rotate = layout.ButtonRect(EditorButton.Rotate);
-        Rectangle clear = layout.ButtonRect(EditorButton.Clear);
+        Rectangle transform = layout.ButtonRect(EditorButton.ToolTransform);
+        var column = new[] { select, pencil, fill, stamp, shape, transform };
 
-        // Tools top-to-bottom in the verdict's order, one column at the left margin.
-        Assert.True(select.Y < pencil.Y && pencil.Y < fill.Y && fill.Y < stamp.Y && stamp.Y < shape.Y);
-        Assert.All(new[] { select, pencil, fill, stamp, shape }, tool => Assert.Equal(layout.Margin, tool.X));
-        // Actions as one row below the column, left-to-right F / V / R / Del.
-        Assert.True(flipH.Y > shape.Bottom);
-        Assert.Equal(flipH.Y, flipV.Y);
-        Assert.Equal(flipV.Y, rotate.Y);
-        Assert.Equal(rotate.Y, clear.Y);
-        Assert.True(flipH.X < flipV.X && flipV.X < rotate.X && rotate.X < clear.X);
-        // The whole panel is left of the drawing surface.
-        Assert.True(clear.Right <= layout.Canvas.Left);
-        Assert.True(shape.Right <= layout.Canvas.Left);
+        Assert.True(select.Y < pencil.Y && pencil.Y < fill.Y && fill.Y < stamp.Y
+            && stamp.Y < shape.Y && shape.Y < transform.Y);
+        Assert.All(column, tool => Assert.Equal(layout.Margin, tool.X));
+        Assert.All(column, tool => Assert.True(tool.Right <= layout.Canvas.Left));
+        // The column starts below the tab band and stays above the prompt line.
+        Assert.True(select.Y >= layout.TabStrip.Bottom);
+        Assert.True(transform.Bottom <= layout.PromptY);
+    }
+
+    /// <summary>
+    /// The strips of the second review: both bands span the whole window width (they are the
+    /// background that separates chrome from canvas, so a gap would break the reading), hold
+    /// their buttons, and never touch the panels between them.
+    /// </summary>
+    [Fact]
+    public void TheTabAndStatusBandsSpanTheWindowAndHoldTheirButtons()
+    {
+        var layout = Default();
+
+        Assert.Equal((0, 0, 1280), (layout.TabStrip.X, layout.TabStrip.Y, layout.TabStrip.Width));
+        Assert.Equal((0, 1280, 720), (layout.StatusBar.X, layout.StatusBar.Width, layout.StatusBar.Bottom));
+        foreach (EditorButton tab in new[]
+        {
+            EditorButton.ExitTab, EditorButton.CodeTab, EditorButton.SpritesTab,
+            EditorButton.TilemapTab, EditorButton.SoundTab, EditorButton.MusicTab,
+        })
+        {
+            Assert.True(layout.TabStrip.Contains(layout.ButtonRect(tab)));
+        }
+        // The bands must not swallow the working panels — that is what "отделены" means in geometry.
+        Assert.False(layout.TabStrip.Intersects(layout.Canvas));
+        Assert.False(layout.StatusBar.Intersects(layout.Canvas));
+        Assert.False(layout.TabStrip.Intersects(layout.Swatches));
+        Assert.False(layout.StatusBar.Intersects(layout.Sheet));
     }
 
     /// <summary>The right column stacks in the verdict's order: palette, then the layers stub, then the sheet.</summary>
@@ -149,7 +176,10 @@ public class SpriteEditorLayoutTests
         Assert.True(layout.LayersStub.Bottom <= layout.Sheet.Y);
     }
 
-    /// <summary>The status bar holds its three buttons: redo outermost right, then undo, then save.</summary>
+    /// <summary>
+    /// The status bar holds its four buttons in the second review's order: clear outermost
+    /// right ("справа от redo" — the owner's words), then redo, undo, and save innermost.
+    /// </summary>
     [Fact]
     public void TheStatusButtonsLiveInsideTheStatusBar()
     {
@@ -157,18 +187,21 @@ public class SpriteEditorLayoutTests
         Rectangle save = layout.ButtonRect(EditorButton.Save);
         Rectangle undo = layout.ButtonRect(EditorButton.Undo);
         Rectangle redo = layout.ButtonRect(EditorButton.Redo);
+        Rectangle clear = layout.ButtonRect(EditorButton.Clear);
 
         Assert.True(layout.StatusBar.Contains(save));
         Assert.True(layout.StatusBar.Contains(undo));
         Assert.True(layout.StatusBar.Contains(redo));
-        Assert.Equal(layout.StatusBar.Right, redo.Right);
-        Assert.True(save.X < undo.X && undo.X < redo.X);
+        Assert.True(layout.StatusBar.Contains(clear));
+        Assert.Equal(1280 - layout.Margin, clear.Right);        // clear hugs the right edge, a margin in
+        Assert.True(save.X < undo.X && undo.X < redo.X && redo.X < clear.X);
     }
 
     /// <summary>
-    /// Pins the stub list to the owner's verdict: the four future-editor tabs and the three
-    /// wave-2e tools, nothing else. Waking a tool early (the negative-control scenario: a
-    /// digit switching to the stamp) makes this red before any UI is even drawn.
+    /// Pins the stub list to the owner's verdict as of wave 2e: the four future-editor tabs
+    /// and the two wave-2f tools (select, stamp) — shape and transform woke up this wave.
+    /// Waking a tool early (the negative-control scenario: a digit switching to the stamp)
+    /// makes this red before any UI is even drawn.
     /// </summary>
     [Fact]
     public void ExactlyTheVerdictsButtonsAreStubs()
@@ -176,12 +209,45 @@ public class SpriteEditorLayoutTests
         var stubs = new[]
         {
             EditorButton.CodeTab, EditorButton.TilemapTab, EditorButton.SoundTab, EditorButton.MusicTab,
-            EditorButton.ToolSelect, EditorButton.ToolStamp, EditorButton.ToolShape,
+            EditorButton.ToolSelect, EditorButton.ToolStamp,
         };
         foreach (EditorButton button in AllButtons)
         {
             Assert.Equal(stubs.Contains(button), EditorIcons.IsStub(button));
         }
+    }
+
+    // ---- group flyouts (wave 2e) ----
+
+    /// <summary>
+    /// Flyout variant buttons sit in a row right of their slot, are disjoint, and their
+    /// centres hit themselves — the same roundtrip discipline as every clickable rectangle.
+    /// </summary>
+    [Theory]
+    [InlineData(EditorButton.ToolShape, 2)]
+    [InlineData(EditorButton.ToolTransform, 3)]
+    public void FlyoutVariantsRoundTripThroughTheirRectangles(EditorButton slot, int count)
+    {
+        var layout = Default();
+        Rectangle anchor = layout.ButtonRect(slot);
+        var window = new Rectangle(0, 0, 1280, 720);
+
+        for (int i = 0; i < count; i++)
+        {
+            Rectangle rect = layout.FlyoutVariantRect(slot, i);
+            Assert.True(window.Contains(rect));
+            Assert.True(rect.X > anchor.Right);                 // rightward of the slot, never over it
+            Assert.Equal(anchor.Y, rect.Y);                     // one row, photoshop-style
+            Assert.True(layout.TryFlyoutVariant(rect.Center.X, rect.Center.Y, slot, out int hit));
+            Assert.Equal(i, hit);
+            for (int j = i + 1; j < count; j++)
+            {
+                Assert.False(rect.Intersects(layout.FlyoutVariantRect(slot, j)));
+            }
+        }
+        // One past the last variant is nothing — the hit test is bounded by GroupVariantCount.
+        Rectangle beyond = layout.FlyoutVariantRect(slot, count);
+        Assert.False(layout.TryFlyoutVariant(beyond.Center.X, beyond.Center.Y, slot, out _));
     }
 
     [Fact]

@@ -4,15 +4,37 @@ using Quarp.Core;
 namespace Quarp.Shell.Desktop;
 
 /// <summary>
-/// Which mouse tool the canvas click means (M9 stage 2, wave 2c). Two values and not a
-/// toolbar: the eraser is the pencil with color 0 and the eyedropper is the right button in
-/// either tool, so pencil↔bucket is the only genuine mode the mouse has. The state lives in
-/// the session, not the window, so the footer's "what is active" line is provable headless.
+/// Which mouse tool the canvas click means. The eraser is the pencil with color 0 and the
+/// eyedropper is the right button in every tool, so these are the only genuine canvas modes.
+/// Shape joined in wave 2e (M9 stage 2.5, the owner's verdict); the oval/rectangle choice is
+/// not a tool but a <see cref="ShapeVariant"/> — the photoshop-style group slot's memory.
+/// The state lives in the session, not the window, so "what is active" is provable headless.
 /// </summary>
 public enum SpriteEditorTool
 {
     Pencil,
     Fill,
+    Shape,
+}
+
+/// <summary>
+/// The transform group slot's variants (M9 stage 2.5, owner's second review: flip H, flip V
+/// and rotate share ONE toolbar slot). Order is the flyout's left-to-right order and the
+/// digit's cycle order; the values double as flyout indices, so the mapping to icons and
+/// tooltips in <c>EditorIcons</c> is a cast, not a second table.
+/// </summary>
+public enum TransformVariant
+{
+    FlipH,
+    FlipV,
+    Rotate,
+}
+
+/// <summary>The shape group slot's variants — same contract as <see cref="TransformVariant"/>.</summary>
+public enum ShapeVariant
+{
+    Oval,
+    Rectangle,
 }
 
 /// <summary>
@@ -24,14 +46,15 @@ public enum SpriteEditorTool
 ///
 /// <para><b>The 0-15 invariant has exactly four doors.</b> Pixels enter the sheet through
 /// (1) the load in the constructor — <see cref="PngDecoder.DecodeToPaletteIndices"/> only ever
-/// emits matches against the 16 visible palette colors; (2) the pencil and the bucket — which
-/// write <see cref="CurrentColor"/>, and <see cref="SelectColor"/> throws on anything outside
-/// 0-15 while <see cref="PickColor"/> copies a value already in the sheet; (3) undo/redo —
-/// which swap whole arrays that were themselves sheets; (4) the region edits — flips and the
-/// rotation only permute values already in the sheet, and the clear writes the literal 0.
-/// There is no fifth setter, so the byte casts in the plot and fill routines can never
-/// truncate. <see cref="PngEncoder"/> re-checks on save as the owner of its own input
-/// contract; that check is unreachable from here by construction.</para>
+/// emits matches against the 16 visible palette colors; (2) the pencil, the bucket and the
+/// shape commit — which write <see cref="CurrentColor"/> (the shapes through the very same
+/// <see cref="Plot"/> the pencil uses), and <see cref="SelectColor"/> throws on anything
+/// outside 0-15 while <see cref="PickColor"/> copies a value already in the sheet;
+/// (3) undo/redo — which swap whole arrays that were themselves sheets; (4) the region
+/// edits — flips and the rotation only permute values already in the sheet, and the clear
+/// writes the literal 0. There is no fifth setter, so the byte casts in the plot and fill
+/// routines can never truncate. <see cref="PngEncoder"/> re-checks on save as the owner of
+/// its own input contract; that check is unreachable from here by construction.</para>
 ///
 /// <para><b>Dirty is content, not history.</b> <see cref="IsDirty"/> compares the live sheet
 /// against a snapshot of what the disk holds (or held nothing — an all-zero sheet), because
@@ -72,6 +95,20 @@ public sealed class SpriteEditorSession
     private int _lastPaintX = -1;
     private int _lastPaintY;
 
+    // The shape gesture's whole state: anchor (where the press landed), corner (where the drag
+    // is now), the Ctrl-held "filled" flag, and the preview's point set. The points are THE
+    // shape — the commit plots this very list, so the preview can never disagree with what
+    // lands (one owner of the shape formula, per the playbook). None of it touches _sheet:
+    // the preview lives here and is drawn by the renderer as an overlay, which is the whole
+    // "предпросмотр в лист не пишется" contract made structural.
+    private bool _shapeActive;
+    private int _shapeAnchorX;
+    private int _shapeAnchorY;
+    private int _shapeCornerX;
+    private int _shapeCornerY;
+    private bool _shapeFilled;
+    private readonly List<(int X, int Y)> _shapePoints = new();
+
     /// <summary>
     /// Opens the sheet of a cartridge <b>folder</b> (.quarp8 files never get here — the mode
     /// machine refuses them with the read-only line). No gfx.png is the normal case, not an
@@ -104,6 +141,17 @@ public sealed class SpriteEditorSession
     /// <summary>What a left click on the canvas does — the footer names this, so switching tools is always visible.</summary>
     public SpriteEditorTool Tool { get; private set; } = SpriteEditorTool.Pencil;
 
+    /// <summary>
+    /// The transform slot's remembered variant (M9 stage 2.5 group slots). Clicking the slot
+    /// applies this; the direct hotkeys F/V/R keep working AND move this highlight, because
+    /// <see cref="FlipHorizontal"/> and friends set it themselves — one door, so the slot's
+    /// icon can never show a variant the hotkeys just contradicted.
+    /// </summary>
+    public TransformVariant CurrentTransform { get; private set; }
+
+    /// <summary>The shape slot's remembered variant: what <see cref="BeginShape"/> will draw.</summary>
+    public ShapeVariant CurrentShape { get; private set; }
+
     /// <summary>Region anchor, in sheet cells 0-15.</summary>
     public int RegionCellX { get; private set; }
 
@@ -126,6 +174,16 @@ public sealed class SpriteEditorSession
 
     /// <summary>True while a pencil stroke is open (button held). The shell checks this before feeding drag positions.</summary>
     public bool StrokeActive => _strokeBackup is not null;
+
+    /// <summary>True while a shape gesture is open (anchor placed, button held) — the preview is on screen.</summary>
+    public bool ShapeActive => _shapeActive;
+
+    /// <summary>
+    /// The open shape's pixels, region-local — empty between gestures. This list is where the
+    /// preview lives: the renderer paints it over the canvas in <see cref="CurrentColor"/>,
+    /// and <see cref="CommitShape"/> plots exactly it, so what the author saw is what lands.
+    /// </summary>
+    public IReadOnlyList<(int X, int Y)> ShapePreview => _shapePoints;
 
     /// <summary>True when the live sheet differs from what the disk holds — see the type comment for why this is a content compare.</summary>
     public bool IsDirty => !_sheet.AsSpan().SequenceEqual(_saved);
@@ -269,11 +327,207 @@ public sealed class SpriteEditorSession
         CurrentColor = _sheet[SheetOffset(localX, localY)];
     }
 
-    /// <summary>B: pencil ↔ bucket. Ends an open stroke first — a gesture that straddles a tool switch would be two tools in one undo step.</summary>
+    /// <summary>
+    /// B: pencil ↔ bucket, its wave-2c contract untouched by the third tool — from Shape it
+    /// lands on the pencil, the opening tool. Interrupts an open gesture first: a stroke that
+    /// straddles a tool switch would be two tools in one undo step, and a shape preview
+    /// belongs to the tool that opened it.
+    /// </summary>
     public void ToggleTool()
     {
-        EndStroke();
+        InterruptGesture();
         Tool = Tool == SpriteEditorTool.Pencil ? SpriteEditorTool.Fill : SpriteEditorTool.Pencil;
+    }
+
+    /// <summary>
+    /// Direct tool selection — the real select the wave-2b comment in <c>QuarpGame.SetTool</c>
+    /// promised once a third tool existed. Same gesture discipline as <see cref="ToggleTool"/>;
+    /// selecting the tool already active is a visible no-op on purpose, so a toolbar click
+    /// cannot eat an open gesture for nothing.
+    /// </summary>
+    public void SelectTool(SpriteEditorTool tool)
+    {
+        if (Tool == tool)
+        {
+            return;
+        }
+        InterruptGesture();
+        Tool = tool;
+    }
+
+    /// <summary>Flyout pick (or a direct hotkey's side effect) — remembers which transform the slot applies.</summary>
+    public void SelectTransform(TransformVariant variant) => CurrentTransform = variant;
+
+    /// <summary>The digit's repeat-press: highlight walks flip H → flip V → rotate → flip H. Applies nothing.</summary>
+    public void CycleTransform() =>
+        CurrentTransform = (TransformVariant)(((int)CurrentTransform + 1) % 3);
+
+    /// <summary>
+    /// Flyout pick for the shape slot. Redraws an open preview in the new variant rather than
+    /// cancelling it — the anchor and drag are the author's work, the variant is just its look.
+    /// </summary>
+    public void SelectShape(ShapeVariant variant)
+    {
+        CurrentShape = variant;
+        if (_shapeActive)
+        {
+            RebuildShapePreview();
+        }
+    }
+
+    /// <summary>The digit's repeat-press on the shape slot: oval ↔ rectangle.</summary>
+    public void CycleShape() =>
+        SelectShape(CurrentShape == ShapeVariant.Oval ? ShapeVariant.Rectangle : ShapeVariant.Oval);
+
+    /// <summary>
+    /// The transform slot's click: applies <see cref="CurrentTransform"/> to the region —
+    /// the mouse's half of what F/V/R do directly from the keyboard.
+    /// </summary>
+    public void ApplyTransform()
+    {
+        switch (CurrentTransform)
+        {
+            case TransformVariant.FlipH:
+                FlipHorizontal();
+                break;
+            case TransformVariant.FlipV:
+                FlipVertical();
+                break;
+            default:
+                RotateClockwise();
+                break;
+        }
+    }
+
+    /// <summary>
+    /// Shape button pressed on the canvas: the anchor lands and the preview starts as a single
+    /// point. Throws outside the region like <see cref="Paint"/> — the shell's clamp is the
+    /// contract, and since both corners can only ever be in-range, a committed shape cannot
+    /// reach a neighbouring sprite by construction (the "фигуры клампятся регионом" law).
+    /// </summary>
+    public void BeginShape(int localX, int localY)
+    {
+        if (_shapeActive)
+        {
+            return;     // A second press without a release folds into the open gesture, like BeginStroke.
+        }
+        ValidateLocal(localX, nameof(localX));
+        ValidateLocal(localY, nameof(localY));
+        _shapeActive = true;
+        _shapeAnchorX = localX;
+        _shapeAnchorY = localY;
+        _shapeCornerX = localX;
+        _shapeCornerY = localY;
+        _shapeFilled = false;
+        RebuildShapePreview();
+    }
+
+    /// <summary>
+    /// One frame of an open shape gesture: the dragged corner and the Ctrl-held filled flag
+    /// (PICO-8's pattern: plain drag = outline, Ctrl = filled). Recomputes the preview —
+    /// nothing here touches the sheet, so <see cref="Version"/>, undo and dirt all stand still
+    /// until <see cref="CommitShape"/>.
+    /// </summary>
+    public void UpdateShape(int localX, int localY, bool filled)
+    {
+        if (!_shapeActive)
+        {
+            throw new InvalidOperationException("UpdateShape outside a gesture — the shell must call BeginShape on the press.");
+        }
+        ValidateLocal(localX, nameof(localX));
+        ValidateLocal(localY, nameof(localY));
+        if (localX == _shapeCornerX && localY == _shapeCornerY && filled == _shapeFilled)
+        {
+            return;     // The per-frame refresh is free when nothing moved.
+        }
+        _shapeCornerX = localX;
+        _shapeCornerY = localY;
+        _shapeFilled = filled;
+        RebuildShapePreview();
+    }
+
+    /// <summary>
+    /// Shape button released: the preview's points become sheet pixels in
+    /// <see cref="CurrentColor"/> as ONE undo step — by riding the stroke mechanism
+    /// (<see cref="BeginStroke"/> / <see cref="Plot"/> / <see cref="EndStroke"/>), which
+    /// already owns "one gesture = one step" and "a no-op never happened". A 1x1 gesture is
+    /// an honest single point, both variants. Safe without an open gesture, like EndStroke:
+    /// releases arrive when the press landed outside the canvas.
+    /// </summary>
+    public void CommitShape()
+    {
+        if (!_shapeActive)
+        {
+            return;
+        }
+        _shapeActive = false;
+        BeginStroke();
+        foreach ((int x, int y) in _shapePoints)
+        {
+            Plot(x, y);
+        }
+        EndStroke();
+        _shapePoints.Clear();
+    }
+
+    /// <summary>
+    /// Recomputes <see cref="ShapePreview"/> from the gesture's corners, variant and filled
+    /// flag. Row-major scan over the inclusive bounding box; the oval is the integer
+    /// inclusion test (2x-sx)²b² + (2y-sy)²a² ≤ a²b² (the box's inscribed ellipse, exact in
+    /// integers — no floats, no rounding drift between preview and commit), its outline the
+    /// inside pixels with at least one 4-neighbour outside. Degenerate boxes fall out for
+    /// free: a 1-wide box passes the test on its whole column, a 1x1 box is a point.
+    /// </summary>
+    private void RebuildShapePreview()
+    {
+        _shapePoints.Clear();
+        int x0 = Math.Min(_shapeAnchorX, _shapeCornerX);
+        int x1 = Math.Max(_shapeAnchorX, _shapeCornerX);
+        int y0 = Math.Min(_shapeAnchorY, _shapeCornerY);
+        int y1 = Math.Max(_shapeAnchorY, _shapeCornerY);
+        for (int y = y0; y <= y1; y++)
+        {
+            for (int x = x0; x <= x1; x++)
+            {
+                bool inside = CurrentShape == ShapeVariant.Rectangle || InsideOval(x, y, x0, y0, x1, y1);
+                if (!inside)
+                {
+                    continue;
+                }
+                bool onContour = CurrentShape == ShapeVariant.Rectangle
+                    ? x == x0 || x == x1 || y == y0 || y == y1
+                    : !InsideOval(x - 1, y, x0, y0, x1, y1) || !InsideOval(x + 1, y, x0, y0, x1, y1)
+                        || !InsideOval(x, y - 1, x0, y0, x1, y1) || !InsideOval(x, y + 1, x0, y0, x1, y1);
+                if (_shapeFilled || onContour)
+                {
+                    _shapePoints.Add((x, y));
+                }
+            }
+        }
+    }
+
+    /// <summary>Doubled-coordinate ellipse test — anything outside the inclusive box fails it, so no separate bounds check exists to drift.</summary>
+    private static bool InsideOval(int x, int y, int x0, int y0, int x1, int y1)
+    {
+        long a = x1 - x0 + 1;
+        long b = y1 - y0 + 1;
+        long dx = 2L * x - (x0 + x1);
+        long dy = 2L * y - (y0 + y1);
+        return dx * dx * b * b + dy * dy * a * a <= a * a * b * b;
+    }
+
+    /// <summary>
+    /// What every operation that cuts across an open gesture calls: an open <b>stroke</b>
+    /// commits (its pixels are already real), an open <b>shape preview</b> is discarded (its
+    /// pixels never were — cancelling is the only reading of "в лист не пишется" that survives
+    /// an interruption). One helper instead of two calls at eight sites, so a future
+    /// interrupter cannot remember the stroke and forget the preview.
+    /// </summary>
+    private void InterruptGesture()
+    {
+        _shapeActive = false;
+        _shapePoints.Clear();
+        EndStroke();
     }
 
     /// <summary>
@@ -285,7 +539,7 @@ public sealed class SpriteEditorSession
     /// </summary>
     public void CycleRegionSize()
     {
-        EndStroke();
+        InterruptGesture();
         RegionCells = RegionCells switch { 1 => 2, 2 => 4, _ => 1 };
         SelectRegionCell(RegionCellX, RegionCellY);
         // A shrink can strand the cursor outside the new region (31,31 in an 8-px region);
@@ -303,7 +557,7 @@ public sealed class SpriteEditorSession
     {
         ValidateLocal(localX, nameof(localX));
         ValidateLocal(localY, nameof(localY));
-        EndStroke();    // A stray open gesture commits as its own step before the fill becomes one.
+        InterruptGesture();     // A stray open gesture commits as its own step before the fill becomes one.
         byte target = _sheet[SheetOffset(localX, localY)];
         if (target == CurrentColor)
         {
@@ -340,18 +594,35 @@ public sealed class SpriteEditorSession
         Version++;
     }
 
-    /// <summary>F: mirror the region left↔right. One undo step; a symmetric region is a no-op and stays invisible.</summary>
-    public void FlipHorizontal() => ApplyRegionEdit(static (src, n, x, y) => src[y * n + (n - 1 - x)]);
+    /// <summary>
+    /// F: mirror the region left↔right. One undo step; a symmetric region is a no-op and stays
+    /// invisible. Also moves the transform slot's highlight (M9 stage 2.5: the direct hotkeys
+    /// keep working and light up their variant) — setting it here rather than in the key
+    /// routing means no caller can apply a flip while the slot claims otherwise.
+    /// </summary>
+    public void FlipHorizontal()
+    {
+        CurrentTransform = TransformVariant.FlipH;
+        ApplyRegionEdit(static (src, n, x, y) => src[y * n + (n - 1 - x)]);
+    }
 
     /// <summary>V: mirror the region top↔bottom.</summary>
-    public void FlipVertical() => ApplyRegionEdit(static (src, n, x, y) => src[(n - 1 - y) * n + x]);
+    public void FlipVertical()
+    {
+        CurrentTransform = TransformVariant.FlipV;
+        ApplyRegionEdit(static (src, n, x, y) => src[(n - 1 - y) * n + x]);
+    }
 
     /// <summary>
     /// R: rotate the region 90° clockwise — the top row becomes the right column. Always legal
     /// without remapping cells because the region is square by construction (the whole reason
     /// the work order pins it square).
     /// </summary>
-    public void RotateClockwise() => ApplyRegionEdit(static (src, n, x, y) => src[(n - 1 - x) * n + y]);
+    public void RotateClockwise()
+    {
+        CurrentTransform = TransformVariant.Rotate;
+        ApplyRegionEdit(static (src, n, x, y) => src[(n - 1 - x) * n + y]);
+    }
 
     /// <summary>Delete: the region to color 0 — the sheet's "nothing", same as the eraser writes.</summary>
     public void ClearRegion() => ApplyRegionEdit(static (_, _, _, _) => 0);
@@ -368,7 +639,7 @@ public sealed class SpriteEditorSession
     /// </summary>
     private void ApplyRegionEdit(Func<byte[], int, int, int, byte> source)
     {
-        EndStroke();    // A transform mid-drag commits the gesture first — two clean undo steps, no braid.
+        InterruptGesture();     // A transform mid-drag commits the gesture first — two clean undo steps, no braid.
         int n = RegionPixels;
         var before = new byte[n * n];
         for (int y = 0; y < n; y++)
@@ -409,7 +680,7 @@ public sealed class SpriteEditorSession
     /// </summary>
     public void Undo()
     {
-        EndStroke();
+        InterruptGesture();
         if (_undo.Count == 0)
         {
             return;
@@ -423,7 +694,7 @@ public sealed class SpriteEditorSession
     /// <summary>Ctrl+Y — the exact mirror of <see cref="Undo"/>.</summary>
     public void Redo()
     {
-        EndStroke();
+        InterruptGesture();
         if (_redo.Count == 0)
         {
             return;
@@ -444,7 +715,7 @@ public sealed class SpriteEditorSession
     /// <returns>True when the disk now matches the sheet (including "already did"), false when the write failed.</returns>
     public bool Save()
     {
-        EndStroke();
+        InterruptGesture();
         if (!IsDirty)
         {
             SaveError = null;
@@ -474,7 +745,7 @@ public sealed class SpriteEditorSession
     /// <returns>True when the editor may close now.</returns>
     public bool RequestClose()
     {
-        EndStroke();    // Esc mid-drag: the gesture commits, then the prompt judges the session as it stands.
+        InterruptGesture();     // Esc mid-drag: the gesture commits, then the prompt judges the session as it stands.
         if (ExitPromptShown)
         {
             ExitPromptShown = false;

@@ -5,13 +5,14 @@ using Quarp.Core;
 namespace Quarp.Shell.Desktop;
 
 /// <summary>
-/// Draws the sprite editor screen in the owner's verdict shape (M9 stage 2.5): the icon-only
-/// tab strip, the left toolbar with its action row, the zoomed canvas with the keyboard
-/// cursor, the right column (palette, layers stub, sheet), the status bar (coordinates,
-/// sprite number, save/undo/redo), the reserved prompt line and the hover tooltips. Host UI
-/// like <see cref="LibraryRenderer"/> — window-native resolution, <see cref="Palette.Master32"/>
-/// colors, the system font and the icon strip — and just as unable to touch a framebuffer or
-/// a hash: no cartridge runs while this draws.
+/// Draws the sprite editor screen in the owner's verdict shape (M9 stage 2.5, second review
+/// applied): the icon-only tab strip and the status bar as tinted full-width bands, the left
+/// toolbar column with its two group slots (corner-marked, flyout on demand), the zoomed
+/// canvas with the keyboard cursor and the shape preview overlay, the right column (palette,
+/// layers stub, sheet), the status buttons (save/undo/redo/clear), the reserved prompt line
+/// and the hover tooltips. Host UI like <see cref="LibraryRenderer"/> — window-native
+/// resolution, <see cref="Palette.Master32"/> colors, the system font and the icon strip —
+/// and just as unable to touch a framebuffer or a hash: no cartridge runs while this draws.
 ///
 /// <para>All geometry comes from <see cref="SpriteEditorLayout"/>, the same struct the shell
 /// hit-tests the mouse against; this class owns only pixels-on-screen. The sheet lives in one
@@ -47,6 +48,13 @@ public sealed class SpriteEditorRenderer : IDisposable
     private static readonly Color Warn = PaletteColors.Opaque(8);       // yellow: the exit prompt and the modified icon — a decision, not a failure
     private static readonly Color Error = PaletteColors.Opaque(10);     // red: a save that did not happen
 
+    // The strips' background (owner's second review: the tab and status bands must separate
+    // from the window instead of melting into it). Master32[16] is the ink's own secret twin —
+    // the "twilight lift of near-black" (Palette.cs) — so the bands read as raised chrome one
+    // honest step lighter than the Ink-cleared window while Text and Dim keep their contrast
+    // on top of it.
+    private static readonly Color StripBg = PaletteColors.Opaque(16);
+
     public SpriteEditorRenderer(GraphicsDevice device)
     {
         ArgumentNullException.ThrowIfNull(device);
@@ -69,10 +77,12 @@ public sealed class SpriteEditorRenderer : IDisposable
     /// like the library does. <paramref name="hover"/> and <paramref name="tooltipVisible"/>
     /// come from the shell's <see cref="IconHoverTracker"/>: the hovered frame lights up
     /// immediately, the text label only after the tracker's three seconds.
+    /// <paramref name="flyoutSlot"/> is the shell's <see cref="ToolbarFlyout.OpenSlot"/> —
+    /// the flyout draws late so it floats over the canvas, and the tooltip still wins over it.
     /// </summary>
     public void Draw(
         SpriteBatch batch, int width, int height, SpriteEditorSession editor,
-        HoverTarget? hover, bool tooltipVisible)
+        HoverTarget? hover, bool tooltipVisible, EditorButton? flyoutSlot)
     {
         ArgumentNullException.ThrowIfNull(batch);
         ArgumentNullException.ThrowIfNull(editor);
@@ -82,6 +92,10 @@ public sealed class SpriteEditorRenderer : IDisposable
         _device.Clear(Ink);
         batch.Begin(samplerState: SamplerState.PointClamp);
 
+        // The bands go first: everything in the strips sits ON them.
+        batch.Draw(_white, layout.TabStrip, StripBg);
+        batch.Draw(_white, layout.StatusBar, StripBg);
+
         DrawCanvas(batch, layout, editor);
         DrawButtons(batch, layout, editor, hover);
         DrawSwatches(batch, layout, editor);
@@ -89,6 +103,7 @@ public sealed class SpriteEditorRenderer : IDisposable
         DrawSheet(batch, layout, editor);
         DrawStatusText(batch, layout, editor);
         DrawPromptLine(batch, layout, editor);
+        DrawFlyout(batch, layout, editor, flyoutSlot, hover);
         DrawTooltip(batch, layout, width, height, hover, tooltipVisible);
 
         batch.End();
@@ -126,7 +141,9 @@ public sealed class SpriteEditorRenderer : IDisposable
     /// frame. Stubs are dim (visible, honest, dead); the active tool and the sprites tab get
     /// the library's blue bar as a background — thickness and fill carry the signal, not hue
     /// alone. The save button is also the dirty indicator: the modified glyph in warn yellow
-    /// while unsaved work exists, the plain floppy otherwise.
+    /// while unsaved work exists, the plain floppy otherwise. Group slots show their CURRENT
+    /// variant's glyph (the wave's card) plus a corner marker — the photoshop cue that more
+    /// hides underneath.
     /// </summary>
     private void DrawButtons(SpriteBatch batch, in SpriteEditorLayout layout, SpriteEditorSession editor, HoverTarget? hover)
     {
@@ -134,11 +151,14 @@ public sealed class SpriteEditorRenderer : IDisposable
         {
             bool active = place.Id == EditorButton.SpritesTab
                 || (place.Id == EditorButton.ToolPencil && editor.Tool == SpriteEditorTool.Pencil)
-                || (place.Id == EditorButton.ToolFill && editor.Tool == SpriteEditorTool.Fill);
+                || (place.Id == EditorButton.ToolFill && editor.Tool == SpriteEditorTool.Fill)
+                || (place.Id == EditorButton.ToolShape && editor.Tool == SpriteEditorTool.Shape);
             bool hovered = hover is HoverTarget target && target.Button == place.Id;
             EditorIcon icon = place.Id == EditorButton.Save
                 ? editor.IsDirty ? EditorIcon.Modified : EditorIcon.Saved
-                : EditorIcons.IconFor(place.Id);
+                : EditorIcons.IsGroupSlot(place.Id)
+                    ? EditorIcons.VariantIcon(place.Id, CurrentVariant(editor, place.Id))
+                    : EditorIcons.IconFor(place.Id);
             Color color =
                 place.Id == EditorButton.Save && editor.IsDirty ? Warn
                 : place.Id == EditorButton.Undo && !editor.CanUndo ? Dim
@@ -152,6 +172,55 @@ public sealed class SpriteEditorRenderer : IDisposable
             }
             DrawFrame(batch, place.Rect, 1, hovered ? Bright : Dim);
             _icons.Draw(batch, icon, layout.ButtonIconRect(place.Rect), color);
+            if (EditorIcons.IsGroupSlot(place.Id))
+            {
+                DrawGroupMarker(batch, layout, place.Rect, color);
+            }
+        }
+    }
+
+    /// <summary>The session's remembered variant of a group slot, as the flyout index <see cref="EditorIcons.VariantIcon"/> expects.</summary>
+    private static int CurrentVariant(SpriteEditorSession editor, EditorButton slot) =>
+        slot == EditorButton.ToolShape ? (int)editor.CurrentShape : (int)editor.CurrentTransform;
+
+    /// <summary>
+    /// The corner marker of a group slot: a small stepped triangle in the bottom-right corner,
+    /// built from three ui-sized quads (no glyph — it must overlay any variant icon). Same ink
+    /// as the icon, so a dim state dims the cue with it.
+    /// </summary>
+    private void DrawGroupMarker(SpriteBatch batch, in SpriteEditorLayout layout, Rectangle slot, Color color)
+    {
+        int u = layout.Ui;
+        for (int step = 0; step < 3; step++)
+        {
+            batch.Draw(
+                _white,
+                new Rectangle(slot.Right - u * (step + 1), slot.Bottom - u * (3 - step), u, u * (3 - step)),
+                color);
+        }
+    }
+
+    /// <summary>
+    /// The open group flyout: the slot's variants as ordinary icon-buttons floating right of
+    /// it, the remembered variant on the active-blue fill. Drawn on Ink plates because the
+    /// row overlaps the canvas — a variant icon over sheet pixels would be unreadable.
+    /// </summary>
+    private void DrawFlyout(
+        SpriteBatch batch, in SpriteEditorLayout layout, SpriteEditorSession editor,
+        EditorButton? flyoutSlot, HoverTarget? hover)
+    {
+        if (flyoutSlot is not EditorButton slot)
+        {
+            return;
+        }
+        int current = CurrentVariant(editor, slot);
+        for (int i = 0; i < EditorIcons.GroupVariantCount(slot); i++)
+        {
+            Rectangle rect = layout.FlyoutVariantRect(slot, i);
+            bool hovered = hover is HoverTarget target && target.FlyoutSlot == slot && target.FlyoutVariant == i;
+            batch.Draw(_white, rect, i == current ? ActiveBg : Ink);
+            DrawFrame(batch, rect, 1, hovered ? Bright : Dim);
+            _icons.Draw(batch, EditorIcons.VariantIcon(slot, i), layout.ButtonIconRect(rect), i == current ? Bright : Text);
         }
     }
 
@@ -165,6 +234,24 @@ public sealed class SpriteEditorRenderer : IDisposable
         // One quad: the canvas is the sheet texture's region rectangle scaled by a whole
         // integer under PointClamp — the zoom IS the draw, there is no second pixel store.
         batch.Draw(_sheetTexture, layout.Canvas, region, Color.White);
+
+        // The shape preview, straight from the session's point list — the very pixels the
+        // commit will plot, tinted with the color they will get. Drawn as canvas-scale quads
+        // over the sheet quad: the preview never enters the sheet (or its texture), so
+        // cancelling a gesture costs nothing and dirt/undo stay untouched until the release.
+        if (editor.ShapeActive)
+        {
+            foreach ((int px, int py) in editor.ShapePreview)
+            {
+                batch.Draw(
+                    _white,
+                    new Rectangle(
+                        layout.Canvas.X + px * layout.CanvasScale,
+                        layout.Canvas.Y + py * layout.CanvasScale,
+                        layout.CanvasScale, layout.CanvasScale),
+                    _palette[editor.CurrentColor]);
+            }
+        }
 
         // The canvas cursor — where the keyboard pencil is and what the status bar's
         // coordinates read. A frame around the pixel, not over it: the color being placed
@@ -230,10 +317,11 @@ public sealed class SpriteEditorRenderer : IDisposable
         int size = VirtualConsole.SpriteSize;
         string coords =
             $"{editor.RegionCellX * size + editor.CursorX:D3},{editor.RegionCellY * size + editor.CursorY:D3}";
-        _font.Draw(batch, coords, layout.StatusBar.X + layout.Ui, layout.StatusTextY, layout.Ui, Text);
+        // The band spans the whole window, so the text takes the screen margin, not the band's X.
+        _font.Draw(batch, coords, layout.Margin, layout.StatusTextY, layout.Ui, Text);
         _font.Draw(
             batch, $"#{editor.SpriteIndex:D3}",
-            layout.StatusBar.X + layout.Ui + PixelFontAtlas.MeasureWidth(coords + "   ", layout.Ui),
+            layout.Margin + PixelFontAtlas.MeasureWidth(coords + "   ", layout.Ui),
             layout.StatusTextY, layout.Ui, Bright);
     }
 
@@ -282,11 +370,13 @@ public sealed class SpriteEditorRenderer : IDisposable
         {
             return;
         }
-        string text = target.Button is EditorButton button
-            ? EditorIcons.Tooltip(button)
+        string text =
+            target.Button is EditorButton button ? EditorIcons.Tooltip(button)
+            : target.FlyoutSlot is EditorButton slot ? EditorIcons.VariantTooltip(slot, target.FlyoutVariant)
             : EditorIcons.SwatchTooltip(target.Swatch);
-        Rectangle anchor = target.Button is EditorButton anchorButton
-            ? layout.ButtonRect(anchorButton)
+        Rectangle anchor =
+            target.Button is EditorButton anchorButton ? layout.ButtonRect(anchorButton)
+            : target.FlyoutSlot is EditorButton anchorSlot ? layout.FlyoutVariantRect(anchorSlot, target.FlyoutVariant)
             : layout.SwatchRect(target.Swatch);
         int boxWidth = PixelFontAtlas.MeasureWidth(text, layout.Ui) + 2 * layout.Ui;
         int boxHeight = PixelFontAtlas.LineHeight(layout.Ui) + 2 * layout.Ui;

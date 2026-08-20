@@ -50,6 +50,7 @@ public sealed class QuarpGame : Game
     private readonly ShellCommandReader _commands = new();
     private readonly EditorMouseReader _mouse = new();
     private readonly IconHoverTracker _hover = new();
+    private readonly ToolbarFlyout _flyout = new();
     private readonly ConsoleProfile _profile;
     private readonly ShellModeMachine _modes;
 
@@ -332,6 +333,7 @@ public sealed class QuarpGame : Game
 
         if (editor.ExitPromptShown)
         {
+            _flyout.Close();                        // the prompt owns the screen; a stale flyout under it would ghost-click
             _hover.Update(null, elapsedSeconds);    // dead buttons must not grow tooltips
             if (commands.Quit)
             {
@@ -364,6 +366,13 @@ public sealed class QuarpGame : Game
         }
         if (commands.Quit)
         {
+            // The order's "Esc-подобная клавиша": with a flyout up, Esc closes it and goes no
+            // further — leaving the editor from under an open flyout would punish exploration.
+            if (_flyout.OpenSlot is not null)
+            {
+                _flyout.Close();
+                return;
+            }
             _modes.HandleEscape();              // clean → library; dirty → the prompt above
             return;
         }
@@ -383,10 +392,9 @@ public sealed class QuarpGame : Game
         {
             editor.ToggleTool();
         }
-        if (EditorIcons.ToolForDigit(commands.EditorToolDigit) is SpriteEditorTool digitTool)
-        {
-            SetTool(editor, digitTool);          // stub digits return null and switch nothing
-        }
+        // The whole digit policy (select / repeat-cycles-variant / stubs stay dead) is
+        // EditorIcons.PressToolDigit's — this line only delivers the key.
+        EditorIcons.PressToolDigit(editor, commands.EditorToolDigit);
         if (commands.EditorRegionCycle)
         {
             editor.CycleRegionSize();
@@ -422,9 +430,10 @@ public sealed class QuarpGame : Game
             editor.SelectColor((editor.CurrentColor + 1) % Palette.VisibleCount);
         }
 
-        // Keyboard drawing: arrows steer the canvas cursor, Z/Space is the pencil's button,
-        // X the eyedropper — the whole mouse vocabulary without a mouse. The session clamps
-        // the cursor, so painting at it is in-range by construction.
+        // Keyboard drawing: arrows steer the canvas cursor, Z/Space is the paint button
+        // (pencil stroke, bucket click or shape anchor by tool), X the eyedropper — the whole
+        // mouse vocabulary without a mouse. The session clamps the cursor, so acting at it is
+        // in-range by construction.
         int dx = (commands.MenuRight ? 1 : 0) - (commands.MenuLeft ? 1 : 0);
         int dy = (commands.MenuDown ? 1 : 0) - (commands.MenuUp ? 1 : 0);
         if (dx != 0 || dy != 0)
@@ -437,30 +446,32 @@ public sealed class QuarpGame : Game
         }
         if (commands.EditorPaintPressed)
         {
-            if (editor.Tool == SpriteEditorTool.Fill)
-            {
-                editor.Fill(editor.CursorX, editor.CursorY);
-            }
-            else
-            {
-                editor.BeginStroke();
-                editor.Paint(editor.CursorX, editor.CursorY);
-            }
+            BeginCanvasGesture(editor, editor.CursorX, editor.CursorY);
         }
+        // The keyboard half of the shape refresh and the release: the corner follows the
+        // cursor and the Ctrl modifier every frame, and only then may the release commit —
+        // otherwise the very last arrow step (or a Ctrl arriving with the release) would be
+        // missing from the committed shape.
+        RefreshShape(editor, commands);
         if (commands.EditorPaintReleased)
         {
-            editor.EndStroke();                  // the keyboard stroke commits as one undo step, like the mouse's
+            EndCanvasGesture(editor);
         }
         if (commands.MenuEditor)
         {
             editor.PickColor(editor.CursorX, editor.CursorY);
         }
 
-        // Hover: buttons first (they overlap nothing), then swatches — the only two targets
-        // with tooltips. The tracker shows the frame highlight immediately and holds the
-        // label back for its three seconds.
+        // Hover: an open flyout's variants first (they float over everything), then buttons,
+        // then swatches. The tracker shows the frame highlight immediately and holds the
+        // label back for its three seconds — variants included, per the order.
         HoverTarget? hover = null;
-        if (layout.TryButton(mouse.X, mouse.Y, out EditorButton hoveredButton))
+        if (_flyout.OpenSlot is EditorButton openHover
+            && layout.TryFlyoutVariant(mouse.X, mouse.Y, openHover, out int variantHover))
+        {
+            hover = HoverTarget.OfFlyoutVariant(openHover, variantHover);
+        }
+        else if (layout.TryButton(mouse.X, mouse.Y, out EditorButton hoveredButton))
         {
             hover = HoverTarget.OfButton(hoveredButton);
         }
@@ -469,6 +480,43 @@ public sealed class QuarpGame : Game
             hover = HoverTarget.OfSwatch(hoveredSwatch);
         }
         _hover.Update(hover, elapsedSeconds);
+
+        // An open flyout owns the mouse: a press picks a variant or dismisses, and a release
+        // over a variant supports the photoshop gesture (hold to open, slide, let go). The
+        // keyboard above stayed live on purpose — a digit press visibly walks the highlight.
+        if (_flyout.OpenSlot is EditorButton open)
+        {
+            if (mouse.LeftPressed)
+            {
+                if (layout.TryFlyoutVariant(mouse.X, mouse.Y, open, out int chosen))
+                {
+                    EditorIcons.ChooseVariant(editor, open, chosen);
+                }
+                _flyout.Close();        // chosen or clicked away — the click never falls through
+            }
+            else if (mouse.LeftReleased && layout.TryFlyoutVariant(mouse.X, mouse.Y, open, out int slid))
+            {
+                EditorIcons.ChooseVariant(editor, open, slid);
+                _flyout.Close();
+            }
+            return;
+        }
+
+        // An armed long-press: the press's meaning is not decided yet, so the mouse belongs
+        // to the slot — held long enough it becomes the flyout, released early it was a click.
+        if (_flyout.ArmedSlot is not null)
+        {
+            if (mouse.LeftDown)
+            {
+                _flyout.Hold(elapsedSeconds);
+                return;
+            }
+            if (_flyout.CompleteClick(out EditorButton clicked))
+            {
+                EditorIcons.ClickGroupSlot(editor, clicked);
+                return;
+            }
+        }
 
         // The one cursor: mouse hover parks it where the mouse is, so the status bar's
         // coordinates read the pointer and a following keyboard stroke starts there.
@@ -481,9 +529,16 @@ public sealed class QuarpGame : Game
         {
             if (layout.TryButton(mouse.X, mouse.Y, out EditorButton pressed))
             {
-                if (!EditorIcons.IsStub(pressed) && HandleEditorButton(editor, pressed))
+                if (!EditorIcons.IsStub(pressed))
                 {
-                    return;                      // the exit tab may have left the mode
+                    if (EditorIcons.IsGroupSlot(pressed))
+                    {
+                        _flyout.Arm(pressed);   // click or flyout — the release/hold decides
+                    }
+                    else if (HandleEditorButton(editor, pressed))
+                    {
+                        return;                 // the exit tab may have left the mode
+                    }
                 }
             }
             else if (layout.TrySwatch(mouse.X, mouse.Y, out int color))
@@ -496,17 +551,7 @@ public sealed class QuarpGame : Game
             }
             else if (layout.TryCanvasPixel(mouse.X, mouse.Y, out int pressX, out int pressY))
             {
-                if (editor.Tool == SpriteEditorTool.Fill)
-                {
-                    // The bucket is a click, not a gesture: no stroke opens, so the drag
-                    // branch below stays naturally dead until the tool is the pencil again.
-                    editor.Fill(pressX, pressY);
-                }
-                else
-                {
-                    editor.BeginStroke();
-                    editor.Paint(pressX, pressY);
-                }
+                BeginCanvasGesture(editor, pressX, pressY);
             }
         }
         else if (mouse.LeftDown && editor.StrokeActive)
@@ -518,20 +563,84 @@ public sealed class QuarpGame : Game
             editor.SetCursor(dragX, dragY);
             editor.Paint(dragX, dragY);
         }
+        else if (mouse.LeftDown && editor.ShapeActive)
+        {
+            // The shape drag only steers the cursor under the same clamp; the refresh below
+            // turns the cursor into the preview's corner. This is why shapes cannot tear the
+            // region from the mouse either.
+            layout.ClampCanvasPixel(mouse.X, mouse.Y, out int shapeX, out int shapeY);
+            editor.SetCursor(shapeX, shapeY);
+        }
+        // The mouse half of the shape refresh and release — same ordering law as the keyboard's.
+        RefreshShape(editor, commands);
         if (mouse.LeftReleased)
         {
-            editor.EndStroke();                  // one stroke commits as one undo step
+            EndCanvasGesture(editor);
         }
-        if (mouse.RightPressed && layout.TryCanvasPixel(mouse.X, mouse.Y, out int pickX, out int pickY))
+        if (mouse.RightPressed)
         {
-            editor.PickColor(pickX, pickY);
+            if (layout.TryButton(mouse.X, mouse.Y, out EditorButton rightButton)
+                && EditorIcons.IsGroupSlot(rightButton) && !EditorIcons.IsStub(rightButton))
+            {
+                _flyout.Open(rightButton);      // the no-clock way in, next to the long press
+            }
+            else if (layout.TryCanvasPixel(mouse.X, mouse.Y, out int pickX, out int pickY))
+            {
+                editor.PickColor(pickX, pickY);
+            }
         }
     }
 
     /// <summary>
-    /// A click on a live icon-button, routed to the same session calls the keys use — parity
-    /// by construction. Returns true when the button may have changed the shell mode (the
-    /// exit tab), telling the caller to stop touching the editor this frame.
+    /// What the paint button means on the canvas, keyboard and mouse alike — one dispatch so
+    /// the two input worlds cannot drift (the parity law): the bucket is a click, the shape
+    /// opens a preview gesture, the pencil opens a stroke.
+    /// </summary>
+    private static void BeginCanvasGesture(SpriteEditorSession editor, int localX, int localY)
+    {
+        switch (editor.Tool)
+        {
+            case SpriteEditorTool.Fill:
+                editor.Fill(localX, localY);
+                break;
+            case SpriteEditorTool.Shape:
+                editor.BeginShape(localX, localY);
+                break;
+            default:
+                editor.BeginStroke();
+                editor.Paint(localX, localY);
+                break;
+        }
+    }
+
+    /// <summary>The paint button's release: a shape commits its preview, a stroke commits its pixels — one undo step either way.</summary>
+    private static void EndCanvasGesture(SpriteEditorSession editor)
+    {
+        if (editor.ShapeActive)
+        {
+            editor.CommitShape();
+        }
+        else
+        {
+            editor.EndStroke();
+        }
+    }
+
+    /// <summary>An open shape preview follows the cursor and the Ctrl-held filled modifier every frame.</summary>
+    private static void RefreshShape(SpriteEditorSession editor, in ShellCommands commands)
+    {
+        if (editor.ShapeActive)
+        {
+            editor.UpdateShape(editor.CursorX, editor.CursorY, commands.EditorShapeFill);
+        }
+    }
+
+    /// <summary>
+    /// A click on a live, non-group icon-button, routed to the same session calls the keys
+    /// use — parity by construction (group slots go through <see cref="ToolbarFlyout"/>'s
+    /// arm/click path instead, because their press has two possible meanings). Returns true
+    /// when the button may have changed the shell mode (the exit tab), telling the caller to
+    /// stop touching the editor this frame.
     /// </summary>
     private bool HandleEditorButton(SpriteEditorSession editor, EditorButton button)
     {
@@ -541,22 +650,13 @@ public sealed class QuarpGame : Game
                 _modes.HandleEscape();           // clean → library; dirty → the prompt, same as Esc
                 return true;
             case EditorButton.ToolPencil:
-                SetTool(editor, SpriteEditorTool.Pencil);
+                editor.SelectTool(SpriteEditorTool.Pencil);
                 return false;
             case EditorButton.ToolFill:
-                SetTool(editor, SpriteEditorTool.Fill);
-                return false;
-            case EditorButton.FlipH:
-                editor.FlipHorizontal();
-                return false;
-            case EditorButton.FlipV:
-                editor.FlipVertical();
-                return false;
-            case EditorButton.Rotate:
-                editor.RotateClockwise();
+                editor.SelectTool(SpriteEditorTool.Fill);
                 return false;
             case EditorButton.Clear:
-                editor.ClearRegion();
+                editor.ClearRegion();            // in the status bar since the owner's second review; Del unchanged
                 return false;
             case EditorButton.Save:
                 editor.Save();                   // the modified/saved icon IS this button — click = Ctrl+S
@@ -569,20 +669,6 @@ public sealed class QuarpGame : Game
                 return false;
             default:
                 return false;                    // SpritesTab: already the mode on screen
-        }
-    }
-
-    /// <summary>
-    /// Direct tool selection on top of the session's toggle. <see cref="SpriteEditorSession.ToggleTool"/>
-    /// stays the one door (its tests pin the commit-open-stroke discipline); with exactly two
-    /// live tools, "set" is "toggle unless already there". Wave 2e's new tools will need a real
-    /// select in the session — that wave owns the change.
-    /// </summary>
-    private static void SetTool(SpriteEditorSession editor, SpriteEditorTool tool)
-    {
-        if (editor.Tool != tool)
-        {
-            editor.ToggleTool();
         }
     }
 
@@ -608,7 +694,8 @@ public sealed class QuarpGame : Game
                     GraphicsDevice.PresentationParameters.BackBufferHeight,
                     _modes.Editor!,
                     _hover.Target,
-                    _hover.TooltipVisible);
+                    _hover.TooltipVisible,
+                    _flyout.OpenSlot);
                 break;
         }
         base.Draw(gameTime);        // the game loop presents for us

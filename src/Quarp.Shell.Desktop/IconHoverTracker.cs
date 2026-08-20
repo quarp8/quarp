@@ -1,21 +1,34 @@
 namespace Quarp.Shell.Desktop;
 
 /// <summary>
-/// What the mouse is hovering in the sprite editor: an icon-button or a palette swatch.
-/// A record struct so two frames over the same target compare equal by value — the hover
-/// clock below hangs on that comparison.
+/// What the mouse is hovering in the sprite editor: an icon-button, a palette swatch, or —
+/// since wave 2e — a variant button inside an open group flyout (the 3-second tooltip
+/// contract extends to variants by the order). A record struct so two frames over the same
+/// target compare equal by value — the hover clock below hangs on that comparison; each
+/// factory fills every field so targets of different kinds can never collide by accident.
 /// </summary>
 public readonly record struct HoverTarget
 {
-    /// <summary>The hovered icon-button, or null when the target is a swatch.</summary>
+    /// <summary>The hovered icon-button, or null when the target is a swatch or a flyout variant.</summary>
     public EditorButton? Button { get; init; }
 
-    /// <summary>The hovered palette swatch 0-15, or -1 when the target is a button.</summary>
+    /// <summary>The hovered palette swatch 0-15, or -1 otherwise.</summary>
     public int Swatch { get; init; }
 
-    public static HoverTarget OfButton(EditorButton button) => new() { Button = button, Swatch = -1 };
+    /// <summary>The open flyout's slot when the target is one of its variants, or null.</summary>
+    public EditorButton? FlyoutSlot { get; init; }
 
-    public static HoverTarget OfSwatch(int swatch) => new() { Button = null, Swatch = swatch };
+    /// <summary>Variant index inside <see cref="FlyoutSlot"/>'s flyout, or -1 otherwise.</summary>
+    public int FlyoutVariant { get; init; }
+
+    public static HoverTarget OfButton(EditorButton button) =>
+        new() { Button = button, Swatch = -1, FlyoutSlot = null, FlyoutVariant = -1 };
+
+    public static HoverTarget OfSwatch(int swatch) =>
+        new() { Button = null, Swatch = swatch, FlyoutSlot = null, FlyoutVariant = -1 };
+
+    public static HoverTarget OfFlyoutVariant(EditorButton slot, int variant) =>
+        new() { Button = null, Swatch = -1, FlyoutSlot = slot, FlyoutVariant = variant };
 }
 
 /// <summary>

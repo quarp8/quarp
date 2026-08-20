@@ -27,14 +27,17 @@ public enum EditorPromptVerb
 /// these rectangles and <c>QuarpGame</c> hit-tests the mouse against the same ones, so a
 /// button can never be painted in one place and clicked in another.
 ///
-/// <para><b>The shape is the owner's verdict (M9 stage 2.5), verbatim.</b> Top: a tab strip of
-/// icons only — exit at the left; from the right corner leftwards music, sounds, tilemaps,
-/// sprites, code; no text headers of any kind. Bottom: a status bar — cursor coordinates,
-/// sprite number, the clickable saved/modified icon, undo/redo. Left: the tool column (select,
-/// pencil, fill, stamp, shape) over the action row (flip H, flip V, rotate, clear). The canvas
-/// sits right of the toolbar; right of it the palette, the layers stub and the sheet stack up.
-/// The dirty-exit prompt keeps a reserved text line just above the status bar, so its
-/// appearance never moves the canvas.</para>
+/// <para><b>The shape is the owner's verdict (M9 stage 2.5) plus his second review.</b> Top:
+/// a tab strip of icons only — exit at the left; from the right corner leftwards music,
+/// sounds, tilemaps, sprites, code; no text headers of any kind. Bottom: a status bar —
+/// cursor coordinates, sprite number, the clickable saved/modified icon, undo/redo and (the
+/// review's move) the clear button right of redo. Both strips are full-window-width bands
+/// with their own background tone, so they read as chrome and not as floating icons. Left:
+/// the tool column alone — select, pencil, fill, stamp, shape, transform; the review killed
+/// the action row and folded flip H / flip V / rotate into the transform group slot. The
+/// canvas sits right of the toolbar; right of it the palette, the layers stub and the sheet
+/// stack up. The dirty-exit prompt keeps a reserved text line just above the status bar, so
+/// its appearance never moves the canvas.</para>
 ///
 /// <para><b>Every scale is a whole integer</b>, floored at 1: the canvas is the region's
 /// pixels multiplied up, the sheet view is the 128x128 sheet multiplied up, icons are 8-px
@@ -66,8 +69,15 @@ public readonly struct SpriteEditorLayout
     /// <summary>Side of every icon-button: an 8-px icon at scale <see cref="Ui"/> plus 2 * ui padding a side.</summary>
     public int ButtonSize { get; private init; }
 
-    /// <summary>All 18 placed buttons — tabs, tools, actions, status. The renderer walks it; the hit test walks it.</summary>
+    /// <summary>All 16 placed buttons — tabs, tools, status. The renderer walks it; the hit test walks it.</summary>
     public IReadOnlyList<EditorButtonPlace> Buttons { get; private init; }
+
+    /// <summary>
+    /// The full-width top band behind the tab icons (owner's second review: the strips get
+    /// their own background so they stop melting into the window). The renderer fills it;
+    /// panels start below it.
+    /// </summary>
+    public Rectangle TabStrip { get; private init; }
 
     /// <summary>The zoomed region view — the surface the pencil paints on.</summary>
     public Rectangle Canvas { get; private init; }
@@ -90,7 +100,11 @@ public readonly struct SpriteEditorLayout
     /// <summary>The one-row layers placeholder between the palette and the sheet (real layers are a later wave, owner's call).</summary>
     public Rectangle LayersStub { get; private init; }
 
-    /// <summary>The bottom strip that holds the coordinates, the sprite number and the save/undo/redo buttons.</summary>
+    /// <summary>
+    /// The bottom band that holds the coordinates, the sprite number and the
+    /// save/undo/redo/clear buttons — full window width like <see cref="TabStrip"/>, filled
+    /// with the same strip tone.
+    /// </summary>
     public Rectangle StatusBar { get; private init; }
 
     /// <summary>Baseline for the status bar's text, vertically centred against its buttons.</summary>
@@ -110,12 +124,14 @@ public readonly struct SpriteEditorLayout
         int button = (EditorIcons.IconPixels + 4) * ui;
         int regionPixels = regionCells * VirtualConsole.SpriteSize;
 
-        var buttons = new EditorButtonPlace[18];
+        var buttons = new EditorButtonPlace[16];
         int placed = 0;
 
-        // Tab strip. Exit alone at the left; the five editor tabs hang off the right edge in
-        // the verdict's order — the rightmost is music, and walking leftwards: sounds,
-        // tilemaps, sprites, code.
+        // Tab strip: a full-width band (owner's second review — its own background makes the
+        // top row read as chrome). Exit alone at the left; the five editor tabs hang off the
+        // right edge in the verdict's order — the rightmost is music, and walking leftwards:
+        // sounds, tilemaps, sprites, code. Buttons sit a margin in from every band edge.
+        var tabStrip = new Rectangle(0, 0, width, button + 2 * margin);
         buttons[placed++] = new EditorButtonPlace
         {
             Id = EditorButton.ExitTab, Rect = new Rectangle(margin, margin, button, button),
@@ -134,16 +150,22 @@ public readonly struct SpriteEditorLayout
             };
         }
 
-        // Status bar with its buttons off the right edge: redo outermost, then undo, then the
-        // saved/modified icon — so save, the most-used, is the innermost and closest to the canvas.
-        var statusBar = new Rectangle(margin, height - margin - button, width - 2 * margin, button);
-        EditorButton[] statusButtons = { EditorButton.Redo, EditorButton.Undo, EditorButton.Save };
+        // Status bar: the mirror band at the bottom. Buttons off the right edge, outermost
+        // first: clear (the review's move — right of redo, Del hotkey unchanged), then redo,
+        // undo, and the saved/modified icon — so save, the most-used, stays innermost and
+        // closest to the canvas.
+        var statusBar = new Rectangle(0, height - button - 2 * margin, width, button + 2 * margin);
+        int statusButtonY = statusBar.Y + margin;
+        EditorButton[] statusButtons =
+        {
+            EditorButton.Clear, EditorButton.Redo, EditorButton.Undo, EditorButton.Save,
+        };
         for (int i = 0; i < statusButtons.Length; i++)
         {
             buttons[placed++] = new EditorButtonPlace
             {
                 Id = statusButtons[i],
-                Rect = new Rectangle(statusBar.Right - button - i * (button + gap), statusBar.Y, button, button),
+                Rect = new Rectangle(width - margin - button - i * (button + gap), statusButtonY, button, button),
             };
         }
 
@@ -151,15 +173,16 @@ public readonly struct SpriteEditorLayout
         // frame the author gets asked about unsaved work would move the very pixels they are
         // deciding over.
         int promptY = statusBar.Y - 2 * ui - PixelFontAtlas.LineHeight(ui);
-        int top = margin + button + 2 * ui;
+        int top = tabStrip.Bottom + 2 * ui;
         int bottom = promptY - 2 * ui;
 
-        // Left toolbar: the tool column, then the action row under it. The row is what fixes
-        // the panel's width — four buttons across.
+        // Left toolbar: one column of tool slots, top to bottom — the action row died in the
+        // owner's second review (its verbs live in the transform group slot and in the status
+        // bar's clear), so the panel is exactly one button wide.
         EditorButton[] tools =
         {
             EditorButton.ToolSelect, EditorButton.ToolPencil, EditorButton.ToolFill,
-            EditorButton.ToolStamp, EditorButton.ToolShape,
+            EditorButton.ToolStamp, EditorButton.ToolShape, EditorButton.ToolTransform,
         };
         for (int i = 0; i < tools.Length; i++)
         {
@@ -168,19 +191,7 @@ public readonly struct SpriteEditorLayout
                 Id = tools[i], Rect = new Rectangle(margin, top + i * (button + gap), button, button),
             };
         }
-        EditorButton[] actions =
-        {
-            EditorButton.FlipH, EditorButton.FlipV, EditorButton.Rotate, EditorButton.Clear,
-        };
-        int actionsY = top + tools.Length * (button + gap) + 2 * ui;
-        for (int i = 0; i < actions.Length; i++)
-        {
-            buttons[placed++] = new EditorButtonPlace
-            {
-                Id = actions[i], Rect = new Rectangle(margin + i * (button + gap), actionsY, button, button),
-            };
-        }
-        int panelWidth = actions.Length * button + (actions.Length - 1) * gap;
+        int panelWidth = button;
 
         // The canvas gets the largest whole-integer square the window allows after reserving
         // the toolbar's panel and a right column wide enough for the sheet at x2 — pixel-art
@@ -218,6 +229,7 @@ public readonly struct SpriteEditorLayout
             Margin = margin,
             ButtonSize = button,
             Buttons = buttons,
+            TabStrip = tabStrip,
             Canvas = canvas,
             CanvasScale = canvasScale,
             Sheet = sheet,
@@ -226,10 +238,38 @@ public readonly struct SpriteEditorLayout
             Swatches = swatches,
             LayersStub = layersStub,
             StatusBar = statusBar,
-            StatusTextY = statusBar.Y + (button - PixelFontAtlas.LineHeight(ui)) / 2,
+            StatusTextY = statusButtonY + (button - PixelFontAtlas.LineHeight(ui)) / 2,
             PromptY = promptY,
             RegionPixels = regionPixels,
         };
+    }
+
+    /// <summary>
+    /// One variant button of a group slot's flyout: a row growing rightward from the slot,
+    /// same size as every icon-button. It deliberately floats over the canvas — the flyout is
+    /// transient and drawn last, so reserving space for it would waste canvas on the 99 % of
+    /// frames it is closed.
+    /// </summary>
+    public Rectangle FlyoutVariantRect(EditorButton slot, int variant)
+    {
+        Rectangle anchor = ButtonRect(slot);
+        return new Rectangle(
+            anchor.Right + Ui + variant * (ButtonSize + Ui), anchor.Y, ButtonSize, ButtonSize);
+    }
+
+    /// <summary>Window point → variant index inside <paramref name="slot"/>'s flyout, or false. Checked only while that flyout is open.</summary>
+    public bool TryFlyoutVariant(int x, int y, EditorButton slot, out int variant)
+    {
+        for (int i = 0; i < EditorIcons.GroupVariantCount(slot); i++)
+        {
+            if (FlyoutVariantRect(slot, i).Contains(x, y))
+            {
+                variant = i;
+                return true;
+            }
+        }
+        variant = 0;
+        return false;
     }
 
     /// <summary>The placed rectangle of one button — the tooltip anchors to it.</summary>

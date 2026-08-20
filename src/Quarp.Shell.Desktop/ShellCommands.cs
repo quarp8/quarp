@@ -116,11 +116,21 @@ public readonly struct ShellCommands
     public bool EditorPaintReleased { get; init; }
 
     /// <summary>
-    /// Editor: which toolbar digit (1-5, the toolbar's top-to-bottom order) was pressed this
-    /// frame, 0 for none. The digit→tool policy — including that stub tools stay dead — is
-    /// <see cref="EditorIcons.ToolForDigit"/>'s, not the reader's: this only reports the key.
+    /// Editor: which toolbar digit (1-6, the toolbar's top-to-bottom order) was pressed this
+    /// frame, 0 for none. The digit policy — stubs stay dead, group slots cycle their variant
+    /// on a repeat — is <see cref="EditorIcons.PressToolDigit"/>'s, not the reader's: this
+    /// only reports the key.
     /// </summary>
     public int EditorToolDigit { get; init; }
+
+    /// <summary>
+    /// Editor: Ctrl is held — the shape tool's "filled" modifier (PICO-8's pattern), a level
+    /// and not an edge because the preview must flip between outline and filled the moment the
+    /// modifier changes. Note the Z-pencil interplay: Ctrl arriving while Z is held releases
+    /// the paint key (the chord rule), so the keyboard's filled-shape gesture is Space+Ctrl —
+    /// Space stays down through the chord on purpose.
+    /// </summary>
+    public bool EditorShapeFill { get; init; }
 
     /// <summary>Editor: , — previous palette color (the keyboard's swatch hand; shown in the swatch tooltips).</summary>
     public bool EditorColorPrev { get; init; }
@@ -182,6 +192,7 @@ public sealed class ShellCommandReader
             EditorPaintPressed = paintDown && !paintWasDown,
             EditorPaintReleased = !paintDown && paintWasDown,
             EditorToolDigit = ToolDigit(keyboard),
+            EditorShapeFill = ctrl,
             EditorColorPrev = Pressed(keyboard, Keys.OemComma),
             EditorColorNext = Pressed(keyboard, Keys.OemPeriod),
         };
@@ -192,7 +203,7 @@ public sealed class ShellCommandReader
     /// <summary>First freshly pressed toolbar digit, 0 for none — two digits in one frame is not a gesture worth defining.</summary>
     private int ToolDigit(KeyboardState keyboard)
     {
-        for (int i = 0; i < 5; i++)
+        for (int i = 0; i < 6; i++)
         {
             if (Pressed(keyboard, Keys.D1 + i))
             {

@@ -123,12 +123,45 @@ public class EditorKeysAndStatusLayoutTests
     [InlineData(Keys.D3, 3)]
     [InlineData(Keys.D4, 4)]
     [InlineData(Keys.D5, 5)]
+    [InlineData(Keys.D6, 6)]   // the transform group slot, new in wave 2e
     public void ToolDigitsReportTheirToolbarPosition(Keys key, int digit)
     {
         var reader = new ShellCommandReader();
 
         Assert.Equal(digit, reader.Read(new KeyboardState(key)).EditorToolDigit);
         Assert.Equal(0, reader.Read(new KeyboardState(key)).EditorToolDigit);   // held ≠ pressed again
+    }
+
+    // ---- the shape tool's filled modifier ----
+
+    /// <summary>Ctrl is the shape's "filled" flag — a level, not an edge, so the preview flips the moment it changes.</summary>
+    [Fact]
+    public void CtrlReportsTheShapeFillModifierAsALevel()
+    {
+        var reader = new ShellCommandReader();
+
+        Assert.True(reader.Read(new KeyboardState(Keys.LeftControl)).EditorShapeFill);
+        Assert.True(reader.Read(new KeyboardState(Keys.LeftControl)).EditorShapeFill);  // still held, still true
+        Assert.False(reader.Read(new KeyboardState()).EditorShapeFill);
+        Assert.True(reader.Read(new KeyboardState(Keys.RightControl)).EditorShapeFill);
+    }
+
+    /// <summary>
+    /// The keyboard's filled-shape gesture is Space+Ctrl: unlike Z (which the Ctrl chord
+    /// releases), Space must survive Ctrl arriving mid-hold, or a filled shape could never be
+    /// drawn from the keyboard at all — the parity law's escape hatch.
+    /// </summary>
+    [Fact]
+    public void SpaceSurvivesCtrlArrivingMidHold()
+    {
+        var reader = new ShellCommandReader();
+
+        reader.Read(new KeyboardState(Keys.Space));                                      // gesture opens
+        ShellCommands chorded = reader.Read(new KeyboardState(Keys.Space, Keys.LeftControl));
+
+        Assert.True(chorded.EditorPaintDown);           // the gesture lives on
+        Assert.False(chorded.EditorPaintReleased);
+        Assert.True(chorded.EditorShapeFill);           // and it is filled now
     }
 
     [Fact]

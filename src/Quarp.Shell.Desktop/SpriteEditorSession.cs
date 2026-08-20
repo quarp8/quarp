@@ -6,15 +6,18 @@ namespace Quarp.Shell.Desktop;
 /// <summary>
 /// Which mouse tool the canvas click means. The eraser is the pencil with color 0 and the
 /// eyedropper is the right button in every tool, so these are the only genuine canvas modes.
-/// Shape joined in wave 2e (M9 stage 2.5, the owner's verdict); the oval/rectangle choice is
-/// not a tool but a <see cref="ShapeVariant"/> — the photoshop-style group slot's memory.
-/// The state lives in the session, not the window, so "what is active" is provable headless.
+/// Shape joined in wave 2e (M9 stage 2.5, the owner's verdict), select and stamp in wave 2f;
+/// the oval/rectangle and rectangle/brush choices are not tools but variants — the
+/// photoshop-style group slots' memory. The state lives in the session, not the window,
+/// so "what is active" is provable headless.
 /// </summary>
 public enum SpriteEditorTool
 {
     Pencil,
     Fill,
     Shape,
+    Select,
+    Stamp,
 }
 
 /// <summary>
@@ -38,6 +41,18 @@ public enum ShapeVariant
 }
 
 /// <summary>
+/// The select group slot's variants (wave 2f) — same contract as <see cref="TransformVariant"/>:
+/// the rectangle drags a box over the mask, the brush strokes the mask the way the pencil
+/// strokes pixels. The variant decides what a fresh press MARKS; a press over an existing
+/// selection grabs and moves regardless of variant.
+/// </summary>
+public enum SelectionVariant
+{
+    Rectangle,
+    Brush,
+}
+
+/// <summary>
 /// The sprite editor's whole state and policy, with no window attached (M9 stage 2, waves
 /// 2b/2c) — the same split that made <see cref="ShellModeMachine"/> testable: <c>QuarpGame</c>
 /// routes keys and mouse hits here, <see cref="SpriteEditorRenderer"/> paints what this says,
@@ -51,10 +66,13 @@ public enum ShapeVariant
 /// <see cref="Plot"/> the pencil uses), and <see cref="SelectColor"/> throws on anything
 /// outside 0-15 while <see cref="PickColor"/> copies a value already in the sheet;
 /// (3) undo/redo — which swap whole arrays that were themselves sheets; (4) the region
-/// edits — flips and the rotation only permute values already in the sheet, and the clear
-/// writes the literal 0. There is no fifth setter, so the byte casts in the plot and fill
-/// routines can never truncate. <see cref="PngEncoder"/> re-checks on save as the owner of
-/// its own input contract; that check is unreachable from here by construction.</para>
+/// edits — flips, the rotation, the selection move and the stamp only copy values already
+/// read out of a sheet, and the clears (whole region, selected pixels, and the holes a move
+/// leaves) write the literal 0. There is no fifth setter, so the byte casts in the plot and
+/// fill routines can never truncate. The selection mask and the stamp source are session
+/// state beside the sheet, not in it — marking and grabbing write no pixels at all, only
+/// their commits do, through door (4). <see cref="PngEncoder"/> re-checks on save as the
+/// owner of its own input contract; that check is unreachable from here by construction.</para>
 ///
 /// <para><b>Dirty is content, not history.</b> <see cref="IsDirty"/> compares the live sheet
 /// against a snapshot of what the disk holds (or held nothing — an all-zero sheet), because
@@ -110,6 +128,48 @@ public sealed class SpriteEditorSession
     private readonly List<(int X, int Y)> _shapePoints = new();
 
     /// <summary>
+    /// What an open select-tool press currently means. Rectangle and Brush are marking a NEW
+    /// mask (the kind is fixed at the press — half a box cannot become half a stroke); Move is
+    /// dragging the selected pixels by an offset. Exactly one can be open, like the shape
+    /// gesture, and none of them touches <c>_sheet</c> — only <see cref="CommitSelect"/> does.
+    /// </summary>
+    private enum SelectGesture
+    {
+        None,
+        Rectangle,
+        Brush,
+        Move,
+    }
+
+    // The selection's whole state (wave 2f). The mask is region-local booleans sized to the
+    // region at creation and dropped whenever the region moves or resizes — a mask kept
+    // across a region change would silently re-aim at foreign pixels. The float of an open
+    // move is nothing but the clamped offset below: the renderer draws holes and the riding
+    // fragment from it, and the sheet stays untouched until the drop — the same structure
+    // that makes the shape preview unable to leak ("маска живёт в сессии, не в листе").
+    private bool[]? _selection;
+    private int _selectionCount;
+    private SelectGesture _selectGesture;
+    private int _selectAnchorX;     // rectangle anchor / the brush's last marked point / the grab point
+    private int _selectAnchorY;
+    private int _moveDx;
+    private int _moveDy;
+    private int _moveMinDx;         // offset bounds: the mask's bounding box may never leave the region,
+    private int _moveMaxDx;         // so a drop cannot push pixels off it and lose them
+    private int _moveMinDy;
+    private int _moveMaxDy;
+
+    // The stamp's source: the LAST committed selection's pixels, copied out at commit time
+    // (the order's law — remembered automatically at creation). Bounding-box normalized,
+    // 0 = transparent: a masked pixel that held 0 and a box cell outside the mask both print
+    // nothing, PICO-8's color-0 pattern. Deliberately a copy and not a live view — it
+    // survives region moves, later sheet edits and even Esc dropping the selection, because
+    // it is the memory of what was selected, not the selection itself.
+    private byte[]? _stampSource;
+    private int _stampWidth;
+    private int _stampHeight;
+
+    /// <summary>
     /// Opens the sheet of a cartridge <b>folder</b> (.quarp8 files never get here — the mode
     /// machine refuses them with the read-only line). No gfx.png is the normal case, not an
     /// error: snake has none, and an all-zero sheet is exactly what its cart loads
@@ -151,6 +211,49 @@ public sealed class SpriteEditorSession
 
     /// <summary>The shape slot's remembered variant: what <see cref="BeginShape"/> will draw.</summary>
     public ShapeVariant CurrentShape { get; private set; }
+
+    /// <summary>The select slot's remembered variant: what the next fresh <see cref="BeginSelect"/> marks with.</summary>
+    public SelectionVariant CurrentSelection { get; private set; }
+
+    /// <summary>True when any pixels are selected — what Delete, Esc and the grab test consult.</summary>
+    public bool HasSelection => _selectionCount > 0;
+
+    /// <summary>True while any select-tool gesture is open (marking or moving) — the shell steers it with the drag clamp and commits it on release.</summary>
+    public bool SelectionGestureActive => _selectGesture != SelectGesture.None;
+
+    /// <summary>True while grabbed pixels are floating — the renderer draws the holes and the offset fragment from this.</summary>
+    public bool MoveActive => _selectGesture == SelectGesture.Move;
+
+    /// <summary>The float's clamped offset, region pixels. Zero outside a move.</summary>
+    public int MoveOffsetX => _moveDx;
+
+    /// <summary>The float's clamped offset, region pixels.</summary>
+    public int MoveOffsetY => _moveDy;
+
+    /// <summary>Whether a region-local pixel is in the mask (committed or still being marked). False out of range — hover asks freely.</summary>
+    public bool IsSelected(int localX, int localY) =>
+        localX >= 0 && localX < RegionPixels && localY >= 0 && localY < RegionPixels
+        && _selection is bool[] mask && mask[localY * RegionPixels + localX];
+
+    /// <summary>True once any selection has ever been committed — the stamp has ink. Until then the tooltip says SELECT FIRST.</summary>
+    public bool HasStampSource => _stampSource is not null;
+
+    /// <summary>Stamp source width in pixels — the captured selection's bounding box. Meaningless without <see cref="HasStampSource"/>.</summary>
+    public int StampWidth => _stampWidth;
+
+    /// <summary>Stamp source height in pixels.</summary>
+    public int StampHeight => _stampHeight;
+
+    /// <summary>One source pixel, 0 = transparent — what the ghost preview draws and <see cref="StampAt"/> prints. Callers gate on <see cref="HasStampSource"/>.</summary>
+    public byte StampPixelAt(int x, int y) => _stampSource![y * _stampWidth + x];
+
+    /// <summary>
+    /// Top-left region-local corner of a stamp printed at a point — the one owner of the
+    /// centering arithmetic, shared by <see cref="StampAt"/> and the renderer's ghost so the
+    /// preview can never land somewhere the print will not.
+    /// </summary>
+    public (int X, int Y) StampOrigin(int localX, int localY) =>
+        (localX - _stampWidth / 2, localY - _stampHeight / 2);
 
     /// <summary>Region anchor, in sheet cells 0-15.</summary>
     public int RegionCellX { get; private set; }
@@ -223,11 +326,20 @@ public sealed class SpriteEditorSession
     /// Sheet-grid click: moves the region anchor. Clamped, not thrown — a click near the grid's
     /// edge should select the nearest legal anchor, and once RegionCells grows past 1 the legal
     /// anchors stop at <c>GridCells - RegionCells</c> so the region always lies inside the sheet.
+    /// An anchor that actually moves drops the selection: the mask is region-local, and keeping
+    /// it would silently re-aim it at foreign pixels (the stamp source survives — see
+    /// <see cref="ClearSelection"/>).
     /// </summary>
     public void SelectRegionCell(int cellX, int cellY)
     {
-        RegionCellX = Math.Clamp(cellX, 0, GridCells - RegionCells);
-        RegionCellY = Math.Clamp(cellY, 0, GridCells - RegionCells);
+        int nextX = Math.Clamp(cellX, 0, GridCells - RegionCells);
+        int nextY = Math.Clamp(cellY, 0, GridCells - RegionCells);
+        if (nextX != RegionCellX || nextY != RegionCellY)
+        {
+            ClearSelection();
+        }
+        RegionCellX = nextX;
+        RegionCellY = nextY;
     }
 
     /// <summary>Canvas cursor, region-local — see <see cref="SetCursor"/> for why it lives here.</summary>
@@ -291,7 +403,7 @@ public sealed class SpriteEditorSession
         }
         else
         {
-            PlotLine(_lastPaintX, _lastPaintY, localX, localY);
+            TraceLine(_lastPaintX, _lastPaintY, localX, localY, Plot);
         }
         _lastPaintX = localX;
         _lastPaintY = localY;
@@ -516,17 +628,310 @@ public sealed class SpriteEditorSession
         return dx * dx * b * b + dy * dy * a * a <= a * a * b * b;
     }
 
+    /// <summary>Flyout pick for the select slot — remembered for the next press. An open gesture keeps the kind it was pressed with.</summary>
+    public void SelectSelectionVariant(SelectionVariant variant) => CurrentSelection = variant;
+
+    /// <summary>The digit's repeat-press on the select slot: rectangle ↔ brush.</summary>
+    public void CycleSelectionVariant() =>
+        CurrentSelection = CurrentSelection == SelectionVariant.Rectangle
+            ? SelectionVariant.Brush
+            : SelectionVariant.Rectangle;
+
+    /// <summary>
+    /// Select button pressed on the canvas (mouse press or Z/Space — one dispatch in the
+    /// shell). Over the selection it grabs: the pixels float and the drag carries them (the
+    /// order's "повторное Z над выделением берёт и двигает"). Anywhere else it starts marking
+    /// a NEW mask — which is how "клик новым выделением снимает старое" happens: the old mask
+    /// dies at the press, not at the release. Throws outside the region like
+    /// <see cref="Paint"/> — the shell's clamp is the contract.
+    /// </summary>
+    public void BeginSelect(int localX, int localY)
+    {
+        if (_selectGesture != SelectGesture.None)
+        {
+            return;     // A second press without a release folds into the open gesture, like BeginStroke.
+        }
+        ValidateLocal(localX, nameof(localX));
+        ValidateLocal(localY, nameof(localY));
+        _selectAnchorX = localX;
+        _selectAnchorY = localY;
+        if (IsSelected(localX, localY))
+        {
+            BeginMove();
+            return;
+        }
+        _selection = new bool[RegionPixels * RegionPixels];
+        _selectionCount = 0;
+        _selectGesture = CurrentSelection == SelectionVariant.Rectangle
+            ? SelectGesture.Rectangle
+            : SelectGesture.Brush;
+        MarkSelected(localX, localY);
+    }
+
+    /// <summary>
+    /// The grab: nothing is lifted out of the sheet — the "float" is just the offset the drag
+    /// steers, drawn by the renderer and made real only by the drop. The offset bounds pin the
+    /// mask's bounding box inside the region, which is the move's clamp law: dragging past the
+    /// border parks the fragment against it, so no pixel can be pushed off the region and lost.
+    /// </summary>
+    private void BeginMove()
+    {
+        TrySelectionBounds(out int minX, out int minY, out int maxX, out int maxY);
+        int n = RegionPixels;
+        _moveMinDx = -minX;
+        _moveMaxDx = n - 1 - maxX;
+        _moveMinDy = -minY;
+        _moveMaxDy = n - 1 - maxY;
+        _moveDx = 0;
+        _moveDy = 0;
+        _selectGesture = SelectGesture.Move;
+    }
+
+    /// <summary>
+    /// One frame of an open select gesture, fed the canvas cursor — both input worlds steer
+    /// the cursor, so this is their meeting point, like <see cref="UpdateShape"/>. The
+    /// rectangle re-marks its box, the brush strokes the mask through the pencil's own line
+    /// tracer, the move re-clamps its offset. Nothing here touches the sheet.
+    /// </summary>
+    public void UpdateSelect(int localX, int localY)
+    {
+        if (_selectGesture == SelectGesture.None)
+        {
+            throw new InvalidOperationException("UpdateSelect outside a gesture — the shell must call BeginSelect on the press.");
+        }
+        ValidateLocal(localX, nameof(localX));
+        ValidateLocal(localY, nameof(localY));
+        switch (_selectGesture)
+        {
+            case SelectGesture.Rectangle:
+                RebuildBoxSelection(localX, localY);
+                break;
+            case SelectGesture.Brush:
+                TraceLine(_selectAnchorX, _selectAnchorY, localX, localY, MarkSelected);
+                _selectAnchorX = localX;
+                _selectAnchorY = localY;
+                break;
+            default:
+                _moveDx = Math.Clamp(localX - _selectAnchorX, _moveMinDx, _moveMaxDx);
+                _moveDy = Math.Clamp(localY - _selectAnchorY, _moveMinDy, _moveMaxDy);
+                break;
+        }
+    }
+
+    /// <summary>
+    /// Select button released. A marking gesture's mask becomes THE selection and its pixels
+    /// are copied off as the stamp's source (the order: remembered automatically at creation).
+    /// A move parks the fragment: one <see cref="ApplyRegionEdit"/> writes the lifted pixels
+    /// at their new home, the literal 0 into the holes they left, and everything else stands —
+    /// which makes the whole grab-drag-drop exactly ONE undo step by the same mechanism every
+    /// region edit uses, and a zero-distance drop invisible for free. The mask then follows
+    /// its pixels. Safe without an open gesture, like <see cref="EndStroke"/>.
+    /// </summary>
+    public void CommitSelect()
+    {
+        SelectGesture gesture = _selectGesture;
+        // Cleared before the work: ApplyRegionEdit interrupts open gestures, and this one is
+        // completing, not dying — the interrupt must not eat the mask it is committing.
+        _selectGesture = SelectGesture.None;
+        switch (gesture)
+        {
+            case SelectGesture.Rectangle:
+            case SelectGesture.Brush:
+                CaptureStampSource();
+                break;
+            case SelectGesture.Move:
+                CommitMove();
+                break;
+        }
+    }
+
+    /// <summary>
+    /// Esc's verb while a selection exists (and the region-change cleanup): any open select
+    /// gesture dies and the mask drops. The sheet is untouched — a cancelled move never wrote
+    /// anything to cancel. The stamp source deliberately survives: it is the memory of the
+    /// LAST selection, and dropping the marching ants is not forgetting what they held.
+    /// </summary>
+    public void ClearSelection()
+    {
+        _selectGesture = SelectGesture.None;
+        _selection = null;
+        _selectionCount = 0;
+    }
+
+    /// <summary>
+    /// The mask's inclusive bounding box: the frame the renderer draws, the base of the move
+    /// clamp and of the stamp capture — one owner for all three. False when nothing is selected.
+    /// </summary>
+    public bool TrySelectionBounds(out int minX, out int minY, out int maxX, out int maxY)
+    {
+        int n = RegionPixels;
+        minX = n;
+        minY = n;
+        maxX = -1;
+        maxY = -1;
+        if (_selection is not bool[] mask)
+        {
+            return false;
+        }
+        for (int y = 0; y < n; y++)
+        {
+            for (int x = 0; x < n; x++)
+            {
+                if (!mask[y * n + x])
+                {
+                    continue;
+                }
+                minX = Math.Min(minX, x);
+                minY = Math.Min(minY, y);
+                maxX = Math.Max(maxX, x);
+                maxY = Math.Max(maxY, y);
+            }
+        }
+        return maxX >= 0;
+    }
+
+    /// <summary>The rectangle variant's live mask: the inclusive anchor-to-corner box, remade each drag frame like the shape preview.</summary>
+    private void RebuildBoxSelection(int cornerX, int cornerY)
+    {
+        Array.Clear(_selection!);
+        _selectionCount = 0;
+        int x0 = Math.Min(_selectAnchorX, cornerX);
+        int x1 = Math.Max(_selectAnchorX, cornerX);
+        int y0 = Math.Min(_selectAnchorY, cornerY);
+        int y1 = Math.Max(_selectAnchorY, cornerY);
+        for (int y = y0; y <= y1; y++)
+        {
+            for (int x = x0; x <= x1; x++)
+            {
+                MarkSelected(x, y);
+            }
+        }
+    }
+
+    /// <summary>The mask's one writer — dedups so the brush can re-cross its own track without inflating the count.</summary>
+    private void MarkSelected(int x, int y)
+    {
+        int index = y * RegionPixels + x;
+        if (!_selection![index])
+        {
+            _selection[index] = true;
+            _selectionCount++;
+        }
+    }
+
+    /// <summary>The drop — see <see cref="CommitSelect"/>. Runs with the gesture already closed.</summary>
+    private void CommitMove()
+    {
+        if (_moveDx == 0 && _moveDy == 0)
+        {
+            return;     // A grab that went nowhere never happened — no step, no dirt.
+        }
+        bool[] mask = _selection!;
+        int dx = _moveDx;
+        int dy = _moveDy;
+        ApplyRegionEdit((src, n, x, y) =>
+        {
+            int fromX = x - dx;
+            int fromY = y - dy;
+            if (fromX >= 0 && fromX < n && fromY >= 0 && fromY < n && mask[fromY * n + fromX])
+            {
+                return src[fromY * n + fromX];  // a lifted pixel lands here — landings beat holes
+            }
+            return mask[y * n + x] ? (byte)0 : src[y * n + x];
+        });
+        // The selection follows its pixels; the shifted indices are in range by the grab's clamp.
+        int side = RegionPixels;
+        var moved = new bool[mask.Length];
+        for (int y = 0; y < side; y++)
+        {
+            for (int x = 0; x < side; x++)
+            {
+                if (mask[y * side + x])
+                {
+                    moved[(y + dy) * side + (x + dx)] = true;
+                }
+            }
+        }
+        _selection = moved;     // a pure shift — the count is unchanged
+    }
+
+    /// <summary>
+    /// Copies the just-committed selection's pixels into the stamp source — values read
+    /// straight out of the sheet, so they are 0-15 by the sheet's own invariant. Box cells
+    /// outside the mask stay 0, the same "prints nothing" a masked 0 pixel has.
+    /// </summary>
+    private void CaptureStampSource()
+    {
+        TrySelectionBounds(out int minX, out int minY, out int maxX, out int maxY);
+        bool[] mask = _selection!;
+        int n = RegionPixels;
+        _stampWidth = maxX - minX + 1;
+        _stampHeight = maxY - minY + 1;
+        _stampSource = new byte[_stampWidth * _stampHeight];
+        for (int y = minY; y <= maxY; y++)
+        {
+            for (int x = minX; x <= maxX; x++)
+            {
+                if (mask[y * n + x])
+                {
+                    _stampSource[(y - minY) * _stampWidth + (x - minX)] = _sheet[SheetOffset(x, y)];
+                }
+            }
+        }
+    }
+
+    /// <summary>
+    /// The stamp tool's click (mouse or Z — the same dispatch as every canvas press): prints
+    /// the source centered at the point, source color 0 transparent, pixels past the region
+    /// border clipped away — "с центром у курсора" and "кламп регионом" can only both hold by
+    /// clipping, since clamping the position would drag the center off the cursor at the edge.
+    /// One <see cref="ApplyRegionEdit"/> = one undo step; with no source ever captured it
+    /// honestly does nothing (the tooltip explains SELECT FIRST), and a print that changes
+    /// nothing is invisible like every no-op edit.
+    /// </summary>
+    public void StampAt(int localX, int localY)
+    {
+        ValidateLocal(localX, nameof(localX));
+        ValidateLocal(localY, nameof(localY));
+        if (_stampSource is not byte[] source)
+        {
+            return;
+        }
+        int width = _stampWidth;
+        int height = _stampHeight;
+        (int destX, int destY) = StampOrigin(localX, localY);
+        ApplyRegionEdit((src, n, x, y) =>
+        {
+            int fromX = x - destX;
+            int fromY = y - destY;
+            if (fromX >= 0 && fromX < width && fromY >= 0 && fromY < height
+                && source[fromY * width + fromX] != 0)
+            {
+                return source[fromY * width + fromX];
+            }
+            return src[y * n + x];
+        });
+    }
+
     /// <summary>
     /// What every operation that cuts across an open gesture calls: an open <b>stroke</b>
     /// commits (its pixels are already real), an open <b>shape preview</b> is discarded (its
     /// pixels never were — cancelling is the only reading of "в лист не пишется" that survives
-    /// an interruption). One helper instead of two calls at eight sites, so a future
-    /// interrupter cannot remember the stroke and forget the preview.
+    /// an interruption), an open <b>marking gesture</b> discards its half-made mask (it never
+    /// was the selection) and an open <b>move</b> just stops floating — nothing was written,
+    /// and the committed mask survives at its source. One helper instead of a call chain at
+    /// every site, so a future interrupter cannot remember the stroke and forget a preview.
     /// </summary>
     private void InterruptGesture()
     {
         _shapeActive = false;
         _shapePoints.Clear();
+        if (_selectGesture is SelectGesture.Rectangle or SelectGesture.Brush)
+        {
+            _selection = null;
+            _selectionCount = 0;
+        }
+        _selectGesture = SelectGesture.None;
         EndStroke();
     }
 
@@ -540,6 +945,7 @@ public sealed class SpriteEditorSession
     public void CycleRegionSize()
     {
         InterruptGesture();
+        ClearSelection();       // the mask is sized to the region — a resize would misindex it
         RegionCells = RegionCells switch { 1 => 2, 2 => 4, _ => 1 };
         SelectRegionCell(RegionCellX, RegionCellY);
         // A shrink can strand the cursor outside the new region (31,31 in an 8-px region);
@@ -624,8 +1030,24 @@ public sealed class SpriteEditorSession
         ApplyRegionEdit(static (src, n, x, y) => src[(n - 1 - x) * n + y]);
     }
 
-    /// <summary>Delete: the region to color 0 — the sheet's "nothing", same as the eraser writes.</summary>
-    public void ClearRegion() => ApplyRegionEdit(static (_, _, _, _) => 0);
+    /// <summary>
+    /// Delete: to color 0 — the sheet's "nothing", same as the eraser writes. With a selection
+    /// only the selected pixels die (wave 2f) and the region around them stands; without one,
+    /// the whole region, as always. Both are one region edit — one undo step. The gesture
+    /// interrupt runs first so a half-marked mask from an open press can never decide what dies.
+    /// </summary>
+    public void ClearRegion()
+    {
+        InterruptGesture();
+        if (_selection is bool[] mask)
+        {
+            ApplyRegionEdit((src, n, x, y) => mask[y * n + x] ? (byte)0 : src[y * n + x]);
+        }
+        else
+        {
+            ApplyRegionEdit(static (_, _, _, _) => 0);
+        }
+    }
 
     /// <summary>
     /// The one mechanism under all four region edits: read the region out, build its
@@ -791,8 +1213,12 @@ public sealed class SpriteEditorSession
         Version++;
     }
 
-    /// <summary>Bresenham over region-local pixels — at most 32 steps, exact on diagonals.</summary>
-    private void PlotLine(int x0, int y0, int x1, int y1)
+    /// <summary>
+    /// Bresenham over region-local pixels — at most 32 steps, exact on diagonals. The one
+    /// owner of the line formula: the pencil plots along it and the brush select marks along
+    /// it, so the two strokes can never disagree about what "through these points" means.
+    /// </summary>
+    private static void TraceLine(int x0, int y0, int x1, int y1, Action<int, int> visit)
     {
         int dx = Math.Abs(x1 - x0);
         int sx = x0 < x1 ? 1 : -1;
@@ -801,7 +1227,7 @@ public sealed class SpriteEditorSession
         int err = dx + dy;
         while (true)
         {
-            Plot(x0, y0);
+            visit(x0, y0);
             if (x0 == x1 && y0 == y1)
             {
                 return;

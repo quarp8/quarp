@@ -7,8 +7,10 @@ namespace Quarp.Shell.Desktop;
 /// <summary>
 /// Draws the sprite editor screen in the owner's verdict shape (M9 stage 2.5, second review
 /// applied): the icon-only tab strip and the status bar as tinted full-width bands, the left
-/// toolbar column with its two group slots (corner-marked, flyout on demand), the zoomed
-/// canvas with the keyboard cursor and the shape preview overlay, the right column (palette,
+/// toolbar column with its three group slots (corner-marked, flyout on demand), the zoomed
+/// canvas with the keyboard cursor, the shape preview, the selection mask (holes and floating
+/// fragment during a move) and the stamp ghost — all session-state overlays, never sheet
+/// pixels — the right column (palette,
 /// layers stub, sheet), the status buttons (save/undo/redo/clear), the reserved prompt line
 /// and the hover tooltips. Host UI like <see cref="LibraryRenderer"/> — window-native
 /// resolution, <see cref="Palette.Master32"/> colors, the system font and the icon strip —
@@ -54,6 +56,11 @@ public sealed class SpriteEditorRenderer : IDisposable
     // honest step lighter than the Ink-cleared window while Text and Dim keep their contrast
     // on top of it.
     private static readonly Color StripBg = PaletteColors.Opaque(16);
+
+    // The selection lift (wave 2f): the library's selection blue at half strength over the
+    // pixels, so the mask reads on any of the 16 colors — a pure white wash would vanish on
+    // white pixels and a dark one on ink. Host-UI alpha only; nothing indexed is touched.
+    private static readonly Color SelectionTint = ActiveBg * 0.5f;
 
     public SpriteEditorRenderer(GraphicsDevice device)
     {
@@ -104,7 +111,7 @@ public sealed class SpriteEditorRenderer : IDisposable
         DrawStatusText(batch, layout, editor);
         DrawPromptLine(batch, layout, editor);
         DrawFlyout(batch, layout, editor, flyoutSlot, hover);
-        DrawTooltip(batch, layout, width, height, hover, tooltipVisible);
+        DrawTooltip(batch, layout, width, height, editor, hover, tooltipVisible);
 
         batch.End();
     }
@@ -150,8 +157,10 @@ public sealed class SpriteEditorRenderer : IDisposable
         foreach (EditorButtonPlace place in layout.Buttons)
         {
             bool active = place.Id == EditorButton.SpritesTab
+                || (place.Id == EditorButton.ToolSelect && editor.Tool == SpriteEditorTool.Select)
                 || (place.Id == EditorButton.ToolPencil && editor.Tool == SpriteEditorTool.Pencil)
                 || (place.Id == EditorButton.ToolFill && editor.Tool == SpriteEditorTool.Fill)
+                || (place.Id == EditorButton.ToolStamp && editor.Tool == SpriteEditorTool.Stamp)
                 || (place.Id == EditorButton.ToolShape && editor.Tool == SpriteEditorTool.Shape);
             bool hovered = hover is HoverTarget target && target.Button == place.Id;
             EditorIcon icon = place.Id == EditorButton.Save
@@ -180,8 +189,12 @@ public sealed class SpriteEditorRenderer : IDisposable
     }
 
     /// <summary>The session's remembered variant of a group slot, as the flyout index <see cref="EditorIcons.VariantIcon"/> expects.</summary>
-    private static int CurrentVariant(SpriteEditorSession editor, EditorButton slot) =>
-        slot == EditorButton.ToolShape ? (int)editor.CurrentShape : (int)editor.CurrentTransform;
+    private static int CurrentVariant(SpriteEditorSession editor, EditorButton slot) => slot switch
+    {
+        EditorButton.ToolSelect => (int)editor.CurrentSelection,
+        EditorButton.ToolShape => (int)editor.CurrentShape,
+        _ => (int)editor.CurrentTransform,
+    };
 
     /// <summary>
     /// The corner marker of a group slot: a small stepped triangle in the bottom-right corner,
@@ -243,24 +256,116 @@ public sealed class SpriteEditorRenderer : IDisposable
         {
             foreach ((int px, int py) in editor.ShapePreview)
             {
-                batch.Draw(
-                    _white,
-                    new Rectangle(
-                        layout.Canvas.X + px * layout.CanvasScale,
-                        layout.Canvas.Y + py * layout.CanvasScale,
-                        layout.CanvasScale, layout.CanvasScale),
-                    _palette[editor.CurrentColor]);
+                batch.Draw(_white, PixelRect(layout, px, py), _palette[editor.CurrentColor]);
             }
         }
+
+        DrawSelection(batch, layout, editor);
+        DrawStampGhost(batch, layout, editor);
 
         // The canvas cursor — where the keyboard pencil is and what the status bar's
         // coordinates read. A frame around the pixel, not over it: the color being placed
         // must stay visible under the cursor.
-        var cursor = new Rectangle(
-            layout.Canvas.X + editor.CursorX * layout.CanvasScale,
-            layout.Canvas.Y + editor.CursorY * layout.CanvasScale,
+        DrawFrame(batch, PixelRect(layout, editor.CursorX, editor.CursorY), Math.Max(1, layout.Ui / 2), Bright);
+    }
+
+    /// <summary>One region pixel's quad on the canvas — the single mapping the shape preview, the selection, the ghost and the cursor all share.</summary>
+    private static Rectangle PixelRect(in SpriteEditorLayout layout, int x, int y) =>
+        new(layout.Canvas.X + x * layout.CanvasScale,
+            layout.Canvas.Y + y * layout.CanvasScale,
             layout.CanvasScale, layout.CanvasScale);
-        DrawFrame(batch, cursor, Math.Max(1, layout.Ui / 2), Bright);
+
+    /// <summary>
+    /// The selection made visible, straight from the session's mask — a translucent lift over
+    /// every selected pixel plus a bright frame around the mask's bounding box (the order's
+    /// "рамкой/подсветкой", both). While a move floats, the picture splits honestly into what
+    /// the drop would produce: the holes show color 0 and the lifted pixels ride at the
+    /// offset. All of it is overlay quads; none of it is in the sheet or its texture, which is
+    /// why cancelling a move costs nothing and why the mask can never reach a saved PNG.
+    /// </summary>
+    private void DrawSelection(SpriteBatch batch, in SpriteEditorLayout layout, SpriteEditorSession editor)
+    {
+        if (!editor.TrySelectionBounds(out int minX, out int minY, out int maxX, out int maxY))
+        {
+            return;
+        }
+        int n = layout.RegionPixels;
+        int dx = editor.MoveActive ? editor.MoveOffsetX : 0;
+        int dy = editor.MoveActive ? editor.MoveOffsetY : 0;
+        // Two passes while moving: every hole first, then every lifted pixel — a fragment
+        // pixel may land on another's hole, and landings must win, exactly as the drop writes.
+        if (editor.MoveActive)
+        {
+            int sheetX0 = editor.RegionCellX * VirtualConsole.SpriteSize;
+            int sheetY0 = editor.RegionCellY * VirtualConsole.SpriteSize;
+            for (int y = 0; y < n; y++)
+            {
+                for (int x = 0; x < n; x++)
+                {
+                    if (editor.IsSelected(x, y))
+                    {
+                        batch.Draw(_white, PixelRect(layout, x, y), _palette[0]);
+                    }
+                }
+            }
+            for (int y = 0; y < n; y++)
+            {
+                for (int x = 0; x < n; x++)
+                {
+                    if (editor.IsSelected(x, y))
+                    {
+                        byte color = editor.Pixels[(sheetY0 + y) * VirtualConsole.SheetWidth + sheetX0 + x];
+                        batch.Draw(_white, PixelRect(layout, x + dx, y + dy), _palette[color]);
+                    }
+                }
+            }
+        }
+        for (int y = 0; y < n; y++)
+        {
+            for (int x = 0; x < n; x++)
+            {
+                if (editor.IsSelected(x, y))
+                {
+                    batch.Draw(_white, PixelRect(layout, x + dx, y + dy), SelectionTint);
+                }
+            }
+        }
+        var box = new Rectangle(
+            layout.Canvas.X + (minX + dx) * layout.CanvasScale,
+            layout.Canvas.Y + (minY + dy) * layout.CanvasScale,
+            (maxX - minX + 1) * layout.CanvasScale,
+            (maxY - minY + 1) * layout.CanvasScale);
+        DrawFrame(batch, box, Math.Max(1, layout.Ui / 2), Bright);
+    }
+
+    /// <summary>
+    /// The stamp's ghost: the source at half strength under the cursor, placed by the very
+    /// <see cref="SpriteEditorSession.StampOrigin"/> the print uses and clipped at the region
+    /// the way the print will be — the author sees exactly what the click commits. Session
+    /// state only; the sheet texture is never touched, and an inkless stamp shows nothing
+    /// (its tooltip explains why).
+    /// </summary>
+    private void DrawStampGhost(SpriteBatch batch, in SpriteEditorLayout layout, SpriteEditorSession editor)
+    {
+        if (editor.Tool != SpriteEditorTool.Stamp || !editor.HasStampSource)
+        {
+            return;
+        }
+        (int destX, int destY) = editor.StampOrigin(editor.CursorX, editor.CursorY);
+        for (int sy = 0; sy < editor.StampHeight; sy++)
+        {
+            for (int sx = 0; sx < editor.StampWidth; sx++)
+            {
+                byte color = editor.StampPixelAt(sx, sy);
+                int x = destX + sx;
+                int y = destY + sy;
+                if (color == 0 || x < 0 || x >= layout.RegionPixels || y < 0 || y >= layout.RegionPixels)
+                {
+                    continue;   // transparent source, or the part the border will clip off the print
+                }
+                batch.Draw(_white, PixelRect(layout, x, y), _palette[color] * 0.5f);
+            }
+        }
     }
 
     private void DrawSwatches(SpriteBatch batch, in SpriteEditorLayout layout, SpriteEditorSession editor)
@@ -364,14 +469,14 @@ public sealed class SpriteEditorRenderer : IDisposable
     /// </summary>
     private void DrawTooltip(
         SpriteBatch batch, in SpriteEditorLayout layout, int width, int height,
-        HoverTarget? hover, bool tooltipVisible)
+        SpriteEditorSession editor, HoverTarget? hover, bool tooltipVisible)
     {
         if (hover is not HoverTarget target || !tooltipVisible)
         {
             return;
         }
         string text =
-            target.Button is EditorButton button ? EditorIcons.Tooltip(button)
+            target.Button is EditorButton button ? EditorIcons.Tooltip(button, editor)
             : target.FlyoutSlot is EditorButton slot ? EditorIcons.VariantTooltip(slot, target.FlyoutVariant)
             : EditorIcons.SwatchTooltip(target.Swatch);
         Rectangle anchor =

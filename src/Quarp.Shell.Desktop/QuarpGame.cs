@@ -373,6 +373,14 @@ public sealed class QuarpGame : Game
                 _flyout.Close();
                 return;
             }
+            // A selection eats the next Esc the same way (wave 2f): the mask — or the open
+            // grab, whose pixels never left the sheet — drops, and the editor stays. Leaving
+            // is what the Esc after that is for.
+            if (editor.HasSelection || editor.SelectionGestureActive)
+            {
+                editor.ClearSelection();
+                return;
+            }
             _modes.HandleEscape();              // clean → library; dirty → the prompt above
             return;
         }
@@ -448,11 +456,11 @@ public sealed class QuarpGame : Game
         {
             BeginCanvasGesture(editor, editor.CursorX, editor.CursorY);
         }
-        // The keyboard half of the shape refresh and the release: the corner follows the
-        // cursor and the Ctrl modifier every frame, and only then may the release commit —
-        // otherwise the very last arrow step (or a Ctrl arriving with the release) would be
-        // missing from the committed shape.
-        RefreshShape(editor, commands);
+        // The keyboard half of the gesture refresh and the release: the shape corner and the
+        // select mask/offset follow the cursor (and the Ctrl modifier) every frame, and only
+        // then may the release commit — otherwise the very last arrow step (or a Ctrl
+        // arriving with the release) would be missing from the committed gesture.
+        RefreshGestures(editor, commands);
         if (commands.EditorPaintReleased)
         {
             EndCanvasGesture(editor);
@@ -563,16 +571,17 @@ public sealed class QuarpGame : Game
             editor.SetCursor(dragX, dragY);
             editor.Paint(dragX, dragY);
         }
-        else if (mouse.LeftDown && editor.ShapeActive)
+        else if (mouse.LeftDown && (editor.ShapeActive || editor.SelectionGestureActive))
         {
-            // The shape drag only steers the cursor under the same clamp; the refresh below
-            // turns the cursor into the preview's corner. This is why shapes cannot tear the
-            // region from the mouse either.
-            layout.ClampCanvasPixel(mouse.X, mouse.Y, out int shapeX, out int shapeY);
-            editor.SetCursor(shapeX, shapeY);
+            // The shape and select drags only steer the cursor under the same clamp; the
+            // refresh below turns the cursor into the preview's corner, the brush's next
+            // point or the float's offset. This is why none of them can tear the region
+            // from the mouse either.
+            layout.ClampCanvasPixel(mouse.X, mouse.Y, out int dragToX, out int dragToY);
+            editor.SetCursor(dragToX, dragToY);
         }
-        // The mouse half of the shape refresh and release — same ordering law as the keyboard's.
-        RefreshShape(editor, commands);
+        // The mouse half of the gesture refresh and release — same ordering law as the keyboard's.
+        RefreshGestures(editor, commands);
         if (mouse.LeftReleased)
         {
             EndCanvasGesture(editor);
@@ -593,8 +602,9 @@ public sealed class QuarpGame : Game
 
     /// <summary>
     /// What the paint button means on the canvas, keyboard and mouse alike — one dispatch so
-    /// the two input worlds cannot drift (the parity law): the bucket is a click, the shape
-    /// opens a preview gesture, the pencil opens a stroke.
+    /// the two input worlds cannot drift (the parity law): the bucket and the stamp are
+    /// clicks, the shape and the select open preview gestures (a select press over the mask
+    /// is the grab — the session decides), the pencil opens a stroke.
     /// </summary>
     private static void BeginCanvasGesture(SpriteEditorSession editor, int localX, int localY)
     {
@@ -606,6 +616,12 @@ public sealed class QuarpGame : Game
             case SpriteEditorTool.Shape:
                 editor.BeginShape(localX, localY);
                 break;
+            case SpriteEditorTool.Select:
+                editor.BeginSelect(localX, localY);
+                break;
+            case SpriteEditorTool.Stamp:
+                editor.StampAt(localX, localY);
+                break;
             default:
                 editor.BeginStroke();
                 editor.Paint(localX, localY);
@@ -613,12 +629,16 @@ public sealed class QuarpGame : Game
         }
     }
 
-    /// <summary>The paint button's release: a shape commits its preview, a stroke commits its pixels — one undo step either way.</summary>
+    /// <summary>The paint button's release: a shape commits its preview, a select gesture its mask or drop, a stroke its pixels — one undo step at most, either way.</summary>
     private static void EndCanvasGesture(SpriteEditorSession editor)
     {
         if (editor.ShapeActive)
         {
             editor.CommitShape();
+        }
+        else if (editor.SelectionGestureActive)
+        {
+            editor.CommitSelect();
         }
         else
         {
@@ -626,12 +646,16 @@ public sealed class QuarpGame : Game
         }
     }
 
-    /// <summary>An open shape preview follows the cursor and the Ctrl-held filled modifier every frame.</summary>
-    private static void RefreshShape(SpriteEditorSession editor, in ShellCommands commands)
+    /// <summary>Open previews follow the cursor every frame: the shape's corner (with its Ctrl-held filled flag) and the select tool's box, brush track or floating fragment.</summary>
+    private static void RefreshGestures(SpriteEditorSession editor, in ShellCommands commands)
     {
         if (editor.ShapeActive)
         {
             editor.UpdateShape(editor.CursorX, editor.CursorY, commands.EditorShapeFill);
+        }
+        if (editor.SelectionGestureActive)
+        {
+            editor.UpdateSelect(editor.CursorX, editor.CursorY);
         }
     }
 

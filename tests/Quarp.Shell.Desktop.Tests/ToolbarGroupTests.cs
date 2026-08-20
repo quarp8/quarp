@@ -180,17 +180,20 @@ public class ToolbarGroupTests : IDisposable
         Assert.Equal(SpriteEditorTool.Pencil, session.Tool);
     }
 
-    /// <summary>Stub digits stay exactly as dead as their buttons — the 2d law carried into 2e (select and stamp are wave 2f's).</summary>
+    /// <summary>
+    /// Dead digits stay exactly as dead as their buttons — the 2d law. Until wave 2f this
+    /// also pressed 1 and 4; select and stamp woke there (their digit policy lives in
+    /// <c>SelectStampToolbarTests</c>), so only off-toolbar digits remain to prove it with.
+    /// </summary>
     [Fact]
-    public void StubDigitsSwitchNothing()
+    public void DigitsOffTheToolbarSwitchNothing()
     {
         var session = Session();
-        EditorIcons.PressToolDigit(session, 5);             // shape, so a stub press would visibly change something
+        EditorIcons.PressToolDigit(session, 5);             // shape, so a dead press would visibly change something
         session.CycleShape();                               // rectangle, off the default
 
-        EditorIcons.PressToolDigit(session, 1);             // select — wave 2f
-        EditorIcons.PressToolDigit(session, 4);             // stamp — wave 2f
         EditorIcons.PressToolDigit(session, 0);
+        EditorIcons.PressToolDigit(session, 7);
         EditorIcons.PressToolDigit(session, 9);
 
         Assert.Equal(SpriteEditorTool.Shape, session.Tool);

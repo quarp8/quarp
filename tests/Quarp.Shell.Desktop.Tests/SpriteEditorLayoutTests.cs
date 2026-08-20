@@ -198,10 +198,9 @@ public class SpriteEditorLayoutTests
     }
 
     /// <summary>
-    /// Pins the stub list to the owner's verdict as of wave 2e: the four future-editor tabs
-    /// and the two wave-2f tools (select, stamp) — shape and transform woke up this wave.
-    /// Waking a tool early (the negative-control scenario: a digit switching to the stamp)
-    /// makes this red before any UI is even drawn.
+    /// Pins the stub list as of wave 2f: only the four future-editor tabs stay dead — the
+    /// verdict's whole toolbar is live now (select and stamp woke last). A tab waking early,
+    /// or a tool going dark again, makes this red before any UI is even drawn.
     /// </summary>
     [Fact]
     public void ExactlyTheVerdictsButtonsAreStubs()
@@ -209,7 +208,6 @@ public class SpriteEditorLayoutTests
         var stubs = new[]
         {
             EditorButton.CodeTab, EditorButton.TilemapTab, EditorButton.SoundTab, EditorButton.MusicTab,
-            EditorButton.ToolSelect, EditorButton.ToolStamp,
         };
         foreach (EditorButton button in AllButtons)
         {
@@ -224,6 +222,7 @@ public class SpriteEditorLayoutTests
     /// centres hit themselves — the same roundtrip discipline as every clickable rectangle.
     /// </summary>
     [Theory]
+    [InlineData(EditorButton.ToolSelect, 2)]
     [InlineData(EditorButton.ToolShape, 2)]
     [InlineData(EditorButton.ToolTransform, 3)]
     public void FlyoutVariantsRoundTripThroughTheirRectangles(EditorButton slot, int count)

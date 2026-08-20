@@ -38,15 +38,17 @@ public class EditorIconsTests
 
     // ---- group slots ----
 
-    /// <summary>Exactly the two verdict groups carry the marker-and-flyout mechanism; a stub can never be a group.</summary>
+    /// <summary>Exactly the three variant groups carry the marker-and-flyout mechanism (select joined in wave 2f); a stub can never be a group.</summary>
     [Fact]
-    public void ExactlyShapeAndTransformAreGroupSlots()
+    public void ExactlyTheThreeGroupSlotsCarryVariants()
     {
         foreach (EditorButton button in AllButtons)
         {
-            bool group = button is EditorButton.ToolShape or EditorButton.ToolTransform;
+            bool group = button is EditorButton.ToolSelect or EditorButton.ToolShape or EditorButton.ToolTransform;
             Assert.Equal(group, EditorIcons.IsGroupSlot(button));
-            Assert.Equal(group ? button == EditorButton.ToolShape ? 2 : 3 : 0, EditorIcons.GroupVariantCount(button));
+            Assert.Equal(
+                group ? button == EditorButton.ToolTransform ? 3 : 2 : 0,
+                EditorIcons.GroupVariantCount(button));
             if (group)
             {
                 Assert.False(EditorIcons.IsStub(button));
@@ -79,7 +81,7 @@ public class EditorIconsTests
     [Fact]
     public void VariantTooltipsExistAndNameTheKeys()
     {
-        foreach (EditorButton slot in new[] { EditorButton.ToolShape, EditorButton.ToolTransform })
+        foreach (EditorButton slot in new[] { EditorButton.ToolSelect, EditorButton.ToolShape, EditorButton.ToolTransform })
         {
             for (int i = 0; i < EditorIcons.GroupVariantCount(slot); i++)
             {

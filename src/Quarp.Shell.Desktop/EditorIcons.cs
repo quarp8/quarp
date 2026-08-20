@@ -20,9 +20,9 @@ public enum EditorButton
     SoundTab,
     MusicTab,
 
-    // The left toolbar, top to bottom. Select and stamp are wave 2f's — visible, disabled,
-    // honest about it in their tooltips. Shape and transform are photoshop-style GROUP slots
-    // (owner's second review): one button, several variants, a corner marker, a flyout.
+    // The left toolbar, top to bottom — all six live since wave 2f. Select, shape and
+    // transform are photoshop-style GROUP slots (owner's second review): one button, several
+    // variants, a corner marker, a flyout.
     ToolSelect,
     ToolPencil,
     ToolFill,
@@ -51,7 +51,7 @@ public enum EditorIcon
     Tilemap,
     Sound,
     Music,
-    Select,
+    SelectRect,
     Pencil,
     Fill,
     Stamp,
@@ -65,6 +65,9 @@ public enum EditorIcon
     Redo,
     Saved,
     Modified,
+    // Appended past the wave-2e set: the mask array below is indexed by this enum's values,
+    // so new glyphs only ever join at the end.
+    SelectBrush,
 }
 
 /// <summary>
@@ -154,7 +157,7 @@ public static class EditorIcons
             0b11101110,
             0b00000000,
         },
-        new byte[] // Select: a dashed rectangle (marching ants, frozen)
+        new byte[] // SelectRect: a dashed rectangle (marching ants, frozen) — the select slot's rectangle face
         {
             0b11011011,
             0b00000000,
@@ -308,6 +311,17 @@ public static class EditorIcons
             0b10000001,
             0b11111111,
         },
+        new byte[] // SelectBrush: a brush — handle from the top-right down to a flared bristle head
+        {
+            0b00000011,
+            0b00000111,
+            0b00001110,
+            0b00011100,
+            0b01111000,
+            0b11110000,
+            0b11110000,
+            0b01100000,
+        },
     };
 
     /// <summary>How many glyphs exist — the atlas sizes its strip from this.</summary>
@@ -318,15 +332,14 @@ public static class EditorIcons
         ((_masks[(int)icon][row] >> (IconPixels - 1 - col)) & 1) != 0;
 
     /// <summary>
-    /// The buttons that are drawn but deliberately dead this wave: the four future-editor tabs
-    /// (their portions of ADR-026 have not landed) and the two wave-2f tools (select, stamp).
-    /// This list is the <b>one owner</b> of "is it a stub": the layout paints from it, the
-    /// click routing refuses from it, and <see cref="PressToolDigit"/> consults it — so waking
-    /// a tool is one edit here, never a drift between what looks dead and what is dead.
+    /// The buttons that are drawn but deliberately dead: the four future-editor tabs (their
+    /// portions of ADR-026 have not landed — the whole toolbar woke by wave 2f). This list is
+    /// the <b>one owner</b> of "is it a stub": the layout paints from it, the click routing
+    /// refuses from it, and <see cref="PressToolDigit"/> consults it — so waking a button is
+    /// one edit here, never a drift between what looks dead and what is dead.
     /// </summary>
     public static bool IsStub(EditorButton button) => button is
-        EditorButton.CodeTab or EditorButton.TilemapTab or EditorButton.SoundTab or EditorButton.MusicTab
-        or EditorButton.ToolSelect or EditorButton.ToolStamp;
+        EditorButton.CodeTab or EditorButton.TilemapTab or EditorButton.SoundTab or EditorButton.MusicTab;
 
     /// <summary>
     /// The photoshop-style group slots (owner's second review): a corner marker on the button,
@@ -336,11 +349,12 @@ public static class EditorIcons
     /// <see cref="GroupVariantCount"/> next door.
     /// </summary>
     public static bool IsGroupSlot(EditorButton button) =>
-        button is EditorButton.ToolShape or EditorButton.ToolTransform;
+        button is EditorButton.ToolSelect or EditorButton.ToolShape or EditorButton.ToolTransform;
 
     /// <summary>How many variants a group slot's flyout shows; 0 for everything that is not a group.</summary>
     public static int GroupVariantCount(EditorButton button) => button switch
     {
+        EditorButton.ToolSelect => 2,       // SelectionVariant: rectangle, brush
         EditorButton.ToolShape => 2,        // ShapeVariant: oval, rectangle
         EditorButton.ToolTransform => 3,    // TransformVariant: flip H, flip V, rotate
         _ => 0,
@@ -354,6 +368,8 @@ public static class EditorIcons
     /// </summary>
     public static EditorIcon VariantIcon(EditorButton slot, int variant) => (slot, variant) switch
     {
+        (EditorButton.ToolSelect, (int)SelectionVariant.Rectangle) => EditorIcon.SelectRect,
+        (EditorButton.ToolSelect, (int)SelectionVariant.Brush) => EditorIcon.SelectBrush,
         (EditorButton.ToolShape, (int)ShapeVariant.Oval) => EditorIcon.ShapeOval,
         (EditorButton.ToolShape, (int)ShapeVariant.Rectangle) => EditorIcon.ShapeRect,
         (EditorButton.ToolTransform, (int)TransformVariant.FlipH) => EditorIcon.FlipH,
@@ -365,6 +381,8 @@ public static class EditorIcons
     /// <summary>Flyout variant tooltips — the 3-second hover contract extends to variants, and each names its key path.</summary>
     public static string VariantTooltip(EditorButton slot, int variant) => (slot, variant) switch
     {
+        (EditorButton.ToolSelect, (int)SelectionVariant.Rectangle) => "RECTANGLE SELECT  1 CYCLES",
+        (EditorButton.ToolSelect, (int)SelectionVariant.Brush) => "BRUSH SELECT  1 CYCLES",
         (EditorButton.ToolShape, (int)ShapeVariant.Oval) => "OVAL  5 CYCLES",
         (EditorButton.ToolShape, (int)ShapeVariant.Rectangle) => "RECTANGLE  5 CYCLES",
         (EditorButton.ToolTransform, (int)TransformVariant.FlipH) => "FLIP H  F",
@@ -382,12 +400,12 @@ public static class EditorIcons
         EditorButton.TilemapTab => EditorIcon.Tilemap,
         EditorButton.SoundTab => EditorIcon.Sound,
         EditorButton.MusicTab => EditorIcon.Music,
-        EditorButton.ToolSelect => EditorIcon.Select,
         EditorButton.ToolPencil => EditorIcon.Pencil,
         EditorButton.ToolFill => EditorIcon.Fill,
         EditorButton.ToolStamp => EditorIcon.Stamp,
         // The group slots' clean defaults (variant 0); the renderer asks VariantIcon with the
         // session's current variant instead, the same way it picks Save's two faces.
+        EditorButton.ToolSelect => EditorIcon.SelectRect,
         EditorButton.ToolShape => EditorIcon.ShapeOval,
         EditorButton.ToolTransform => EditorIcon.FlipH,
         EditorButton.Clear => EditorIcon.Clear,
@@ -409,10 +427,10 @@ public static class EditorIcons
         EditorButton.TilemapTab => "MAPS - IN A LATER PORTION",
         EditorButton.SoundTab => "SOUNDS - IN A LATER PORTION",
         EditorButton.MusicTab => "MUSIC - IN A LATER PORTION",
-        EditorButton.ToolSelect => "SELECT - WAVE 2F",
+        EditorButton.ToolSelect => "SELECT  1 CYCLES   DRAG MARKS, GRAB INSIDE MOVES, ESC DROPS",
         EditorButton.ToolPencil => "PENCIL  2   ARROWS MOVE, Z/SPACE DRAW, X PICK",
         EditorButton.ToolFill => "FILL  3   Z/SPACE FILLS AT THE CURSOR",
-        EditorButton.ToolStamp => "STAMP - WAVE 2F",
+        EditorButton.ToolStamp => "STAMP  4   CLICK/Z PRINTS THE LAST SELECTION",
         EditorButton.ToolShape => "SHAPES  5 CYCLES   DRAG DRAWS, CTRL FILLS, HOLD/RCLICK VARIANTS",
         EditorButton.ToolTransform => "TRANSFORM  6 CYCLES, F/V/R APPLY   CLICK APPLIES, HOLD/RCLICK VARIANTS",
         EditorButton.Clear => "CLEAR  DEL",
@@ -420,6 +438,20 @@ public static class EditorIcons
         EditorButton.Undo => "UNDO  CTRL+Z",
         _ => "REDO  CTRL+Y",
     };
+
+    /// <summary>
+    /// The tooltip with its one state-dependent case: an inkless stamp explains what to do
+    /// (the order's SELECT FIRST) instead of naming a click that would do nothing. Every other
+    /// button falls through to the static text — the renderer calls this overload for all of
+    /// them so the special case lives here, with the texts, and not in draw code.
+    /// </summary>
+    public static string Tooltip(EditorButton button, SpriteEditorSession session)
+    {
+        ArgumentNullException.ThrowIfNull(session);
+        return button == EditorButton.ToolStamp && !session.HasStampSource
+            ? "STAMP  4   EMPTY - SELECT FIRST"
+            : Tooltip(button);
+    }
 
     /// <summary>Swatch tooltip: the keyboard color mechanism, discoverable where the colors are.</summary>
     public static string SwatchTooltip(int color) => $"COLOR {color}   , PREV   . NEXT";
@@ -438,12 +470,13 @@ public static class EditorIcons
 
     /// <summary>
     /// The keyboard's whole toolbar-digit policy in one testable place (the shell calls this
-    /// verbatim). Plain tools select; the shape group selects on the first press and cycles
-    /// its variant on a repeat (the wave's "повторное нажатие цифры циклит варианты"); the
-    /// transform slot has no mode to enter, so every press is a repeat and cycles — applying
-    /// stays on F/V/R and on the slot's click, never on a digit, or cycling to a variant
-    /// would wreck the sheet on the way. Digits on stub slots do nothing: a dead button must
-    /// be exactly as dead from the keyboard as from the mouse (the named negative control).
+    /// verbatim). Plain tools select; the select and shape groups select on the first press
+    /// and cycle their variant on a repeat (the wave's "повторное нажатие цифры циклит
+    /// варианты"); the transform slot has no mode to enter, so every press is a repeat and
+    /// cycles — applying stays on F/V/R and on the slot's click, never on a digit, or cycling
+    /// to a variant would wreck the sheet on the way. Digits on stub slots do nothing: a dead
+    /// button must be exactly as dead from the keyboard as from the mouse (the named negative
+    /// control).
     /// </summary>
     public static void PressToolDigit(SpriteEditorSession session, int digit)
     {
@@ -454,11 +487,24 @@ public static class EditorIcons
         }
         switch (slot)
         {
+            case EditorButton.ToolSelect:
+                if (session.Tool == SpriteEditorTool.Select)
+                {
+                    session.CycleSelectionVariant();
+                }
+                else
+                {
+                    session.SelectTool(SpriteEditorTool.Select);
+                }
+                break;
             case EditorButton.ToolPencil:
                 session.SelectTool(SpriteEditorTool.Pencil);
                 break;
             case EditorButton.ToolFill:
                 session.SelectTool(SpriteEditorTool.Fill);
+                break;
+            case EditorButton.ToolStamp:
+                session.SelectTool(SpriteEditorTool.Stamp);
                 break;
             case EditorButton.ToolShape:
                 if (session.Tool == SpriteEditorTool.Shape)
@@ -479,8 +525,8 @@ public static class EditorIcons
     /// <summary>
     /// A completed short click on a group slot (the mouse's verb, decided by
     /// <see cref="ToolbarFlyout"/>): the transform slot APPLIES its current variant to the
-    /// region — the click is the mouse's F/V/R — while the shape slot just becomes the active
-    /// tool, because a shape needs a canvas gesture to mean anything.
+    /// region — the click is the mouse's F/V/R — while the select and shape slots just become
+    /// the active tool, because both need a canvas gesture to mean anything.
     /// </summary>
     public static void ClickGroupSlot(SpriteEditorSession session, EditorButton slot)
     {
@@ -493,13 +539,17 @@ public static class EditorIcons
         {
             session.SelectTool(SpriteEditorTool.Shape);
         }
+        else if (slot == EditorButton.ToolSelect)
+        {
+            session.SelectTool(SpriteEditorTool.Select);
+        }
     }
 
     /// <summary>
     /// A variant picked from an open flyout: remembered, never applied — applying is the
-    /// slot-click's job (the wave's "выбор запоминается"). Picking a shape variant also
-    /// activates the shape tool, photoshop-style: the author asked for that shape, not for a
-    /// note about it.
+    /// slot-click's job (the wave's "выбор запоминается"). Picking a select or shape variant
+    /// also activates its tool, photoshop-style: the author asked for that marker or shape,
+    /// not for a note about it.
     /// </summary>
     public static void ChooseVariant(SpriteEditorSession session, EditorButton slot, int variant)
     {
@@ -512,6 +562,11 @@ public static class EditorIcons
         {
             session.SelectShape((ShapeVariant)variant);
             session.SelectTool(SpriteEditorTool.Shape);
+        }
+        else if (slot == EditorButton.ToolSelect)
+        {
+            session.SelectSelectionVariant((SelectionVariant)variant);
+            session.SelectTool(SpriteEditorTool.Select);
         }
     }
 }

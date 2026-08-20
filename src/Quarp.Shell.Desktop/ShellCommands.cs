@@ -20,6 +20,13 @@ namespace Quarp.Shell.Desktop;
 /// so a cart cannot bind space to jump and fight the shell over it. Everything but the
 /// rewind is a press, not a hold — repeat-on-hold would make a single tap of <c>,</c>
 /// unpredictable, and holding is what Backspace is for.
+///
+/// <para><b>The menu block (M9).</b> The library and the editor stub read the
+/// <c>Menu*</c> fields; the game mode ignores them, because in a game those same keys
+/// belong to the cartridge via <see cref="InputMapper"/>. They live in this one struct,
+/// filled by the one reader with the one previous-frame state, so a key held across a mode
+/// switch cannot fire twice: Esc that left the game is already "down" when the library's
+/// first frame reads the keyboard, and edge detection sees no edge.</para>
 /// </summary>
 public readonly struct ShellCommands
 {
@@ -33,6 +40,18 @@ public readonly struct ShellCommands
     public bool ToStart { get; init; }
     public bool SaveReplay { get; init; }
     public bool PlayReplay { get; init; }
+
+    /// <summary>Library: move the selection bar up.</summary>
+    public bool MenuUp { get; init; }
+
+    /// <summary>Library: move the selection bar down.</summary>
+    public bool MenuDown { get; init; }
+
+    /// <summary>Library: launch the selected cart — Z or Enter, the confirm keys the pad maps to O/Start.</summary>
+    public bool MenuConfirm { get; init; }
+
+    /// <summary>Library: open the editor mode (stub this stage) — X.</summary>
+    public bool MenuEditor { get; init; }
 }
 
 /// <summary>
@@ -59,6 +78,10 @@ public sealed class ShellCommandReader
             ToStart = Pressed(keyboard, Keys.Home),
             SaveReplay = Pressed(keyboard, Keys.F5),
             PlayReplay = Pressed(keyboard, Keys.F8),
+            MenuUp = Pressed(keyboard, Keys.Up),
+            MenuDown = Pressed(keyboard, Keys.Down),
+            MenuConfirm = Pressed(keyboard, Keys.Z) || Pressed(keyboard, Keys.Enter),
+            MenuEditor = Pressed(keyboard, Keys.X),
         };
         _previous = keyboard;
         return commands;

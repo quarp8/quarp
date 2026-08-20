@@ -25,7 +25,10 @@ switch (command)
 {
     case "run":
     {
-        // No path: the palette test pattern; with a path: the cartridge, hot reload and all.
+        // No path: the game library (M9 — the fact "console without a cartridge" has one
+        // owner, and it is the library; the windowed test pattern is gone, `quarp pattern`
+        // proves the palette headlessly). With a path: the cartridge directly, hot reload
+        // and all, and Esc quits the process — the F5 loop the library stays out of.
         // --break-at N is the debugger-free half of "debugging in time" (M4 work order, stage 1):
         // the console catches up to tick N and pauses *before* that tick's Update, so the
         // author can look at the state the buggy tick is about to be handed.
@@ -262,8 +265,9 @@ switch (command)
     default:
         Console.WriteLine("QUARP — fantasy console");
         Console.WriteLine("usage:");
-        Console.WriteLine("  quarp run [path]             open the console window (test pattern without a path,");
-        Console.WriteLine("                               a cart folder or .quarp8 file with one)");
+        Console.WriteLine("  quarp run [path]             open the console window (the game library without a path,");
+        Console.WriteLine("                               a cart folder or .quarp8 file with one; plain `quarp`");
+        Console.WriteLine("                               does the same — scripts should use sim/replay/build)");
         Console.WriteLine("  quarp run <path> --break-at N");
         Console.WriteLine("                               same, but pause before Update of tick N and stay there");
         Console.WriteLine("                               (docs/DEBUGGING.md — debugging in time)");
@@ -295,7 +299,8 @@ switch (command)
         Console.WriteLine("  quarp pattern <file>         write the test pattern as a .bmp image");
         Console.WriteLine();
         Console.WriteLine("time controls in `quarp run`: Space pause, . step, , step back, [ ] speed,");
-        Console.WriteLine("Backspace rewind, Home to start, F5 save replay, F8 play replay, Esc quit.");
+        Console.WriteLine("Backspace rewind, Home to start, F5 save replay, F8 play replay, Esc quit");
+        Console.WriteLine("(a cart launched from the library returns to it on Esc instead).");
         return command is "--help" or "-h" or "help" ? 0 : 1;
 }
 

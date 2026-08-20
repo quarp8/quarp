@@ -1,7 +1,7 @@
 using Quarp.CartKit;
 using Quarp.Shell.Desktop;
 
-// No argument: palette test pattern. With one: run a cart folder or .quarp8 file.
+// No argument: the game library (M9). With one: run a cart folder or .quarp8 file directly.
 string? cartPath = args.Length > 0 ? args[0] : null;
 
 QuarpGame game;

@@ -7,10 +7,18 @@ using Quarp.Core;
 namespace Quarp.Shell.Desktop;
 
 /// <summary>
-/// Desktop shell: presents the core's indexed framebuffer as one point-sampled texture
-/// at the largest integer scale that fits the window (ARCHITECTURE §5).
-/// Two modes (M1 work order): without a cart path it shows the palette test pattern;
-/// with one it runs the cartridge with hot reload and save.dat persistence.
+/// Desktop shell: one window, three modes (M9, ADR-026) — the game library, a running
+/// cartridge, and the editor stub. Without a cart path it opens on the library (the console's
+/// face; the old windowed test pattern died with M9 — the palette is proven by
+/// <c>quarp pattern</c> and by the library itself, which is drawn on Master32); with a path it
+/// runs that cartridge directly, hot reload and all, and Esc quits the process — the
+/// developer's F5 loop, which the library never interrupts. Mode policy lives in
+/// <see cref="ShellModeMachine"/>; this class owns only what needs a graphics device.
+///
+/// <para><b>Two resolutions, on purpose.</b> A running cart is presented as the core's
+/// indexed framebuffer scaled by whole integers (ARCHITECTURE §5). The library and the stub
+/// are host UI and draw at the window's native resolution via <see cref="LibraryRenderer"/> —
+/// still on the master palette and the system font, so the console keeps its face.</para>
 ///
 /// <para><b>Time (M2).</b> MonoGame's <c>IsFixedTimeStep</c> is off and replaced by
 /// <see cref="TickAccumulator"/>: real time is banked, whole ticks come out, at most five
@@ -31,27 +39,28 @@ namespace Quarp.Shell.Desktop;
 /// </summary>
 public sealed class QuarpGame : Game
 {
-    private readonly Framebuffer? _patternFramebuffer;
-    private readonly CartSession? _session;
     private readonly Color[] _colorBuffer;
     private readonly Color[] _palette;
     private readonly TickAccumulator _accumulator = new();
     private readonly ShellCommandReader _commands = new();
     private readonly ConsoleProfile _profile;
+    private readonly ShellModeMachine _modes;
 
     private SpriteBatch _spriteBatch = null!;
     private Texture2D _screenTexture = null!;
     private ShellOverlay _overlay = null!;
+    private LibraryRenderer _hostUi = null!;
     private AudioOutput? _audio;
 
     private TimeSpeed _lastSpeed = TimeSpeed.At(TimeSpeed.NormalIndex);
     private bool _lastPaused;
 
     /// <summary>
-    /// Pattern mode when <paramref name="cartPath"/> is null; cart mode otherwise.
-    /// <paramref name="breakAtTick"/> is <c>--break-at N</c>: the session pauses before that
-    /// tick's <c>Update</c> and waits there. It is ignored in pattern mode, which has no
-    /// simulation to stop — the CLI rejects that combination before it gets here.
+    /// Library mode when <paramref name="cartPath"/> is null; direct-launch cart mode
+    /// otherwise. A direct launch's load errors throw out of here so the CLI can turn them
+    /// into exit codes; a library launch's errors stay on the library screen instead.
+    /// <paramref name="breakAtTick"/> is <c>--break-at N</c> and only means anything with a
+    /// cart to stop — the CLI rejects the flag without a path before it gets here.
     /// </summary>
     /// <param name="profile">
     /// Which console to build. Null means <see cref="ConsoleProfile.Profile8"/> — 160x90, the
@@ -65,26 +74,26 @@ public sealed class QuarpGame : Game
         StartCompilerWarmUp();
 
         _profile = profile ?? ConsoleProfile.Profile8;
-        if (cartPath is null)
+        CartSession? directSession = null;
+        if (cartPath is not null)
         {
-            _patternFramebuffer = new Framebuffer(_profile);
-            TestPattern.Render(_patternFramebuffer);
-        }
-        else
-        {
-            _session = CartSession.Start(cartPath, _profile);
-            _session.BreakAt = breakAtTick;
+            directSession = CartSession.Start(cartPath, _profile);
+            directSession.BreakAt = breakAtTick;
             // Lets a long resimulation repaint the window from inside its progress callback
             // instead of freezing it (ARCHITECTURE §4). Cached once — it is called in a loop.
-            _session.PresentFrame = PresentCurrentFrame;
+            directSession.PresentFrame = PresentCurrentFrame;
         }
+        _modes = new ShellModeMachine(
+            new CartLibrary(CartLibrary.DefaultRoots()),
+            StartSessionFromLibrary,
+            DrainAudio,
+            directSession);
 
         _colorBuffer = new Color[_profile.Width * _profile.Height];
         _palette = new Color[Palette.MasterCount];
         for (int i = 0; i < Palette.MasterCount; i++)
         {
-            uint rgb = Palette.Master32[i];
-            _palette[i] = new Color((byte)(rgb >> 16), (byte)(rgb >> 8), (byte)rgb);
+            _palette[i] = PaletteColors.Opaque(i);
         }
 
         // x8 of 160x90 is 1280x720 exactly: a whole-pixel scale that is also a standard display
@@ -107,12 +116,35 @@ public sealed class QuarpGame : Game
         // way an overloaded machine runs slowly instead of locking up.
         IsFixedTimeStep = false;
 
-        Window.Title = _session is null ? _profile.Name : $"{_profile.Name} — {_session.Name}";
+        UpdateWindowTitle();
         Window.AllowUserResizing = true;
         IsMouseVisible = true;
     }
 
-    private Framebuffer CurrentFramebuffer => _session?.Framebuffer ?? _patternFramebuffer!;
+    /// <summary>
+    /// The mode machine's session factory: what "launch this library entry" means when a
+    /// window exists. Load and compile failures throw and the machine turns them into a
+    /// library message; wiring happens here because the machine has no business knowing about
+    /// textures or sound cards.
+    /// </summary>
+    private CartSession StartSessionFromLibrary(string path)
+    {
+        CartSession session = CartSession.Start(path, _profile);
+        session.PresentFrame = PresentCurrentFrame;
+        if (_audio is not null)
+        {
+            // LoadContent has run by the time the library can accept a keypress, so the sink
+            // is available; the null check is for the audio-less machine, not for ordering.
+            session.AudioSink = _audio.Submit;
+        }
+        return session;
+    }
+
+    private void DrainAudio() => _audio?.Drain();
+
+    /// <summary>Session name in the title while a cart runs; the bare console name otherwise.</summary>
+    private void UpdateWindowTitle() =>
+        Window.Title = _modes.Session is CartSession session ? $"{_profile.Name} — {session.Name}" : _profile.Name;
 
     /// <summary>
     /// Runs one throwaway compile on a background thread so Roslyn's cold cost (1-3 s of its
@@ -146,15 +178,17 @@ public sealed class QuarpGame : Game
         _spriteBatch = new SpriteBatch(GraphicsDevice);
         _screenTexture = new Texture2D(GraphicsDevice, _profile.Width, _profile.Height);
         _overlay = new ShellOverlay(GraphicsDevice, _profile.Width, _profile.Height);
+        _hostUi = new LibraryRenderer(GraphicsDevice);
 
         // Opened here rather than in the constructor: the audio device belongs to a running
         // Game, and an unavailable one is reported by AudioOutput rather than thrown.
         _audio = new AudioOutput();
-        if (_session is not null)
+        if (_modes.Session is CartSession session)
         {
-            // Cached once — this delegate is invoked on every tick, including eight times a
-            // frame at x8.
-            _session.AudioSink = _audio.Submit;
+            // The direct-launch session predates the device; library launches are wired in
+            // the factory. Cached once — this delegate is invoked on every tick, including
+            // eight times a frame at x8.
+            session.AudioSink = _audio.Submit;
         }
     }
 
@@ -162,25 +196,58 @@ public sealed class QuarpGame : Game
     {
         KeyboardState keyboard = Keyboard.GetState();
         ShellCommands commands = _commands.Read(keyboard);
-        if (commands.Quit)
+
+        switch (_modes.Mode)
+        {
+            case ShellMode.Game:
+                UpdateGame(commands, keyboard, gameTime);
+                break;
+            case ShellMode.Library:
+                UpdateLibrary(commands);
+                break;
+            case ShellMode.Editor:
+                // The stub's one ability is the way back; X closes it too, mirroring the X
+                // that opened it.
+                if (commands.Quit || commands.MenuEditor)
+                {
+                    _modes.HandleEscape();
+                }
+                break;
+        }
+
+        if (_modes.ExitRequested)
         {
             Exit();
             return;
         }
+        base.Update(gameTime);
+    }
 
-        if (_session is null)
+    /// <summary>One frame of a running cart: time control, ticks, audio — unchanged from M2-M4 except for where Esc goes.</summary>
+    private void UpdateGame(in ShellCommands commands, KeyboardState keyboard, GameTime gameTime)
+    {
+        if (commands.Quit)
         {
-            base.Update(gameTime);
+            // Direct launch: exit request, picked up by Update. Library launch: the machine
+            // drains the speaker, disposes the session (save.dat's forced flush lives in that
+            // Dispose) and lands back on a rescanned library — see ShellModeMachine.
+            _modes.HandleEscape();
+            if (!_modes.ExitRequested)
+            {
+                UpdateWindowTitle();
+                _accumulator.Reset();
+            }
             return;
         }
 
-        _session.ApplyCommands(commands);
+        CartSession session = _modes.Session!;
+        session.ApplyCommands(commands);
 
         // A speed change or a pause invalidates the banked remainder: it was measured in the
         // old rung's units, and carrying it across would spit out a burst of ticks nobody
         // asked for on the frame the player pressed the key.
-        TimeSpeed speed = _session.Speed;
-        bool paused = _session.IsPaused;
+        TimeSpeed speed = session.Speed;
+        bool paused = session.IsPaused;
         if (speed.Numerator != _lastSpeed.Numerator
             || speed.Denominator != _lastSpeed.Denominator
             || paused != _lastPaused)
@@ -198,17 +265,69 @@ public sealed class QuarpGame : Game
             ? 0
             : _accumulator.Advance(gameTime.ElapsedGameTime.Ticks, speed);
 
-        _session.Update(ticks, InputMapper.Read(keyboard), rewinding);
+        session.Update(ticks, InputMapper.Read(keyboard), rewinding);
 
         // Once a frame, whatever the simulation did: tops the device queue up with silence so
         // a pause, a rewind or a stalled machine is quiet instead of a source running dry.
+        // Only in game mode — the library's silence comes from Drain having stopped the
+        // source, and topping it up would just count Padded blocks nobody can hear.
         _audio?.EndFrame();
-        base.Update(gameTime);
+    }
+
+    /// <summary>One frame of the library: selection, launch, the editor stub, or leaving.</summary>
+    private void UpdateLibrary(in ShellCommands commands)
+    {
+        if (commands.Quit)
+        {
+            _modes.HandleEscape();      // Library Esc = leave the process; Update picks it up.
+            return;
+        }
+        if (commands.MenuUp)
+        {
+            _modes.Library.MoveSelection(-1);
+        }
+        if (commands.MenuDown)
+        {
+            _modes.Library.MoveSelection(+1);
+        }
+        if (commands.MenuEditor)
+        {
+            _modes.OpenEditor();
+            return;
+        }
+        if (commands.MenuConfirm && _modes.LaunchSelected() is not null)
+        {
+            // A fresh session starts at normal speed and unpaused; the banked remainder of
+            // however long the player browsed must not become a burst of catch-up ticks.
+            _accumulator.Reset();
+            _lastSpeed = TimeSpeed.At(TimeSpeed.NormalIndex);
+            _lastPaused = false;
+            UpdateWindowTitle();
+        }
     }
 
     protected override void Draw(GameTime gameTime)
     {
-        RenderFrame();
+        switch (_modes.Mode)
+        {
+            case ShellMode.Game:
+                RenderFrame();
+                break;
+            case ShellMode.Library:
+                _hostUi.DrawLibrary(
+                    _spriteBatch,
+                    GraphicsDevice.PresentationParameters.BackBufferWidth,
+                    GraphicsDevice.PresentationParameters.BackBufferHeight,
+                    _modes.Library,
+                    _modes.LibraryMessage);
+                break;
+            case ShellMode.Editor:
+                _hostUi.DrawEditorStub(
+                    _spriteBatch,
+                    GraphicsDevice.PresentationParameters.BackBufferWidth,
+                    GraphicsDevice.PresentationParameters.BackBufferHeight);
+                break;
+        }
         base.Draw(gameTime);        // the game loop presents for us
     }
 
@@ -235,13 +354,13 @@ public sealed class QuarpGame : Game
 
     private void RenderFrame()
     {
-        if (_spriteBatch is null || _screenTexture is null)
+        if (_modes.Session is not CartSession session || _spriteBatch is null || _screenTexture is null)
         {
-            return;     // Called before LoadContent (a crash during the very first reload).
+            return;     // No cart on screen, or called before LoadContent (a crash during the very first reload).
         }
-        _overlay.Show(_session?.Status, _session?.StatusPercent ?? -1);
+        _overlay.Show(session.Status, session.StatusPercent);
 
-        Framebuffer framebuffer = CurrentFramebuffer;
+        Framebuffer framebuffer = session.Framebuffer;
         byte[] pixels = framebuffer.Pixels;
         for (int i = 0; i < pixels.Length; i++)
         {
@@ -267,7 +386,7 @@ public sealed class QuarpGame : Game
 
     protected override void OnExiting(object sender, ExitingEventArgs args)
     {
-        _session?.SaveNow();
+        _modes.Session?.SaveNow();
         ReportAudio();
         base.OnExiting(sender, args);
     }
@@ -299,8 +418,9 @@ public sealed class QuarpGame : Game
     {
         if (disposing)
         {
-            _session?.Dispose();
+            _modes.Session?.Dispose();
             _overlay?.Dispose();
+            _hostUi?.Dispose();
             _audio?.Dispose();
         }
         base.Dispose(disposing);

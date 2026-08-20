@@ -140,6 +140,15 @@ public sealed class CartSession : IDisposable
     public string Name { get; private set; } = "";
 
     /// <summary>
+    /// Weak reference to the current host's collectible AssemblyLoadContext (hot reload swaps
+    /// hosts, so read it fresh). This is the observable half of the M9 lifecycle claim: after
+    /// <see cref="Dispose"/> and the drop of the last session reference, the target must die —
+    /// which the mode-transition tests assert, because "Unload was called" proves a request
+    /// and only a dead weak reference proves the cart's assemblies actually left the process.
+    /// </summary>
+    public WeakReference LoadContextWeakReference => _host.LoadContextWeakReference;
+
+    /// <summary>
     /// The framebuffer to present. Stable for the whole session — the TimeMachine keeps one
     /// console across rebuilds — except while a saved replay is being watched, which runs on
     /// its own console.

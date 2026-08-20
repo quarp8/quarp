@@ -197,6 +197,28 @@ public sealed class AudioOutput : IDisposable
         Observe();
     }
 
+    /// <summary>
+    /// Discards everything the device is still holding and stops the source. This is the
+    /// game → library transition's half-frame of honesty (M9 stage 1): the queue is two to
+    /// three blocks deep, which is up to 50 ms of the game the player just left, and without
+    /// this the library would open to the tail of its soundtrack. The device stays usable —
+    /// the next game's first <see cref="EndFrame"/> restarts the source, exactly the underrun
+    /// path it already handles.
+    /// </summary>
+    public void Drain()
+    {
+        if (_instance is null)
+        {
+            return;
+        }
+        _instance.Stop(immediate: true);
+        _playing = false;
+        // The discarded blocks never played, so they must not enter the latency figures:
+        // Observe() infers "started" from submitted-minus-pending, and a drained queue would
+        // otherwise book them all as begun at this instant.
+        _started = _submitted;
+    }
+
     public void Dispose()
     {
         if (_instance is null)

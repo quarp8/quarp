@@ -64,6 +64,16 @@ public sealed class PixelFontAtlas : IDisposable
     public static int LineHeight(int scale) => SystemFont.CellHeight * scale;
 
     /// <summary>
+    /// Whole-integer host-UI text scale from the window size — one formula for every host
+    /// screen (library, sprite editor), living with the font because it is a fact about text
+    /// density. Anchored at 320x180 rather than the console's 160x90 because host UI wants
+    /// density, not console-sized letters: a 1280x720 window gets x4 (24 px line height,
+    /// ~28 rows), and the floor of 2 keeps text legible in a window shrunk below the anchor.
+    /// </summary>
+    public static int UiScale(int width, int height) =>
+        Math.Max(2, Math.Min(width / 320, height / 180));
+
+    /// <summary>
     /// Draws one line (no newline handling — the callers own their layout) inside an already
     /// begun <paramref name="batch"/>. Characters outside ASCII 32-126 show
     /// <see cref="SystemFont"/>'s fallback box, same as a cartridge's <c>Print</c> would.

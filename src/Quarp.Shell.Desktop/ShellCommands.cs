@@ -47,11 +47,29 @@ public readonly struct ShellCommands
     /// <summary>Library: move the selection bar down.</summary>
     public bool MenuDown { get; init; }
 
-    /// <summary>Library: launch the selected cart — Z or Enter, the confirm keys the pad maps to O/Start.</summary>
+    /// <summary>
+    /// Library: launch the selected cart — Z or Enter, the confirm keys the pad maps to
+    /// O/Start. In the editor's exit prompt the same Z means "save and exit". Never fires
+    /// with Ctrl held: Ctrl+Z is <see cref="EditorUndo"/>, and a chord must not double as
+    /// its bare key.
+    /// </summary>
     public bool MenuConfirm { get; init; }
 
-    /// <summary>Library: open the editor mode (stub this stage) — X.</summary>
+    /// <summary>
+    /// Library: open the sprite editor for the selected cart — X (M9 stage 2). In the
+    /// editor's exit prompt the same X means "exit without saving". Ctrl-chorded X is
+    /// ignored for the same reason as <see cref="MenuConfirm"/>.
+    /// </summary>
     public bool MenuEditor { get; init; }
+
+    /// <summary>Editor: Ctrl+Z — undo one pencil stroke.</summary>
+    public bool EditorUndo { get; init; }
+
+    /// <summary>Editor: Ctrl+Y — redo.</summary>
+    public bool EditorRedo { get; init; }
+
+    /// <summary>Editor: Ctrl+S — save the sheet (a no-op on a clean session, by the save contract).</summary>
+    public bool EditorSave { get; init; }
 }
 
 /// <summary>
@@ -66,6 +84,7 @@ public sealed class ShellCommandReader
 
     public ShellCommands Read(KeyboardState keyboard)
     {
+        bool ctrl = keyboard.IsKeyDown(Keys.LeftControl) || keyboard.IsKeyDown(Keys.RightControl);
         var commands = new ShellCommands
         {
             Quit = Pressed(keyboard, Keys.Escape),
@@ -80,8 +99,11 @@ public sealed class ShellCommandReader
             PlayReplay = Pressed(keyboard, Keys.F8),
             MenuUp = Pressed(keyboard, Keys.Up),
             MenuDown = Pressed(keyboard, Keys.Down),
-            MenuConfirm = Pressed(keyboard, Keys.Z) || Pressed(keyboard, Keys.Enter),
-            MenuEditor = Pressed(keyboard, Keys.X),
+            MenuConfirm = (!ctrl && Pressed(keyboard, Keys.Z)) || Pressed(keyboard, Keys.Enter),
+            MenuEditor = !ctrl && Pressed(keyboard, Keys.X),
+            EditorUndo = ctrl && Pressed(keyboard, Keys.Z),
+            EditorRedo = ctrl && Pressed(keyboard, Keys.Y),
+            EditorSave = ctrl && Pressed(keyboard, Keys.S),
         };
         _previous = keyboard;
         return commands;

@@ -8,12 +8,17 @@ namespace Quarp.Shell.Desktop;
 
 /// <summary>
 /// Desktop shell: one window, three modes (M9, ADR-026) — the game library, a running
-/// cartridge, and the editor stub. Without a cart path it opens on the library (the console's
+/// cartridge, and the sprite editor. Without a cart path it opens on the library (the console's
 /// face; the old windowed test pattern died with M9 — the palette is proven by
 /// <c>quarp pattern</c> and by the library itself, which is drawn on Master32); with a path it
 /// runs that cartridge directly, hot reload and all, and Esc quits the process — the
 /// developer's F5 loop, which the library never interrupts. Mode policy lives in
-/// <see cref="ShellModeMachine"/>; this class owns only what needs a graphics device.
+/// <see cref="ShellModeMachine"/>, editor policy in <see cref="SpriteEditorSession"/>; this
+/// class owns only what needs a graphics device, plus the routing of raw input to whichever
+/// mode is on screen. The mouse (new in M9 stage 2) is polled every frame but <b>acted on
+/// only in the editor</b> — the library stays keyboard-driven by decision; polling always
+/// keeps the reader's previous-state true across mode switches, so a button held into the
+/// editor produces no phantom press.
 ///
 /// <para><b>Two resolutions, on purpose.</b> A running cart is presented as the core's
 /// indexed framebuffer scaled by whole integers (ARCHITECTURE §5). The library and the stub
@@ -43,6 +48,7 @@ public sealed class QuarpGame : Game
     private readonly Color[] _palette;
     private readonly TickAccumulator _accumulator = new();
     private readonly ShellCommandReader _commands = new();
+    private readonly EditorMouseReader _mouse = new();
     private readonly ConsoleProfile _profile;
     private readonly ShellModeMachine _modes;
 
@@ -50,6 +56,7 @@ public sealed class QuarpGame : Game
     private Texture2D _screenTexture = null!;
     private ShellOverlay _overlay = null!;
     private LibraryRenderer _hostUi = null!;
+    private SpriteEditorRenderer _editorUi = null!;
     private AudioOutput? _audio;
 
     private TimeSpeed _lastSpeed = TimeSpeed.At(TimeSpeed.NormalIndex);
@@ -179,6 +186,7 @@ public sealed class QuarpGame : Game
         _screenTexture = new Texture2D(GraphicsDevice, _profile.Width, _profile.Height);
         _overlay = new ShellOverlay(GraphicsDevice, _profile.Width, _profile.Height);
         _hostUi = new LibraryRenderer(GraphicsDevice);
+        _editorUi = new SpriteEditorRenderer(GraphicsDevice);
 
         // Opened here rather than in the constructor: the audio device belongs to a running
         // Game, and an unavailable one is reported by AudioOutput rather than thrown.
@@ -196,6 +204,8 @@ public sealed class QuarpGame : Game
     {
         KeyboardState keyboard = Keyboard.GetState();
         ShellCommands commands = _commands.Read(keyboard);
+        // Read every frame in every mode (see the type comment), consumed by the editor only.
+        EditorMouse mouse = _mouse.Read(Mouse.GetState());
 
         switch (_modes.Mode)
         {
@@ -206,12 +216,7 @@ public sealed class QuarpGame : Game
                 UpdateLibrary(commands);
                 break;
             case ShellMode.Editor:
-                // The stub's one ability is the way back; X closes it too, mirroring the X
-                // that opened it.
-                if (commands.Quit || commands.MenuEditor)
-                {
-                    _modes.HandleEscape();
-                }
+                UpdateEditor(commands, mouse);
                 break;
         }
 
@@ -274,7 +279,7 @@ public sealed class QuarpGame : Game
         _audio?.EndFrame();
     }
 
-    /// <summary>One frame of the library: selection, launch, the editor stub, or leaving.</summary>
+    /// <summary>One frame of the library: selection, launch, opening the sprite editor, or leaving.</summary>
     private void UpdateLibrary(in ShellCommands commands)
     {
         if (commands.Quit)
@@ -306,6 +311,88 @@ public sealed class QuarpGame : Game
         }
     }
 
+    /// <summary>
+    /// One frame of the sprite editor: routes keys and mouse hits into the session, whose
+    /// policy the headless tests own. While the exit prompt is up it owns the keys — Z saves
+    /// and leaves, X discards and leaves, Esc stays — and everything else (including the
+    /// pencil) is deliberately deaf, so a stray click cannot change the sheet mid-decision.
+    /// </summary>
+    private void UpdateEditor(in ShellCommands commands, in EditorMouse mouse)
+    {
+        SpriteEditorSession editor = _modes.Editor!;
+        if (editor.ExitPromptShown)
+        {
+            if (commands.Quit)
+            {
+                _modes.HandleEscape();          // Esc lowers the prompt: "stay" — see SpriteEditorSession.RequestClose
+            }
+            else if (commands.MenuConfirm)
+            {
+                _modes.SaveEditorAndClose();
+            }
+            else if (commands.MenuEditor)
+            {
+                _modes.DiscardEditorAndClose();
+            }
+            return;
+        }
+        if (commands.Quit)
+        {
+            _modes.HandleEscape();              // clean → library; dirty → the prompt above
+            return;
+        }
+        if (commands.EditorUndo)
+        {
+            editor.Undo();
+        }
+        if (commands.EditorRedo)
+        {
+            editor.Redo();
+        }
+        if (commands.EditorSave)
+        {
+            editor.Save();                       // failure lands in SaveError; the footer shows it
+        }
+
+        // The same layout the renderer will draw this frame — geometry has one owner.
+        var layout = SpriteEditorLayout.Compute(
+            GraphicsDevice.PresentationParameters.BackBufferWidth,
+            GraphicsDevice.PresentationParameters.BackBufferHeight,
+            editor.RegionCells);
+        if (mouse.LeftPressed)
+        {
+            if (layout.TrySwatch(mouse.X, mouse.Y, out int color))
+            {
+                editor.SelectColor(color);
+            }
+            else if (layout.TrySheetCell(mouse.X, mouse.Y, out int cellX, out int cellY))
+            {
+                editor.SelectRegionCell(cellX, cellY);
+            }
+            else if (layout.TryCanvasPixel(mouse.X, mouse.Y, out int pressX, out int pressY))
+            {
+                editor.BeginStroke();
+                editor.Paint(pressX, pressY);
+            }
+        }
+        else if (mouse.LeftDown && editor.StrokeActive)
+        {
+            // Drags are clamped to the canvas: a stroke that wanders off the edge keeps
+            // painting along it instead of tearing, and the clamp is what upholds Paint's
+            // in-range contract.
+            layout.ClampCanvasPixel(mouse.X, mouse.Y, out int dragX, out int dragY);
+            editor.Paint(dragX, dragY);
+        }
+        if (mouse.LeftReleased)
+        {
+            editor.EndStroke();                  // one stroke commits as one undo step
+        }
+        if (mouse.RightPressed && layout.TryCanvasPixel(mouse.X, mouse.Y, out int pickX, out int pickY))
+        {
+            editor.PickColor(pickX, pickY);
+        }
+    }
+
     protected override void Draw(GameTime gameTime)
     {
         switch (_modes.Mode)
@@ -322,10 +409,11 @@ public sealed class QuarpGame : Game
                     _modes.LibraryMessage);
                 break;
             case ShellMode.Editor:
-                _hostUi.DrawEditorStub(
+                _editorUi.Draw(
                     _spriteBatch,
                     GraphicsDevice.PresentationParameters.BackBufferWidth,
-                    GraphicsDevice.PresentationParameters.BackBufferHeight);
+                    GraphicsDevice.PresentationParameters.BackBufferHeight,
+                    _modes.Editor!);
                 break;
         }
         base.Draw(gameTime);        // the game loop presents for us
@@ -421,6 +509,7 @@ public sealed class QuarpGame : Game
             _modes.Session?.Dispose();
             _overlay?.Dispose();
             _hostUi?.Dispose();
+            _editorUi?.Dispose();
             _audio?.Dispose();
         }
         base.Dispose(disposing);

@@ -203,16 +203,24 @@ public class ModeTransitionTests : IDisposable
         Assert.True(machine.ExitRequested);
     }
 
+    /// <summary>
+    /// Stage 2 made the editor real; the stage 1 transition claim still holds: X opens the
+    /// editor mode from the library, and Esc from a clean session returns without quitting.
+    /// The editor-specific behaviour (sheets, dirt, the exit prompt) lives in
+    /// <see cref="SpriteEditorMachineTests"/>.
+    /// </summary>
     [Fact]
-    public void TheEditorStubOpensFromTheLibraryAndEscapeReturns()
+    public void TheEditorOpensFromTheLibraryAndEscapeFromACleanSessionReturns()
     {
         var machine = LibraryMachine(new DrainCounter());
 
         machine.OpenEditor();
         Assert.Equal(ShellMode.Editor, machine.Mode);
+        Assert.NotNull(machine.Editor);             // a real session now, not a named empty screen
 
         machine.HandleEscape();
         Assert.Equal(ShellMode.Library, machine.Mode);
+        Assert.Null(machine.Editor);
         Assert.False(machine.ExitRequested);        // returning is not quitting
     }
 

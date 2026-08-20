@@ -5,8 +5,9 @@ using Quarp.Core;
 namespace Quarp.Shell.Desktop;
 
 /// <summary>
-/// Draws the library screen and the editor-mode stub — the console's face when no cartridge
-/// is running. Host UI, deliberately unlike the game presenter: it paints at the window's
+/// Draws the library screen — the console's face when no cartridge is running (the sprite
+/// editor has its own renderer, <see cref="SpriteEditorRenderer"/>, because it also owns a
+/// sheet texture). Host UI, deliberately unlike the game presenter: it paints at the window's
 /// native resolution (an organizer decision for M9 stage 1 — this is the host's screen, not
 /// the virtual one), but on <see cref="Palette.Master32"/> colours and the system font, so it
 /// still reads as the console and not as an OS dialog.
@@ -49,7 +50,7 @@ public sealed class LibraryRenderer : IDisposable
         ArgumentNullException.ThrowIfNull(batch);
         ArgumentNullException.ThrowIfNull(library);
         _device.Clear(Ink);
-        int scale = UiScale(width, height);
+        int scale = PixelFontAtlas.UiScale(width, height);
         int margin = 4 * scale;
         batch.Begin(samplerState: SamplerState.PointClamp);
 
@@ -86,22 +87,6 @@ public sealed class LibraryRenderer : IDisposable
         batch.End();
     }
 
-    /// <summary>
-    /// The editor mode's placeholder (ADR-026 stage 1: the mode exists, its editors do not
-    /// yet). A named empty screen and the way back — nothing else, on purpose.
-    /// </summary>
-    public void DrawEditorStub(SpriteBatch batch, int width, int height)
-    {
-        ArgumentNullException.ThrowIfNull(batch);
-        _device.Clear(Ink);
-        int scale = UiScale(width, height);
-        batch.Begin(samplerState: SamplerState.PointClamp);
-        DrawCentered(batch, "EDITOR", width, height / 2 - PixelFontAtlas.LineHeight(scale * 2), scale * 2, Bright);
-        DrawCentered(batch, "NOTHING HERE YET - THE ART EDITORS ARRIVE IN STAGE 2", width, height / 2 + scale, scale, Text);
-        DrawCentered(batch, "PRESS ESC TO RETURN TO THE LIBRARY", width, height / 2 + scale + PixelFontAtlas.LineHeight(scale) * 2, scale, Dim);
-        batch.End();
-    }
-
     public void Dispose()
     {
         _font.Dispose();
@@ -131,15 +116,4 @@ public sealed class LibraryRenderer : IDisposable
         }
     }
 
-    private void DrawCentered(SpriteBatch batch, string text, int width, int y, int scale, Color color) =>
-        _font.Draw(batch, text, (width - PixelFontAtlas.MeasureWidth(text, scale)) / 2, y, scale, color);
-
-    /// <summary>
-    /// Whole-integer text scale from the window size. Anchored at 320x180 rather than the
-    /// console's 160x90 because host UI wants density, not console-sized letters: a 1280x720
-    /// window gets x4 (24 px line height, ~28 rows), and the floor of 2 keeps text legible in
-    /// a window shrunk below the anchor.
-    /// </summary>
-    private static int UiScale(int width, int height) =>
-        Math.Max(2, Math.Min(width / 320, height / 180));
 }

@@ -3,9 +3,9 @@ using Quarp.CartKit;
 namespace Quarp.Shell.Desktop;
 
 /// <summary>
-/// The three faces of the one console window (ADR-026: library ↔ game ↔ editor).
-/// <see cref="Editor"/> is a stub this milestone stage: a screen that names itself and
-/// returns, so the mode exists before the editors that will live in it do.
+/// The three faces of the one console window (ADR-026: library ↔ game ↔ editor). Since M9
+/// stage 2 the editor is real: it holds a <see cref="SpriteEditorSession"/> for the cart the
+/// library's bar was on.
 /// </summary>
 public enum ShellMode
 {
@@ -30,8 +30,9 @@ public enum ShellMode
 /// <para><b>Escape means different things on purpose</b> (work order, stage 1): a cart started
 /// as <c>quarp run &lt;cart&gt;</c> is the author's F5 loop, and Esc quits the process like it
 /// always has — the library must not wedge itself into that loop. A cart started from the
-/// library returns to the library. Esc in the library quits; Esc in the editor stub returns to
-/// the library, because the stub's whole job is to have a way back.</para>
+/// library returns to the library. Esc in the library quits; Esc in the editor returns to the
+/// library when the session is clean, and raises the session's footer prompt when it is not —
+/// unsaved pixels leave only through an explicit Z (save) or X (discard), never silently.</para>
 /// </summary>
 public sealed class ShellModeMachine
 {
@@ -87,6 +88,9 @@ public sealed class ShellModeMachine
     /// <summary>The running cartridge; non-null exactly while <see cref="Mode"/> is <see cref="ShellMode.Game"/>.</summary>
     public CartSession? Session { get; private set; }
 
+    /// <summary>The open sprite sheet; non-null exactly while <see cref="Mode"/> is <see cref="ShellMode.Editor"/>.</summary>
+    public SpriteEditorSession? Editor { get; private set; }
+
     /// <summary>
     /// True once Escape meant "leave the process". The shell polls this and calls
     /// <c>Game.Exit()</c>; the machine cannot end the process itself and must not try —
@@ -110,7 +114,12 @@ public sealed class ShellModeMachine
                 LeaveGameForLibrary();
                 break;
             case ShellMode.Editor:
-                Mode = ShellMode.Library;
+                // The session judges (clean closes, dirty raises or lowers its prompt);
+                // the machine only executes the verdict.
+                if (Editor!.RequestClose())
+                {
+                    CloseEditor();
+                }
                 break;
             default:
                 // A direct-launch game or the library itself: leave the process. The session,
@@ -153,13 +162,78 @@ public sealed class ShellModeMachine
         }
     }
 
-    /// <summary>Library → editor stub. A no-op from any other mode: the editor opens from the library only.</summary>
+    /// <summary>
+    /// X in the library: opens the sprite editor on the selected cart's own sheet. Folder
+    /// carts only — a .quarp8 is a sealed package, and the honest answer is a library line
+    /// <em>before</em> any editing, not a surprise at save time (work order: unpacking is not
+    /// this milestone). A cart with no gfx.png opens as an empty sheet — that is snake, and
+    /// it is the normal path, not an error. Load failures (corrupt PNG, unreadable file)
+    /// report exactly like a failed launch: the library survives every cart it lists.
+    /// </summary>
     public void OpenEditor()
     {
-        if (Mode == ShellMode.Library)
+        if (Mode != ShellMode.Library || Library.Selected is not CartLibraryEntry entry)
         {
-            Mode = ShellMode.Editor;
+            return;
         }
+        if (!Directory.Exists(entry.Path))
+        {
+            LibraryMessage = "read-only: unpack to a folder to edit";
+            return;
+        }
+        try
+        {
+            Editor = new SpriteEditorSession(entry.Path);
+            Mode = ShellMode.Editor;
+            LibraryMessage = null;
+        }
+        catch (CartLoadException e)
+        {
+            LibraryMessage = $"{entry.Name}: {FirstLine(e.Message)}";
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        {
+            LibraryMessage = $"{entry.Name}: {FirstLine(e.Message)}";
+        }
+    }
+
+    /// <summary>
+    /// Z on the editor's exit prompt: save, then leave — but only if the save really landed;
+    /// a failed write keeps the editor (and the author's pixels) alive with the error in the
+    /// footer. Guarded to the prompt because a bare Z has no exit meaning in the editor.
+    /// </summary>
+    public void SaveEditorAndClose()
+    {
+        if (Mode != ShellMode.Editor || Editor is not { ExitPromptShown: true } editor)
+        {
+            return;
+        }
+        if (editor.Save())
+        {
+            CloseEditor();
+        }
+    }
+
+    /// <summary>X on the editor's exit prompt: leave without saving — the disk stays byte-for-byte untouched.</summary>
+    public void DiscardEditorAndClose()
+    {
+        if (Mode != ShellMode.Editor || Editor is not { ExitPromptShown: true })
+        {
+            return;
+        }
+        CloseEditor();
+    }
+
+    /// <summary>
+    /// Editor → library. The rescan mirrors <see cref="LeaveGameForLibrary"/>: carts appear
+    /// and disappear while one is being edited, and the bar must land on the cart just edited
+    /// whatever moved around it.
+    /// </summary>
+    private void CloseEditor()
+    {
+        Editor = null;
+        Mode = ShellMode.Library;
+        Library.Rescan();
     }
 
     /// <summary>

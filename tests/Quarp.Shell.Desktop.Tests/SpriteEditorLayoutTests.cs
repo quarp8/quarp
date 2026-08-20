@@ -6,15 +6,17 @@ using Xunit;
 namespace Quarp.Shell.Desktop.Tests;
 
 /// <summary>
-/// The editor screen's geometry contract under the owner's verdict layout (M9 stage 2.5, the
-/// second review applied): whole-integer scales, the dictated strip order (exit left;
+/// The editor screen's geometry contract under the owner's verdict layout (M9 stage 2.5,
+/// fourth review applied): whole-integer scales, the dictated strip order (exit left;
 /// music-sounds-tilemaps-sprites-code from the right corner leftwards; the six-slot toolbar
-/// column with no action row; palette over the layers stub over the sheet; the full-width
-/// tab and status bands), no overlapping panels at the shell's real window sizes, and — the
-/// part that actually bites — hit tests that agree with the rectangles, because
-/// <see cref="SpriteEditorLayout"/> is the single owner both the renderer draws from and the
-/// mouse routing asks. A drift between "where the button is" and "what a click on it means"
-/// is exactly the bug class this file exists to make impossible.
+/// column with no action row; the right column at the window's edge — palette on top, layer
+/// tabs, the palette-wide sheet window, its scroll slider; the size toggle in the band left
+/// of the column; the full-width tab and status bands), no overlapping panels at the shell's
+/// real window sizes, and — the part that actually bites — hit tests that agree with the
+/// rectangles, because <see cref="SpriteEditorLayout"/> is the single owner both the
+/// renderer draws from and the mouse routing asks. A drift between "where the button is"
+/// and "what a click on it means" is exactly the bug class this file exists to make
+/// impossible.
 /// </summary>
 public class SpriteEditorLayoutTests
 {
@@ -39,7 +41,11 @@ public class SpriteEditorLayoutTests
         // a fractional scale could not produce these sizes.
         Assert.Equal(layout.RegionPixels * layout.CanvasScale, layout.Canvas.Width);
         Assert.Equal(layout.Canvas.Width, layout.Canvas.Height);        // the region is square, so is its view
-        Assert.Equal(VirtualConsole.SheetWidth * layout.SheetScale, layout.Sheet.Width);
+        // The sheet window scales by its height (fourth review): the tallest whole multiple
+        // that fits, floored at 1 — and what it shows is whole sheet pixels on both axes.
+        Assert.True(layout.SheetScale * VirtualConsole.SheetHeight <= layout.Sheet.Height
+            || layout.SheetScale == 1);
+        Assert.True(layout.SheetVisiblePixels >= 1 && layout.SheetVisiblePixels <= VirtualConsole.SheetWidth);
         // Icon buttons are 8-px masks at scale Ui plus symmetric padding — whole by construction.
         Assert.Equal((EditorIcons.IconPixels + 4) * layout.Ui, layout.ButtonSize);
     }
@@ -53,16 +59,16 @@ public class SpriteEditorLayoutTests
         Assert.True(window.Contains(layout.Canvas));
         Assert.True(window.Contains(layout.Sheet));
         Assert.True(window.Contains(layout.Swatches));
-        Assert.True(window.Contains(layout.LayersStub));
+        Assert.True(window.Contains(layout.SheetSlider));
         Assert.True(window.Contains(layout.StatusBar));
         Assert.False(layout.Canvas.Intersects(layout.Sheet));
         Assert.False(layout.Canvas.Intersects(layout.Swatches));
         Assert.False(layout.Sheet.Intersects(layout.Swatches));
-        Assert.False(layout.LayersStub.Intersects(layout.Swatches));
-        Assert.False(layout.LayersStub.Intersects(layout.Sheet));
+        Assert.False(layout.SheetSlider.Intersects(layout.Sheet));
+        Assert.False(layout.SheetSlider.Intersects(layout.Swatches));
         // Panels stop above the reserved prompt line — the prompt must never hide under the sheet.
         Assert.True(layout.Canvas.Bottom <= layout.PromptY);
-        Assert.True(layout.Sheet.Bottom <= layout.PromptY);
+        Assert.True(layout.SheetSlider.Bottom <= layout.PromptY);
     }
 
     [Fact]
@@ -71,7 +77,7 @@ public class SpriteEditorLayoutTests
         var layout = Default();
         var window = new Rectangle(0, 0, 1280, 720);
 
-        Assert.Equal(AllButtons.Length, layout.Buttons.Count);          // all 16, none forgotten
+        Assert.Equal(AllButtons.Length, layout.Buttons.Count);          // all 22, none forgotten
         for (int i = 0; i < layout.Buttons.Count; i++)
         {
             Assert.True(window.Contains(layout.Buttons[i].Rect));
@@ -165,15 +171,40 @@ public class SpriteEditorLayoutTests
         Assert.False(layout.StatusBar.Intersects(layout.Sheet));
     }
 
-    /// <summary>The right column stacks in the verdict's order: palette, then the layers stub, then the sheet.</summary>
+    /// <summary>
+    /// The right column after the fourth review: the palette hugs the window's right edge,
+    /// the five layer tabs sit between it and the sheet window, the sheet window is exactly
+    /// palette-wide and half the panel strip tall, and the slider track lies directly under
+    /// it. The size toggle lives in the band between the canvas and the column.
+    /// </summary>
     [Fact]
-    public void TheRightColumnStacksPaletteLayersSheet()
+    public void TheRightColumnFollowsTheFourthReview()
     {
         var layout = Default();
+        Rectangle firstTab = layout.ButtonRect(EditorButton.LayerTab1);
+        Rectangle lastTab = layout.ButtonRect(EditorButton.LayerTab5);
+        Rectangle toggle = layout.ButtonRect(EditorButton.SizeToggle);
 
+        Assert.Equal(1280 - layout.Margin, layout.Swatches.Right);      // the palette hugs the edge
         Assert.True(layout.Swatches.X >= layout.Canvas.Right);
-        Assert.True(layout.Swatches.Bottom <= layout.LayersStub.Y);
-        Assert.True(layout.LayersStub.Bottom <= layout.Sheet.Y);
+        Assert.Equal(layout.Swatches.X, layout.Sheet.X);                // the column shares one left edge
+        Assert.Equal(layout.Swatches.Width, layout.Sheet.Width);        // sheet window = palette width
+        // Half the panel strip: the space between the tab band and the prompt line.
+        int panelTop = layout.TabStrip.Bottom + 2 * layout.Ui;
+        int panelBottom = layout.PromptY - 2 * layout.Ui;
+        Assert.Equal((panelBottom - panelTop) / 2, layout.Sheet.Height);
+        // Tabs above the sheet window, inside the column, in order 1..5 left to right.
+        Assert.Equal(layout.Sheet.X, firstTab.X);
+        Assert.True(firstTab.X < lastTab.X);
+        Assert.True(layout.Swatches.Bottom <= firstTab.Y);
+        Assert.True(firstTab.Bottom <= layout.Sheet.Y);
+        // The slider directly under the sheet window, same width.
+        Assert.Equal(layout.Sheet.X, layout.SheetSlider.X);
+        Assert.Equal(layout.Sheet.Width, layout.SheetSlider.Width);
+        Assert.True(layout.Sheet.Bottom <= layout.SheetSlider.Y);
+        // The toggle in the band: right of the canvas, left of the column.
+        Assert.True(toggle.X >= layout.Canvas.Right);
+        Assert.True(toggle.Right <= layout.Swatches.X);
     }
 
     /// <summary>
@@ -225,6 +256,7 @@ public class SpriteEditorLayoutTests
     [InlineData(EditorButton.ToolSelect, 3)]    // 2 → 3 in wave 2g: the owner's wand is the select group's third variant
     [InlineData(EditorButton.ToolShape, 2)]
     [InlineData(EditorButton.ToolTransform, 3)]
+    [InlineData(EditorButton.SizeToggle, 3)]    // 8/16/32 — the size list rides the same flyout machinery (wave 2h)
     public void FlyoutVariantsRoundTripThroughTheirRectangles(EditorButton slot, int count)
     {
         var layout = Default();
@@ -292,9 +324,34 @@ public class SpriteEditorLayoutTests
         int cell = layout.SheetScale * VirtualConsole.SpriteSize;
 
         Assert.True(layout.TrySheetCell(
-            layout.Sheet.X + 5 * cell + cell / 2, layout.Sheet.Y + 9 * cell + cell / 2, out int cellX, out int cellY));
+            layout.Sheet.X + 5 * cell + cell / 2, layout.Sheet.Y + 9 * cell + cell / 2, 0,
+            out int cellX, out int cellY));
 
         Assert.Equal((5, 9), (cellX, cellY));
+    }
+
+    /// <summary>
+    /// The scrolled hit test agrees with the scrolled picture: the same window point names a
+    /// cell shifted by exactly the scroll offset — and the slack right of the drawn sheet
+    /// (the palette-wide window is wider than the x2 sheet at the default size) is nobody's.
+    /// </summary>
+    [Fact]
+    public void SheetHitTestFollowsTheScrollAndRefusesTheSlack()
+    {
+        var layout = Default();
+        int cell = layout.SheetScale * VirtualConsole.SpriteSize;
+
+        Assert.True(layout.TrySheetCell(
+            layout.Sheet.X + cell / 2, layout.Sheet.Y + cell / 2, 2 * VirtualConsole.SpriteSize,
+            out int cellX, out _));
+        Assert.Equal(2, cellX);     // two sprite columns scrolled off → the first visible cell is column 2
+
+        // A point inside the window but right of the sheet's drawn edge hits nothing.
+        int drawnRight = layout.Sheet.X + VirtualConsole.SheetWidth * layout.SheetScale;
+        if (drawnRight < layout.Sheet.Right)
+        {
+            Assert.False(layout.TrySheetCell(drawnRight + 1, layout.Sheet.Y + cell / 2, 0, out _, out _));
+        }
     }
 
     [Fact]
@@ -304,7 +361,7 @@ public class SpriteEditorLayoutTests
 
         // The window's corner: margin space, owned by no panel and no button.
         Assert.False(layout.TryCanvasPixel(0, 0, out _, out _));
-        Assert.False(layout.TrySheetCell(0, 0, out _, out _));
+        Assert.False(layout.TrySheetCell(0, 0, 0, out _, out _));
         Assert.False(layout.TrySwatch(0, 0, out _));
         Assert.False(layout.TryButton(0, 0, out _));
         Assert.False(layout.TryPromptVerb(0, 0, out _));

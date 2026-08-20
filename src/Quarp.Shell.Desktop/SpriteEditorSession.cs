@@ -62,29 +62,41 @@ public enum SelectionVariant
 /// and every claim the work order makes (one stroke = one undo step, a clean session never
 /// touches the disk, nothing above palette index 15 can enter the sheet) is provable headless.
 ///
-/// <para><b>The 0-15 invariant has exactly four doors.</b> Pixels enter the sheet through
-/// (1) the load in the constructor — <see cref="PngDecoder.DecodeToPaletteIndices"/> only ever
-/// emits matches against the 16 visible palette colors; (2) the pencil, the bucket and the
-/// shape commit — which write <see cref="CurrentColor"/> (the shapes through the very same
-/// <see cref="Plot"/> the pencil uses), and <see cref="SelectColor"/> throws on anything
-/// outside 0-15 while <see cref="PickColor"/> copies a value already in the sheet;
-/// (3) undo/redo — which swap whole arrays that were themselves sheets; (4) the region
-/// edits — flips, the rotation, the selection move and the stamp only copy values already
-/// read out of a sheet, and the clears (whole region, selected pixels, and the holes a move
-/// leaves) write the literal 0. There is no fifth setter, so the byte casts in the plot and
-/// fill routines can never truncate. The selection mask and the stamp source are session
-/// state beside the sheet, not in it — marking and grabbing write no pixels at all, only
-/// their commits do, through door (4). <see cref="PngEncoder"/> re-checks on save as the
-/// owner of its own input contract; that check is unreachable from here by construction.</para>
+/// <para><b>Real layers since wave 2h (ADR-027).</b> The session holds five fixed full
+/// sheets, layer index 0 the base and higher indices covering it, color 0 transparent in the
+/// composite. Every tool writes the <b>active</b> layer only; the canvas, the sheet view and
+/// the saved gfx.png show the flattened <see cref="Pixels"/> composite; the eyedropper and
+/// the wand read the active layer, because they answer "what did I draw here", not "what
+/// shows through". The console never learns any of this: gfx-layers.png is an authoring file
+/// the loader and packer do not read, and the flattened composite is all a cartridge gets.</para>
 ///
-/// <para><b>Dirty is content, not history.</b> <see cref="IsDirty"/> compares the live sheet
-/// against a snapshot of what the disk holds (or held nothing — an all-zero sheet), because
-/// the save contract is about bytes: undoing back to the loaded picture makes the session
-/// clean again, and even hand-repainting a pixel to its old color counts, since saving then
-/// would change nothing. A 16 KB compare per query costs microseconds and cannot drift out of
-/// sync the way a depth counter under an undo/redo/new-stroke braid can.</para>
+/// <para><b>The 0-15 invariant has exactly four doors — layers added none.</b> Pixels enter
+/// a layer through (1) the load in the constructor — <see cref="PngDecoder.DecodeToPaletteIndices"/>
+/// only ever emits matches against the 16 visible palette colors, for gfx.png and
+/// gfx-layers.png alike; (2) the pencil, the bucket and the shape commit — which write
+/// <see cref="CurrentColor"/> (the shapes through the very same <see cref="Plot"/> the pencil
+/// uses), and <see cref="SelectColor"/> throws on anything outside 0-15 while
+/// <see cref="PickColor"/> copies a value already in a layer; (3) undo/redo — which swap
+/// whole layer stacks that were themselves stacks; (4) the region edits — flips, the
+/// rotation, the selection move and the stamp only copy values already read out of a layer,
+/// and the clears (whole region, selected pixels, and the holes a move leaves) write the
+/// literal 0. The composite is a pure read of the stack and the layer switch writes no
+/// pixels, so there is still no fifth setter and the byte casts in the plot and fill
+/// routines can never truncate. The selection mask and the stamp source are session state
+/// beside the stack, not in it — marking and grabbing write no pixels at all, only their
+/// commits do, through door (4). <see cref="PngEncoder"/> re-checks on save as the owner of
+/// its own input contract; that check is unreachable from here by construction.</para>
 ///
-/// <para><b>The region can never hang off the sheet.</b> The size cycle (8/16/32 px a side)
+/// <para><b>Dirty is content, not history.</b> <see cref="IsDirty"/> compares the live
+/// <b>stack</b> against a snapshot of what the disk holds (or held nothing — an all-zero
+/// stack), because the save contract is about bytes: undoing back to the loaded picture makes
+/// the session clean again, and even hand-repainting a pixel to its old color counts, since
+/// saving then would change nothing. An 80 KB compare per query costs microseconds and cannot
+/// drift out of sync the way a depth counter under an undo/redo/new-stroke braid can.
+/// A change buried under an opaque upper layer is honestly dirty even though the composite —
+/// and therefore gfx.png — comes out byte-identical: the layers file still has to change.</para>
+///
+/// <para><b>The region can never hang off the sheet.</b> The size setter (8/16/32 px a side)
 /// and the grid click are the only two writers of the region, and both go through the same
 /// clamp: the anchor stops at <c>GridCells - RegionCells</c>. That single invariant is what
 /// lets every transform below read and write blindly through <see cref="SheetOffset"/> —
@@ -96,22 +108,44 @@ public sealed class SpriteEditorSession
     /// <summary>Sheet grid side in sprite cells — 16, from the one owner of sheet geometry.</summary>
     public const int GridCells = VirtualConsole.SheetColumns;
 
+    /// <summary>Fixed layer count (ADR-027): five full sheets, no adding or removing.</summary>
+    public const int LayerCount = 5;
+
+    /// <summary>
+    /// The authoring stack's file beside gfx.png (ADR-027): the five layers as one
+    /// 128x640 indexed PNG, layer 0 (the base) the top strip. One name owner — the
+    /// constructor reads it, <see cref="Save"/> writes it, tests point at it.
+    /// </summary>
+    public const string LayersFileName = "gfx-layers.png";
+
     private readonly string _gfxPath;
+    private readonly string _layersPath;
 
-    /// <summary>The sheet the disk holds: the dirty comparison's baseline, replaced on save.</summary>
-    private byte[] _saved;
+    /// <summary>The stack the disk holds: the dirty comparison's baseline, replaced on save. Never aliases <see cref="_layers"/>.</summary>
+    private byte[][] _savedLayers;
 
-    /// <summary>The live sheet. Replaced wholesale by undo/redo, mutated in place by the pencil.</summary>
-    private byte[] _sheet;
+    /// <summary>
+    /// The live stack, base first. Replaced wholesale by undo/redo; only the active layer's
+    /// array is ever mutated in place, and only by the tools.
+    /// </summary>
+    private byte[][] _layers;
 
-    // Undo is a stack of pre-stroke sheets. At 16 KB a snapshot, a hundred strokes cost less
-    // than one game texture, so there is no cap and no delta encoding — simplicity is what
-    // keeps "undo restores exactly" beyond doubt.
-    private readonly List<byte[]> _undo = new();
-    private readonly List<byte[]> _redo = new();
+    // The composite cache: rebuilt lazily when Version says the picture moved. 80 K byte
+    // reads per rebuild is microseconds; caching exists so sixty Pixels reads a second on an
+    // idle editor cost nothing, not because the rebuild is expensive.
+    private readonly byte[] _composite = new byte[CartData.GfxWidth * CartData.GfxHeight];
+    private int _compositeVersion = -1;
 
-    /// <summary>Pre-stroke sheet while the button is down; null between strokes.</summary>
-    private byte[]? _strokeBackup;
+    // Undo is a stack of pre-stroke layer stacks — the whole 5x16 KB every time (the wave's
+    // order), because a snapshot sharing the untouched layers' arrays would be corrupted the
+    // moment a later stroke mutated one of them in place. A hundred snapshots still cost
+    // less than one game texture, so there is no cap and no delta encoding — simplicity is
+    // what keeps "undo restores exactly" beyond doubt.
+    private readonly List<byte[][]> _undo = new();
+    private readonly List<byte[][]> _redo = new();
+
+    /// <summary>Pre-stroke stack while the button is down; null between strokes.</summary>
+    private byte[][]? _strokeBackup;
     private bool _strokeChanged;
     private int _lastPaintX = -1;
     private int _lastPaintY;
@@ -119,7 +153,7 @@ public sealed class SpriteEditorSession
     // The shape gesture's whole state: anchor (where the press landed), corner (where the drag
     // is now), the Ctrl-held "filled" flag, and the preview's point set. The points are THE
     // shape — the commit plots this very list, so the preview can never disagree with what
-    // lands (one owner of the shape formula, per the playbook). None of it touches _sheet:
+    // lands (one owner of the shape formula, per the playbook). None of it touches a layer:
     // the preview lives here and is drawn by the renderer as an overlay, which is the whole
     // "предпросмотр в лист не пишется" contract made structural.
     private bool _shapeActive;
@@ -134,7 +168,7 @@ public sealed class SpriteEditorSession
     /// What an open select-tool press currently means. Rectangle, Brush and Wand are marking a
     /// NEW mask (the kind is fixed at the press — half a box cannot become half a stroke); Move
     /// is dragging the selected pixels by an offset. Exactly one can be open, like the shape
-    /// gesture, and none of them touches <c>_sheet</c> — only <see cref="CommitSelect"/> does.
+    /// gesture, and none of them touches a layer — only <see cref="CommitSelect"/> does.
     /// </summary>
     private enum SelectGesture
     {
@@ -175,29 +209,128 @@ public sealed class SpriteEditorSession
 
     /// <summary>
     /// Opens the sheet of a cartridge <b>folder</b> (.quarp8 files never get here — the mode
-    /// machine refuses them with the read-only line). No gfx.png is the normal case, not an
-    /// error: snake has none, and an all-zero sheet is exactly what its cart loads
-    /// (Format spec v1: absent assets = zeros). The file is only ever created by the first
-    /// dirty save. A corrupt PNG throws <see cref="CartLoadException"/> out of here so the
-    /// library can report it the way it reports a broken launch.
+    /// machine refuses them with the read-only line). The layer stack loads from
+    /// gfx-layers.png when it exists (ADR-027: the authoring file is the source, gfx.png the
+    /// flattened artifact); without one, layer 0 fills from gfx.png and the rest stay empty —
+    /// and no gfx.png at all is the normal case, not an error: snake has none, and an
+    /// all-zero stack is exactly what its cart loads (Format spec v1: absent assets = zeros).
+    /// Files are only ever created by the first dirty save. A corrupt PNG — either file —
+    /// throws <see cref="CartLoadException"/> out of here so the library can report it the
+    /// way it reports a broken launch.
     /// </summary>
     public SpriteEditorSession(string cartFolder)
     {
         ArgumentNullException.ThrowIfNull(cartFolder);
         CartName = Path.GetFileName(Path.TrimEndingDirectorySeparator(cartFolder));
         _gfxPath = Path.Combine(cartFolder, "gfx.png");
-        _saved = File.Exists(_gfxPath)
+        _layersPath = Path.Combine(cartFolder, LayersFileName);
+        int sheetSize = CartData.GfxWidth * CartData.GfxHeight;
+        byte[]? gfxOnDisk = File.Exists(_gfxPath)
             ? PngDecoder.DecodeToPaletteIndices(
                 File.ReadAllBytes(_gfxPath), CartData.GfxWidth, CartData.GfxHeight, "gfx.png")
-            : new byte[CartData.GfxWidth * CartData.GfxHeight];
-        _sheet = (byte[])_saved.Clone();
+            : null;
+        _savedLayers = new byte[LayerCount][];
+        if (File.Exists(_layersPath))
+        {
+            // The stack file wins over gfx.png (ADR-027: gfx.png is the derived artifact).
+            // When gfx.png disagrees — an Aseprite edit of the flattened file, most likely —
+            // the divergence is surfaced instead of silently absorbed: the next save will
+            // overwrite gfx.png with this stack's composite, and the author deserves to know
+            // before that happens, not after.
+            byte[] stacked = PngDecoder.DecodeToPaletteIndices(
+                File.ReadAllBytes(_layersPath),
+                CartData.GfxWidth, CartData.GfxHeight * LayerCount, LayersFileName);
+            for (int i = 0; i < LayerCount; i++)
+            {
+                _savedLayers[i] = stacked[(i * sheetSize)..((i + 1) * sheetSize)];
+            }
+            var flattened = new byte[sheetSize];
+            CompositeInto(_savedLayers, flattened);
+            GfxOutOfSyncOnDisk = !flattened.AsSpan().SequenceEqual(gfxOnDisk ?? new byte[sheetSize]);
+        }
+        else
+        {
+            _savedLayers[0] = gfxOnDisk ?? new byte[sheetSize];
+            for (int i = 1; i < LayerCount; i++)
+            {
+                _savedLayers[i] = new byte[sheetSize];
+            }
+        }
+        _layers = CloneStack(_savedLayers);
     }
 
     /// <summary>Folder name, for the header. The manifest is deliberately not read — same call as <see cref="CartLibraryEntry"/>.</summary>
     public string CartName { get; }
 
-    /// <summary>The live sheet, row-major 128x128, values 0-15 — see the type comment for why nothing else can appear.</summary>
-    public ReadOnlySpan<byte> Pixels => _sheet;
+    /// <summary>
+    /// The flattened composite, row-major 128x128, values 0-15 — what the canvas, the sheet
+    /// view and a saved gfx.png show (ADR-027: layer 0 under, higher layers cover, 0
+    /// transparent). Rebuilt lazily against <see cref="Version"/>; reading it twice between
+    /// changes is free.
+    /// </summary>
+    public ReadOnlySpan<byte> Pixels
+    {
+        get
+        {
+            if (_compositeVersion != Version)
+            {
+                CompositeInto(_layers, _composite);
+                _compositeVersion = Version;
+            }
+            return _composite;
+        }
+    }
+
+    /// <summary>One layer's own pixels, for the tests that prove strokes land in the active layer and nowhere else.</summary>
+    public ReadOnlySpan<byte> LayerPixels(int index)
+    {
+        if (index is < 0 or >= LayerCount)
+        {
+            throw new ArgumentOutOfRangeException(nameof(index), index, $"layers are 0-{LayerCount - 1}.");
+        }
+        return _layers[index];
+    }
+
+    /// <summary>
+    /// The layer every tool writes, 0-based (the tabs and tooltips show 1-based). Written
+    /// only by <see cref="SelectLayer"/>.
+    /// </summary>
+    public int ActiveLayerIndex { get; private set; }
+
+    /// <summary>
+    /// True when gfx-layers.png was loaded but its composite is not what gfx.png holds —
+    /// someone edited the flattened file outside (Aseprite is a first-class path, ADR-026).
+    /// The stack wins by ADR-027, so the next save overwrites gfx.png; the renderer shows
+    /// this so that overwrite is announced, not a surprise. Cleared by the save that
+    /// reconciles the two files.
+    /// </summary>
+    public bool GfxOutOfSyncOnDisk { get; private set; }
+
+    /// <summary>
+    /// Layer tab click, or PgUp/PgDn. Clamped, not thrown, like the region anchor: PgUp held
+    /// at the top layer parks there. Switching mid-gesture is a change of subject, same
+    /// discipline as <see cref="SelectTool"/>: an open float parks on the layer it grabbed
+    /// from (its pixels belong there), open previews and half-made masks die — but a
+    /// <b>committed</b> selection survives, Photoshop's own convention: the mask marks
+    /// region positions, not layer pixels, and the ants stay visible under the select tool,
+    /// so nothing lingers invisibly (the third review's trap). Selecting the layer already
+    /// active is a visible no-op so a repeated tab click cannot eat an open gesture.
+    /// </summary>
+    public void SelectLayer(int index)
+    {
+        int next = Math.Clamp(index, 0, LayerCount - 1);
+        if (next == ActiveLayerIndex)
+        {
+            return;
+        }
+        if (MoveActive)
+        {
+            CommitSelect();     // parked on the OLD layer — the float's pixels were lifted from it
+        }
+        InterruptGesture();
+        ActiveLayerIndex = next;
+        // No Version bump: switching layers repaints nothing — the composite is unchanged.
+    }
 
     /// <summary>The pencil's ink, always a visible palette index 0-15. Painting with 0 IS the eraser (work order: no separate tool).</summary>
     public int CurrentColor { get; private set; }
@@ -292,8 +425,21 @@ public sealed class SpriteEditorSession
     /// </summary>
     public IReadOnlyList<(int X, int Y)> ShapePreview => _shapePoints;
 
-    /// <summary>True when the live sheet differs from what the disk holds — see the type comment for why this is a content compare.</summary>
-    public bool IsDirty => !_sheet.AsSpan().SequenceEqual(_saved);
+    /// <summary>True when the live stack differs from what the disk holds — see the type comment for why this is a content compare.</summary>
+    public bool IsDirty
+    {
+        get
+        {
+            for (int i = 0; i < LayerCount; i++)
+            {
+                if (!_layers[i].AsSpan().SequenceEqual(_savedLayers[i]))
+                {
+                    return true;
+                }
+            }
+            return false;
+        }
+    }
 
     public bool CanUndo => _undo.Count > 0;
 
@@ -372,7 +518,7 @@ public sealed class SpriteEditorSession
     public void MoveCursor(int dx, int dy) => SetCursor(CursorX + dx, CursorY + dy);
 
     /// <summary>
-    /// Left button pressed on the canvas. The pre-stroke sheet is snapshotted here and becomes
+    /// Left button pressed on the canvas. The pre-stroke stack is snapshotted here and becomes
     /// the undo entry when the stroke ends — which is the whole "one stroke = one undo step"
     /// mechanism: nothing inside the stroke ever touches the undo stack.
     /// </summary>
@@ -382,7 +528,7 @@ public sealed class SpriteEditorSession
         {
             return;     // A second press without a release (focus loss glitches) folds into the open stroke.
         }
-        _strokeBackup = (byte[])_sheet.Clone();
+        _strokeBackup = CloneStack(_layers);
         _strokeChanged = false;
         _lastPaintX = -1;
     }
@@ -421,7 +567,7 @@ public sealed class SpriteEditorSession
     /// </summary>
     public void EndStroke()
     {
-        if (_strokeBackup is not byte[] backup)
+        if (_strokeBackup is not byte[][] backup)
         {
             return;
         }
@@ -435,12 +581,18 @@ public sealed class SpriteEditorSession
         _redo.Clear();
     }
 
-    /// <summary>Right button on the canvas: the pencil takes the color under the cursor (PICO-8's pattern, per the niche survey).</summary>
+    /// <summary>
+    /// Right button on the canvas: the pencil takes the color under the cursor (PICO-8's
+    /// pattern, per the niche survey) — from the <b>active layer</b>, not the composite
+    /// (the wave's card): the eyedropper answers "what did I draw here", and picking a
+    /// covering layer's color while standing on a lower one would hand the pencil ink the
+    /// author never placed on this layer.
+    /// </summary>
     public void PickColor(int localX, int localY)
     {
         ValidateLocal(localX, nameof(localX));
         ValidateLocal(localY, nameof(localY));
-        CurrentColor = _sheet[SheetOffset(localX, localY)];
+        CurrentColor = ActiveSheet[SheetOffset(localX, localY)];
     }
 
     /// <summary>
@@ -895,8 +1047,10 @@ public sealed class SpriteEditorSession
 
     /// <summary>
     /// Copies the just-committed selection's pixels into the stamp source — values read
-    /// straight out of the sheet, so they are 0-15 by the sheet's own invariant. Box cells
-    /// outside the mask stay 0, the same "prints nothing" a masked 0 pixel has.
+    /// straight out of the <b>active layer</b> (the selection marked what the author drew
+    /// there, not what shows through from other layers), so they are 0-15 by the layer's own
+    /// invariant. Box cells outside the mask stay 0, the same "prints nothing" a masked 0
+    /// pixel has.
     /// </summary>
     private void CaptureStampSource()
     {
@@ -912,7 +1066,7 @@ public sealed class SpriteEditorSession
             {
                 if (mask[y * n + x])
                 {
-                    _stampSource[(y - minY) * _stampWidth + (x - minX)] = _sheet[SheetOffset(x, y)];
+                    _stampSource[(y - minY) * _stampWidth + (x - minX)] = ActiveSheet[SheetOffset(x, y)];
                 }
             }
         }
@@ -973,18 +1127,35 @@ public sealed class SpriteEditorSession
         EndStroke();
     }
 
+    /// <summary>Tab: region side 1 → 2 → 4 → 1 cells — the keyboard's walk over the same setter the size toggle's list picks from.</summary>
+    public void CycleRegionSize() =>
+        SelectRegionSize(RegionCells switch { 1 => 2, 2 => 4, _ => 1 });
+
     /// <summary>
-    /// Tab: region side 1 → 2 → 4 → 1 cells. Re-clamps the anchor through
-    /// <see cref="SelectRegionCell"/> — growing at the sheet's edge pulls the region back
-    /// inside rather than letting it clip, which is the invariant every transform relies on.
-    /// Ends an open stroke first: the stroke's last-point memory is in old region coordinates,
-    /// and joining a line across a size change could leave the shrunk region's bounds.
+    /// Direct region size — 1, 2 or 4 cells a side (the toggle's 8/16/32 list, wave 2h; Tab
+    /// funnels here too, so the two paths cannot drift). Throws on any other value: the
+    /// callers are a fixed list and Tab's cycle, so anything else is a bug, and clamping it
+    /// would silently edit a region size the author never picked. Re-clamps the anchor
+    /// through <see cref="SelectRegionCell"/> — growing at the sheet's edge pulls the region
+    /// back inside rather than letting it clip, which is the invariant every transform relies
+    /// on. Ends an open stroke first: the stroke's last-point memory is in old region
+    /// coordinates, and joining a line across a size change could leave the shrunk region's
+    /// bounds. Picking the size already current is a visible no-op, like re-picking the
+    /// active tool — the list click must not eat an open gesture for nothing.
     /// </summary>
-    public void CycleRegionSize()
+    public void SelectRegionSize(int cells)
     {
+        if (cells is not (1 or 2 or 4))
+        {
+            throw new ArgumentOutOfRangeException(nameof(cells), cells, "region sides are 1, 2 or 4 sprite cells (8/16/32 px).");
+        }
+        if (cells == RegionCells)
+        {
+            return;
+        }
         InterruptGesture();
         ClearSelection();       // the mask is sized to the region — a resize would misindex it
-        RegionCells = RegionCells switch { 1 => 2, 2 => 4, _ => 1 };
+        RegionCells = cells;
         SelectRegionCell(RegionCellX, RegionCellY);
         // A shrink can strand the cursor outside the new region (31,31 in an 8-px region);
         // re-clamping here is what keeps "paint at the cursor" throw-free by construction.
@@ -1003,16 +1174,16 @@ public sealed class SpriteEditorSession
         ValidateLocal(localX, nameof(localX));
         ValidateLocal(localY, nameof(localY));
         InterruptGesture();     // A stray open gesture commits as its own step before the fill becomes one.
-        byte target = _sheet[SheetOffset(localX, localY)];
+        byte target = ActiveSheet[SheetOffset(localX, localY)];
         if (target == CurrentColor)
         {
             return;
         }
         // target != CurrentColor guarantees at least the seed pixel changes, so the undo
         // snapshot is taken unconditionally — there is no "nothing changed" path from here.
-        _undo.Add((byte[])_sheet.Clone());
+        _undo.Add(CloneStack(_layers));
         _redo.Clear();
-        VisitConnectedColor(localX, localY, (x, y) => _sheet[SheetOffset(x, y)] = (byte)CurrentColor);
+        VisitConnectedColor(localX, localY, (x, y) => ActiveSheet[SheetOffset(x, y)] = (byte)CurrentColor);
         Version++;
     }
 
@@ -1029,7 +1200,7 @@ public sealed class SpriteEditorSession
     /// </summary>
     private void VisitConnectedColor(int localX, int localY, Action<int, int> visit)
     {
-        byte target = _sheet[SheetOffset(localX, localY)];
+        byte target = ActiveSheet[SheetOffset(localX, localY)];
         int n = RegionPixels;
         var seen = new bool[n * n];
         var pending = new Stack<(int X, int Y)>();
@@ -1041,7 +1212,7 @@ public sealed class SpriteEditorSession
             {
                 continue;   // the region border is the wall — for the fill and the wand alike
             }
-            if (_sheet[SheetOffset(x, y)] != target)
+            if (ActiveSheet[SheetOffset(x, y)] != target)
             {
                 continue;
             }
@@ -1122,7 +1293,7 @@ public sealed class SpriteEditorSession
         {
             for (int x = 0; x < n; x++)
             {
-                before[y * n + x] = _sheet[SheetOffset(x, y)];
+                before[y * n + x] = ActiveSheet[SheetOffset(x, y)];
             }
         }
         var after = new byte[n * n];
@@ -1137,13 +1308,13 @@ public sealed class SpriteEditorSession
         {
             return;
         }
-        _undo.Add((byte[])_sheet.Clone());
+        _undo.Add(CloneStack(_layers));
         _redo.Clear();
         for (int y = 0; y < n; y++)
         {
             for (int x = 0; x < n; x++)
             {
-                _sheet[SheetOffset(x, y)] = after[y * n + x];
+                ActiveSheet[SheetOffset(x, y)] = after[y * n + x];
             }
         }
         Version++;
@@ -1151,8 +1322,14 @@ public sealed class SpriteEditorSession
 
     /// <summary>
     /// Ctrl+Z. Ends an open stroke first (committing it), so an undo mid-drag rolls back a
-    /// whole gesture instead of tearing one in half. Whole-array swaps, no copying: the arrays
-    /// already exist and nothing else holds them.
+    /// whole gesture instead of tearing one in half. Whole-stack swaps, no copying: the
+    /// snapshot stacks already exist and nothing else holds them. The stack restores whole —
+    /// an undo standing on layer 4 rolls back a stroke made on layer 2, because the step is
+    /// the operation, wherever it landed; the active-layer <b>choice</b> is deliberately not
+    /// part of the snapshot (it is where the author is looking, not what they did). History
+    /// lives in the session only: closing the editor forgets it, and a fresh session opens
+    /// with Ctrl+Z honestly dead (pinned by test — silently replaying stale history against
+    /// a disk someone else may have touched would be worse than forgetting).
     /// </summary>
     public void Undo()
     {
@@ -1161,8 +1338,8 @@ public sealed class SpriteEditorSession
         {
             return;
         }
-        _redo.Add(_sheet);
-        _sheet = _undo[^1];
+        _redo.Add(_layers);
+        _layers = _undo[^1];
         _undo.RemoveAt(_undo.Count - 1);
         Version++;
     }
@@ -1175,20 +1352,25 @@ public sealed class SpriteEditorSession
         {
             return;
         }
-        _undo.Add(_sheet);
-        _sheet = _redo[^1];
+        _undo.Add(_layers);
+        _layers = _redo[^1];
         _redo.RemoveAt(_redo.Count - 1);
         Version++;
     }
 
     /// <summary>
     /// Ctrl+S, and the Z of the exit prompt. The clean guard is the save contract's heart:
-    /// a session whose sheet equals the disk writes <b>nothing</b> — open-and-close leaves the
-    /// file untouched and, for a cart that never had a gfx.png, uncreated; a repeated Ctrl+S
-    /// is a no-op. Failures land in <see cref="SaveError"/> instead of throwing, because a
-    /// full disk must leave the author their picture and a message, not a dead window.
+    /// a session whose stack equals the disk writes <b>nothing</b> — open-and-close leaves
+    /// both files untouched and, for a cart that never had them, uncreated; a repeated Ctrl+S
+    /// is a no-op. A dirty save writes BOTH files (ADR-027): the stack into gfx-layers.png,
+    /// the flattened composite into gfx.png — the layers file <b>first</b>, because it is the
+    /// authoring source: if the disk dies between the two writes, a saved stack with a stale
+    /// gfx.png reloads into the edited picture (plus the out-of-sync notice), while the
+    /// opposite order would resurrect the pre-edit layers and silently roll the work back.
+    /// Failures land in <see cref="SaveError"/> instead of throwing, because a full disk must
+    /// leave the author their picture and a message, not a dead window.
     /// </summary>
-    /// <returns>True when the disk now matches the sheet (including "already did"), false when the write failed.</returns>
+    /// <returns>True when the disk now matches the stack (including "already did"), false when a write failed.</returns>
     public bool Save()
     {
         InterruptGesture();
@@ -1199,9 +1381,19 @@ public sealed class SpriteEditorSession
         }
         try
         {
+            var stacked = new byte[LayerCount * CartData.GfxWidth * CartData.GfxHeight];
+            for (int i = 0; i < LayerCount; i++)
+            {
+                _layers[i].CopyTo(stacked, i * _layers[i].Length);
+            }
             File.WriteAllBytes(
-                _gfxPath, PngEncoder.EncodeFromPaletteIndices(_sheet, CartData.GfxWidth, CartData.GfxHeight));
-            _saved = (byte[])_sheet.Clone();
+                _layersPath,
+                PngEncoder.EncodeFromPaletteIndices(stacked, CartData.GfxWidth, CartData.GfxHeight * LayerCount));
+            File.WriteAllBytes(
+                _gfxPath,
+                PngEncoder.EncodeFromPaletteIndices(Pixels.ToArray(), CartData.GfxWidth, CartData.GfxHeight));
+            _savedLayers = CloneStack(_layers);
+            GfxOutOfSyncOnDisk = false;     // both files just came from this very stack
             SaveError = null;
             return true;
         }
@@ -1244,6 +1436,42 @@ public sealed class SpriteEditorSession
         }
     }
 
+    /// <summary>The layer every tool reads and writes — the only shorthand, so no call site can grab a stale array across an undo swap.</summary>
+    private byte[] ActiveSheet => _layers[ActiveLayerIndex];
+
+    /// <summary>Deep copy of a whole stack — undo snapshots and the save baseline both need one (see the undo field comment for why sharing arrays would corrupt history).</summary>
+    private static byte[][] CloneStack(byte[][] layers)
+    {
+        var copy = new byte[LayerCount][];
+        for (int i = 0; i < LayerCount; i++)
+        {
+            copy[i] = (byte[])layers[i].Clone();
+        }
+        return copy;
+    }
+
+    /// <summary>
+    /// The flatten formula's one owner (ADR-027): start from the base layer, let every higher
+    /// layer's non-zero pixels cover — color 0 is transparent in the stack, exactly the
+    /// meaning Palt gives it at runtime. The live composite cache and the constructor's
+    /// out-of-sync check both call here, so they cannot disagree about what "flattened" means.
+    /// </summary>
+    private static void CompositeInto(byte[][] layers, byte[] destination)
+    {
+        layers[0].CopyTo(destination, 0);
+        for (int i = 1; i < LayerCount; i++)
+        {
+            byte[] layer = layers[i];
+            for (int p = 0; p < layer.Length; p++)
+            {
+                if (layer[p] != 0)
+                {
+                    destination[p] = layer[p];
+                }
+            }
+        }
+    }
+
     private int SheetOffset(int localX, int localY)
     {
         int size = VirtualConsole.SpriteSize;
@@ -1251,18 +1479,18 @@ public sealed class SpriteEditorSession
     }
 
     /// <summary>
-    /// The single write into the live sheet. <see cref="CurrentColor"/> is 0-15 by the
+    /// The single write into the live stack. <see cref="CurrentColor"/> is 0-15 by the
     /// invariant above, so the cast cannot truncate; writing the value already there is
     /// skipped so that a stroke which changes nothing stays invisible to undo and dirt.
     /// </summary>
     private void Plot(int localX, int localY)
     {
         int offset = SheetOffset(localX, localY);
-        if (_sheet[offset] == CurrentColor)
+        if (ActiveSheet[offset] == CurrentColor)
         {
             return;
         }
-        _sheet[offset] = (byte)CurrentColor;
+        ActiveSheet[offset] = (byte)CurrentColor;
         _strokeChanged = true;
         Version++;
     }

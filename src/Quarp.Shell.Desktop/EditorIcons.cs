@@ -37,6 +37,21 @@ public enum EditorButton
     Undo,
     Redo,
     Clear,
+
+    /// <summary>
+    /// The sprite-size toggle in the band between the canvas and the right column (wave 2h):
+    /// its face is the current size as text ("8"/"16"/"32"), a click opens the 8/16/32 list
+    /// through the same flyout machinery the tool groups use, Tab keeps cycling.
+    /// </summary>
+    SizeToggle,
+
+    // The five layer tabs above the sheet window (wave 2h, ADR-027): text-faced digits 1-5,
+    // the active one highlighted; PgUp/PgDn are their keyboard half.
+    LayerTab1,
+    LayerTab2,
+    LayerTab3,
+    LayerTab4,
+    LayerTab5,
 }
 
 /// <summary>
@@ -358,10 +373,21 @@ public static class EditorIcons
     /// a flyout of variants on long-press/right-click, a repeat-digit cycle on the keyboard.
     /// One owner for "is it a group", like the stub list: the renderer marks from it, the
     /// shell arms the long-press from it, and the layout sizes flyouts from
-    /// <see cref="GroupVariantCount"/> next door.
+    /// <see cref="GroupVariantCount"/> next door. The size toggle joined in wave 2h — it is a
+    /// group in every mechanical sense (variants, flyout, marker), differing only in that its
+    /// short click opens the list (<see cref="ClickOpensFlyout"/>) and its faces are text.
     /// </summary>
-    public static bool IsGroupSlot(EditorButton button) =>
-        button is EditorButton.ToolSelect or EditorButton.ToolShape or EditorButton.ToolTransform;
+    public static bool IsGroupSlot(EditorButton button) => button is
+        EditorButton.ToolSelect or EditorButton.ToolShape or EditorButton.ToolTransform
+        or EditorButton.SizeToggle;
+
+    /// <summary>
+    /// The one group slot whose short click opens its flyout instead of acting (wave 2h):
+    /// the size toggle's only verb IS choosing from the list, so "click = list" (the owner's
+    /// card) and there is no separate click action to perform. The shell and the button
+    /// contract test both consult this, so the dispatch cannot drift between them.
+    /// </summary>
+    public static bool ClickOpensFlyout(EditorButton button) => button == EditorButton.SizeToggle;
 
     /// <summary>How many variants a group slot's flyout shows; 0 for everything that is not a group.</summary>
     public static int GroupVariantCount(EditorButton button) => button switch
@@ -369,8 +395,43 @@ public static class EditorIcons
         EditorButton.ToolSelect => 3,       // SelectionVariant: rectangle, brush, wand (2g)
         EditorButton.ToolShape => 2,        // ShapeVariant: oval, rectangle
         EditorButton.ToolTransform => 3,    // TransformVariant: flip H, flip V, rotate
+        EditorButton.SizeToggle => 3,       // region sides: 1, 2, 4 cells — 8/16/32 px (2h)
         _ => 0,
     };
+
+    /// <summary>
+    /// The size list's variant → region side in cells (1, 2, 4) — with <see cref="SizeVariantOf"/>
+    /// the one owner of the list↔session mapping, so the flyout highlight and the chosen size
+    /// cannot disagree. Index i is 2^i cells: the same 8/16/32 ladder Tab walks.
+    /// </summary>
+    public static int SizeVariantCells(int variant) => 1 << variant;
+
+    /// <summary>Region side in cells → the size list's variant index. Inverse of <see cref="SizeVariantCells"/>.</summary>
+    public static int SizeVariantOf(int cells) => cells switch { 1 => 0, 2 => 1, _ => 2 };
+
+    /// <summary>The size a region side shows as text — "8"/"16"/"32", the toggle's face and the list's labels alike.</summary>
+    public static string SizeLabel(int cells) =>
+        (cells * Quarp.Core.VirtualConsole.SpriteSize).ToString(System.Globalization.CultureInfo.InvariantCulture);
+
+    /// <summary>
+    /// The text a text-faced button shows instead of an 8x8 glyph, or null for icon buttons
+    /// (wave 2h): the size toggle wears its current size, the layer tabs their 1-based
+    /// number — the owner's sketch shows numbers, and digits at UI scale are more legible
+    /// than any 8-px numeral glyph. One owner, so the renderer never guesses which face a
+    /// button has.
+    /// </summary>
+    public static string? ButtonText(EditorButton button, SpriteEditorSession session)
+    {
+        ArgumentNullException.ThrowIfNull(session);
+        return button switch
+        {
+            EditorButton.SizeToggle => SizeLabel(session.RegionCells),
+            EditorButton.LayerTab1 or EditorButton.LayerTab2 or EditorButton.LayerTab3
+                or EditorButton.LayerTab4 or EditorButton.LayerTab5 =>
+                (button - EditorButton.LayerTab1 + 1).ToString(System.Globalization.CultureInfo.InvariantCulture),
+            _ => null,
+        };
+    }
 
     /// <summary>
     /// The glyph of one flyout variant — also the slot's own face for that variant (the wave's
@@ -402,6 +463,8 @@ public static class EditorIcons
         (EditorButton.ToolTransform, (int)TransformVariant.FlipH) => "FLIP H  F",
         (EditorButton.ToolTransform, (int)TransformVariant.FlipV) => "FLIP V  V",
         (EditorButton.ToolTransform, (int)TransformVariant.Rotate) => "ROTATE 90  R",
+        (EditorButton.SizeToggle, 0 or 1 or 2) =>
+            $"{SizeLabel(SizeVariantCells(variant))} PX SPRITE  TAB CYCLES",
         _ => throw new ArgumentOutOfRangeException(nameof(variant), (slot, variant), "not a group slot variant."),
     };
 
@@ -425,7 +488,10 @@ public static class EditorIcons
         EditorButton.Clear => EditorIcon.Clear,
         EditorButton.Save => EditorIcon.Saved,
         EditorButton.Undo => EditorIcon.Undo,
-        _ => EditorIcon.Redo,
+        EditorButton.Redo => EditorIcon.Redo,
+        // The text-faced buttons (size toggle, layer tabs) have no glyph on purpose — the
+        // renderer branches on ButtonText before ever asking here, so reaching this is a bug.
+        _ => throw new ArgumentOutOfRangeException(nameof(button), button, "a text-faced button has no icon (ButtonText owns its face)."),
     };
 
     /// <summary>
@@ -450,6 +516,12 @@ public static class EditorIcons
         EditorButton.Clear => "CLEAR  DEL",
         EditorButton.Save => "SAVE  CTRL+S",
         EditorButton.Undo => "UNDO  CTRL+Z",
+        EditorButton.SizeToggle => "SPRITE SIZE  TAB CYCLES, CLICK LISTS 8/16/32",
+        EditorButton.LayerTab1 => "LAYER 1  PGUP/PGDN",
+        EditorButton.LayerTab2 => "LAYER 2  PGUP/PGDN",
+        EditorButton.LayerTab3 => "LAYER 3  PGUP/PGDN",
+        EditorButton.LayerTab4 => "LAYER 4  PGUP/PGDN",
+        EditorButton.LayerTab5 => "LAYER 5  PGUP/PGDN",
         _ => "REDO  CTRL+Y",
     };
 
@@ -469,6 +541,13 @@ public static class EditorIcons
 
     /// <summary>Swatch tooltip: the keyboard color mechanism, discoverable where the colors are.</summary>
     public static string SwatchTooltip(int color) => $"COLOR {color}   , PREV   . NEXT";
+
+    /// <summary>
+    /// The sheet slider's tooltip (wave 2h) — it is the one control without a button, so this
+    /// is where its wheel and [ ] key paths get announced (the input-parity law's
+    /// discoverability half).
+    /// </summary>
+    public const string SliderTooltip = "SHEET SCROLL   DRAG, WHEEL OR [ ]";
 
     /// <summary>Toolbar digit → its slot, top-to-bottom (1 select … 6 transform); null off the toolbar.</summary>
     public static EditorButton? ButtonForDigit(int digit) => digit switch
@@ -576,6 +655,14 @@ public static class EditorIcons
             case EditorButton.Redo:
                 session.Redo();
                 return false;
+            case EditorButton.LayerTab1:
+            case EditorButton.LayerTab2:
+            case EditorButton.LayerTab3:
+            case EditorButton.LayerTab4:
+            case EditorButton.LayerTab5:
+                // The tabs' click half; PgUp/PgDn walk the same setter (wave 2h parity).
+                session.SelectLayer(button - EditorButton.LayerTab1);
+                return false;
             default:
                 return false;                       // SpritesTab: already the mode on screen
         }
@@ -626,6 +713,12 @@ public static class EditorIcons
         {
             session.SelectSelectionVariant((SelectionVariant)variant);
             session.SelectTool(SpriteEditorTool.Select);
+        }
+        else if (slot == EditorButton.SizeToggle)
+        {
+            // The one flyout whose pick APPLIES: choosing a size IS the action (there is no
+            // "size tool" to arm), unlike the tool groups where the pick is remembered only.
+            session.SelectRegionSize(SizeVariantCells(variant));
         }
     }
 }

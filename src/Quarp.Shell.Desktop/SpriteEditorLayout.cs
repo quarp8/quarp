@@ -27,24 +27,30 @@ public enum EditorPromptVerb
 /// these rectangles and <c>QuarpGame</c> hit-tests the mouse against the same ones, so a
 /// button can never be painted in one place and clicked in another.
 ///
-/// <para><b>The shape is the owner's verdict (M9 stage 2.5) plus his second review.</b> Top:
-/// a tab strip of icons only — exit at the left; from the right corner leftwards music,
+/// <para><b>The shape is the owner's verdict (M9 stage 2.5) through his fourth review.</b>
+/// Top: a tab strip of icons only — exit at the left; from the right corner leftwards music,
 /// sounds, tilemaps, sprites, code; no text headers of any kind. Bottom: a status bar —
 /// cursor coordinates, sprite number, the clickable saved/modified icon, undo/redo and (the
-/// review's move) the clear button right of redo. Both strips are full-window-width bands
-/// with their own background tone, so they read as chrome and not as floating icons. Left:
-/// the tool column alone — select, pencil, fill, stamp, shape, transform; the review killed
-/// the action row and folded flip H / flip V / rotate into the transform group slot. The
-/// canvas sits right of the toolbar; right of it the palette, the layers stub and the sheet
-/// stack up. The dirty-exit prompt keeps a reserved text line just above the status bar, so
-/// its appearance never moves the canvas.</para>
+/// second review's move) the clear button right of redo. Both strips are full-window-width
+/// bands with their own background tone, so they read as chrome and not as floating icons.
+/// Left: the tool column alone — select, pencil, fill, stamp, shape, transform. The right
+/// column (fourth review) hugs the window's right edge and the <b>palette owns its width</b>:
+/// swatches at the top, the five layer tabs under them, then the sheet window — exactly as
+/// wide as the palette, as tall as half the panel strip — with its horizontal scroll slider
+/// underneath. The canvas takes the largest whole square between the toolbar and the size
+/// toggle, which sits in the band just left of the column. The dirty-exit prompt keeps a
+/// reserved text line just above the status bar, so its appearance never moves the canvas.</para>
 ///
 /// <para><b>Every scale is a whole integer</b>, floored at 1: the canvas is the region's
 /// pixels multiplied up, the sheet view is the 128x128 sheet multiplied up, icons are 8-px
 /// masks multiplied up, and fractional scales would resample pixel art into blur
-/// (ARCHITECTURE §5's rule, applied to host UI). In a pathologically small window the parts
-/// keep scale 1 and may overflow — clipped, not crashed; the shell's default window is 8x the
-/// console and the floor exists for resizes, not for use.</para>
+/// (ARCHITECTURE §5's rule, applied to host UI). The sheet window scales <b>by its height</b>
+/// (fourth review: the tallest whole multiple that fits) and what the width cannot show
+/// scrolls horizontally — with the palette-wide window and a square sheet that only engages
+/// in tall narrow windows, but the slider is the mechanism either way and clamps at the
+/// sheet's border. In a pathologically small window the parts keep scale 1 and may
+/// overflow — clipped, not crashed; the shell's default window is 8x the console and the
+/// floor exists for resizes, not for use.</para>
 /// </summary>
 public readonly struct SpriteEditorLayout
 {
@@ -69,7 +75,7 @@ public readonly struct SpriteEditorLayout
     /// <summary>Side of every icon-button: an 8-px icon at scale <see cref="Ui"/> plus 2 * ui padding a side.</summary>
     public int ButtonSize { get; private init; }
 
-    /// <summary>All 16 placed buttons — tabs, tools, status. The renderer walks it; the hit test walks it.</summary>
+    /// <summary>All 22 placed buttons — tabs, tools, status, the size toggle and the layer tabs. The renderer walks it; the hit test walks it.</summary>
     public IReadOnlyList<EditorButtonPlace> Buttons { get; private init; }
 
     /// <summary>
@@ -85,20 +91,24 @@ public readonly struct SpriteEditorLayout
     /// <summary>Window pixels per region pixel on the canvas.</summary>
     public int CanvasScale { get; private init; }
 
-    /// <summary>The whole-sheet view with the region cursor.</summary>
+    /// <summary>
+    /// The sheet <b>window</b> (fourth review): palette-wide, half the panel strip tall. The
+    /// sheet draws inside it at <see cref="SheetScale"/>, shifted by the scroll offset; what
+    /// does not fit horizontally is what <see cref="SheetSlider"/> reaches.
+    /// </summary>
     public Rectangle Sheet { get; private init; }
 
-    /// <summary>Window pixels per sheet pixel in the sheet view.</summary>
+    /// <summary>Window pixels per sheet pixel in the sheet window — the tallest whole multiple its height allows.</summary>
     public int SheetScale { get; private init; }
+
+    /// <summary>The horizontal scroll slider's track, directly under the sheet window.</summary>
+    public Rectangle SheetSlider { get; private init; }
 
     /// <summary>Side of one palette swatch, in window pixels.</summary>
     public int SwatchSize { get; private init; }
 
     /// <summary>Bounding box of all 16 swatches — the renderer frames it, the hit test pre-filters with it.</summary>
     public Rectangle Swatches { get; private init; }
-
-    /// <summary>The one-row layers placeholder between the palette and the sheet (real layers are a later wave, owner's call).</summary>
-    public Rectangle LayersStub { get; private init; }
 
     /// <summary>
     /// The bottom band that holds the coordinates, the sprite number and the
@@ -124,7 +134,7 @@ public readonly struct SpriteEditorLayout
         int button = (EditorIcons.IconPixels + 4) * ui;
         int regionPixels = regionCells * VirtualConsole.SpriteSize;
 
-        var buttons = new EditorButtonPlace[16];
+        var buttons = new EditorButtonPlace[22];
         int placed = 0;
 
         // Tab strip: a full-width band (owner's second review — its own background makes the
@@ -193,35 +203,60 @@ public readonly struct SpriteEditorLayout
         }
         int panelWidth = button;
 
-        // The canvas gets the largest whole-integer square the window allows after reserving
-        // the toolbar's panel and a right column wide enough for the sheet at x2 — pixel-art
-        // editing lives or dies by target size, so the drawing surface wins the leftovers.
+        // The right column first (fourth review: the palette owns the column and hugs the
+        // window's right edge — everything else in the column inherits its width). Swatches
+        // want to be finger-big; only a window too narrow to give a third of itself to the
+        // column shrinks them, and the gap of one ui pixel keeps neighbouring colors from
+        // fusing into a gradient.
+        int swatchSize = Math.Max(
+            4, Math.Min(12 * ui, (width / 3 - (SwatchColumns - 1) * gap) / SwatchColumns));
+        int rightWidth = SwatchColumns * swatchSize + (SwatchColumns - 1) * gap;
+        int rightX = width - margin - rightWidth;
+        var swatches = new Rectangle(
+            rightX, top, rightWidth, SwatchRows * swatchSize + (SwatchRows - 1) * gap);
+
+        // The size toggle lives in the band between the canvas and the right column (the
+        // owner's sketch), pinned to the column rather than to the canvas edge so it does
+        // not jump when Tab resizes the canvas.
+        buttons[placed++] = new EditorButtonPlace
+        {
+            Id = EditorButton.SizeToggle,
+            Rect = new Rectangle(rightX - margin - button, top, button, button),
+        };
+
+        // The five layer tabs, a row directly above the sheet window (ADR-027's "вкладки над
+        // окном листа"), left-aligned with the column.
+        int layerTabsY = swatches.Bottom + 2 * ui;
+        for (int i = 0; i < 5; i++)
+        {
+            buttons[placed++] = new EditorButtonPlace
+            {
+                Id = EditorButton.LayerTab1 + i,
+                Rect = new Rectangle(rightX + i * (button + gap), layerTabsY, button, button),
+            };
+        }
+
+        // The sheet window: palette-wide, half the panel strip tall (the review's "половина
+        // свободного вертикального пространства"), never past the prompt line even in
+        // windows too short for the half, and its slider track directly underneath. The
+        // sheet inside scales by the window's height — the tallest whole multiple that fits.
+        int sheetTop = layerTabsY + button + 2 * ui;
+        int sliderHeight = 4 * ui;
+        int sheetHeight = Math.Max(
+            VirtualConsole.SpriteSize,
+            Math.Min((bottom - top) / 2, bottom - sheetTop - gap - sliderHeight));
+        var sheet = new Rectangle(rightX, sheetTop, rightWidth, sheetHeight);
+        int sheetScale = Math.Max(1, sheetHeight / VirtualConsole.SheetHeight);
+        var slider = new Rectangle(rightX, sheet.Bottom + gap, rightWidth, sliderHeight);
+
+        // The canvas gets the largest whole-integer square left between the toolbar and the
+        // toggle band — pixel-art editing lives or dies by target size, so the drawing
+        // surface wins the leftovers.
         int canvasX = margin + panelWidth + margin;
         int canvasScale = Math.Max(1, Math.Min(
-            (width - canvasX - 2 * margin - 2 * VirtualConsole.SheetWidth) / regionPixels,
+            (rightX - 2 * margin - button - canvasX) / regionPixels,
             (bottom - top) / regionPixels));
         var canvas = new Rectangle(canvasX, top, regionPixels * canvasScale, regionPixels * canvasScale);
-
-        int rightX = canvas.Right + margin;
-        int rightWidth = Math.Max(0, width - rightX - margin);
-
-        // Swatches want to be finger-big but must never push the sheet off screen, so their
-        // size follows the column width down; the gap of one ui pixel keeps neighbouring
-        // colors from fusing into a gradient.
-        int swatchSize = Math.Max(4, Math.Min(12 * ui, (rightWidth - (SwatchColumns - 1) * gap) / SwatchColumns));
-        var swatches = new Rectangle(
-            rightX, top,
-            SwatchColumns * swatchSize + (SwatchColumns - 1) * gap,
-            SwatchRows * swatchSize + (SwatchRows - 1) * gap);
-
-        var layersStub = new Rectangle(
-            rightX, swatches.Bottom + 2 * ui, swatches.Width, PixelFontAtlas.LineHeight(ui) + 2 * ui);
-
-        int sheetTop = layersStub.Bottom + 2 * ui;
-        int sheetScale = Math.Max(
-            1, Math.Min(rightWidth / VirtualConsole.SheetWidth, (bottom - sheetTop) / VirtualConsole.SheetHeight));
-        var sheet = new Rectangle(
-            rightX, sheetTop, VirtualConsole.SheetWidth * sheetScale, VirtualConsole.SheetHeight * sheetScale);
 
         return new SpriteEditorLayout
         {
@@ -234,14 +269,60 @@ public readonly struct SpriteEditorLayout
             CanvasScale = canvasScale,
             Sheet = sheet,
             SheetScale = sheetScale,
+            SheetSlider = slider,
             SwatchSize = swatchSize,
             Swatches = swatches,
-            LayersStub = layersStub,
             StatusBar = statusBar,
             StatusTextY = statusButtonY + (button - PixelFontAtlas.LineHeight(ui)) / 2,
             PromptY = promptY,
             RegionPixels = regionPixels,
         };
+    }
+
+    /// <summary>How many sheet pixels the window shows across — the whole sheet when it fits, the visible slice otherwise.</summary>
+    public int SheetVisiblePixels => Math.Min(VirtualConsole.SheetWidth, Sheet.Width / SheetScale);
+
+    /// <summary>How many sheet pixels the window shows down. Vertical overflow only happens in windows too short for one x1 sheet — clipped, never scrolled.</summary>
+    public int SheetVisibleRows => Math.Min(VirtualConsole.SheetHeight, Sheet.Height / SheetScale);
+
+    /// <summary>The scroll offset's ceiling, in sheet pixels: 0 when the whole sheet fits — the slider's clamp and the wheel's.</summary>
+    public int SheetMaxScroll => VirtualConsole.SheetWidth - SheetVisiblePixels;
+
+    /// <summary>
+    /// The slider's thumb for a given scroll offset: proportional width (the visible share of
+    /// the sheet), full track when nothing overflows — an honest "everything is on screen".
+    /// The renderer draws this rectangle and <see cref="SheetScrollForSliderX"/> inverts it,
+    /// so the thumb can never sit where a drag would not put it.
+    /// </summary>
+    public Rectangle SheetThumb(int scroll)
+    {
+        int thumbWidth = Math.Max(2 * Ui, SheetSlider.Width * SheetVisiblePixels / VirtualConsole.SheetWidth);
+        int range = SheetSlider.Width - thumbWidth;
+        int max = SheetMaxScroll;
+        int x = max == 0 ? SheetSlider.X : SheetSlider.X + scroll * range / max;
+        return new Rectangle(x, SheetSlider.Y, thumbWidth, SheetSlider.Height);
+    }
+
+    /// <summary>
+    /// A drag position on the slider → the scroll offset that centres the thumb there,
+    /// clamped to the sheet's border (the wave's named negative control: a drag past the
+    /// track's end parks at the last column, never beyond the sheet). Zero when nothing
+    /// overflows, so a drag on a resting slider is a visible no-op.
+    /// </summary>
+    public int SheetScrollForSliderX(int x)
+    {
+        int max = SheetMaxScroll;
+        if (max == 0)
+        {
+            return 0;
+        }
+        int thumbWidth = Math.Max(2 * Ui, SheetSlider.Width * SheetVisiblePixels / VirtualConsole.SheetWidth);
+        int range = SheetSlider.Width - thumbWidth;
+        if (range <= 0)
+        {
+            return 0;   // a track the thumb fills exactly has nowhere to drag
+        }
+        return Math.Clamp((x - thumbWidth / 2 - SheetSlider.X) * max / range, 0, max);
     }
 
     /// <summary>
@@ -350,18 +431,28 @@ public readonly struct SpriteEditorLayout
         localY = Math.Clamp((y - Canvas.Y) / CanvasScale, 0, RegionPixels - 1);
     }
 
-    /// <summary>Window point → sheet grid cell (0-15 each way), or false when the point is off the sheet view.</summary>
-    public bool TrySheetCell(int x, int y, out int cellX, out int cellY)
+    /// <summary>
+    /// Window point → sheet grid cell (0-15 each way), or false when the point is off the
+    /// sheet window or in the slack past the sheet's drawn edge. Takes the scroll offset the
+    /// window is currently shifted by — the hit test must agree with the picture, and the
+    /// picture is drawn from the same offset.
+    /// </summary>
+    public bool TrySheetCell(int x, int y, int scroll, out int cellX, out int cellY)
     {
+        cellX = 0;
+        cellY = 0;
         if (!Sheet.Contains(x, y))
         {
-            cellX = 0;
-            cellY = 0;
             return false;
         }
-        int cellPixels = SheetScale * VirtualConsole.SpriteSize;
-        cellX = (x - Sheet.X) / cellPixels;
-        cellY = (y - Sheet.Y) / cellPixels;
+        int sheetX = (x - Sheet.X) / SheetScale + scroll;
+        int sheetY = (y - Sheet.Y) / SheetScale;
+        if (sheetX >= VirtualConsole.SheetWidth || sheetY >= VirtualConsole.SheetHeight)
+        {
+            return false;   // the window can be wider (or, clipped, taller) than the sheet it shows
+        }
+        cellX = sheetX / VirtualConsole.SpriteSize;
+        cellY = sheetY / VirtualConsole.SpriteSize;
         return true;
     }
 

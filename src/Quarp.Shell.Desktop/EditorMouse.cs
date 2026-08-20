@@ -31,6 +31,14 @@ public readonly struct EditorMouse
 
     /// <summary>Right button went down this frame — the eyedropper (press, not hold, like PICO-8).</summary>
     public bool RightPressed { get; init; }
+
+    /// <summary>
+    /// This frame's wheel movement in MonoGame detents (+120 per notch toward the user's
+    /// "up"). The sheet window's horizontal scroll reads it (wave 2h); zero elsewhere.
+    /// Reported as a delta, not the cumulative value, because only the reader holds the
+    /// previous frame.
+    /// </summary>
+    public int WheelDelta { get; init; }
 }
 
 /// <summary>
@@ -52,6 +60,7 @@ public sealed class EditorMouseReader
         bool wasLeft = _previous.LeftButton == ButtonState.Pressed;
         bool right = mouse.RightButton == ButtonState.Pressed;
         bool wasRight = _previous.RightButton == ButtonState.Pressed;
+        int wheel = mouse.ScrollWheelValue - _previous.ScrollWheelValue;
         _previous = mouse;
         return new EditorMouse
         {
@@ -61,6 +70,7 @@ public sealed class EditorMouseReader
             LeftPressed = left && !wasLeft,
             LeftReleased = !left && wasLeft,
             RightPressed = right && !wasRight,
+            WheelDelta = wheel,
         };
     }
 }

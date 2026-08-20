@@ -39,25 +39,72 @@ public class EditorIconsTests
     // ---- group slots ----
 
     /// <summary>
-    /// Exactly the three variant groups carry the marker-and-flyout mechanism (select joined
-    /// in wave 2f); a stub can never be a group. Counts updated in wave 2g: the owner's third
-    /// review added the wand as the select group's third variant, so the old "select has 2"
-    /// pin was pinning behavior the owner cancelled — shape alone stays at two.
+    /// Exactly the four variant groups carry the marker-and-flyout mechanism (select joined
+    /// in wave 2f, the size toggle in 2h — the fourth review's "клик — список 8/16/32" rides
+    /// the same machinery); a stub can never be a group. Counts updated in wave 2g: the
+    /// owner's third review added the wand as the select group's third variant, so the old
+    /// "select has 2" pin was pinning behavior the owner cancelled — shape alone stays at two.
+    /// The size toggle is also the ONLY slot whose short click opens the flyout
+    /// (<see cref="EditorIcons.ClickOpensFlyout"/>): tool groups act on a click, the size
+    /// list's only act IS choosing.
     /// </summary>
     [Fact]
-    public void ExactlyTheThreeGroupSlotsCarryVariants()
+    public void ExactlyTheFourGroupSlotsCarryVariants()
     {
         foreach (EditorButton button in AllButtons)
         {
-            bool group = button is EditorButton.ToolSelect or EditorButton.ToolShape or EditorButton.ToolTransform;
+            bool group = button is EditorButton.ToolSelect or EditorButton.ToolShape
+                or EditorButton.ToolTransform or EditorButton.SizeToggle;
             Assert.Equal(group, EditorIcons.IsGroupSlot(button));
             Assert.Equal(
                 group ? button == EditorButton.ToolShape ? 2 : 3 : 0,
                 EditorIcons.GroupVariantCount(button));
+            Assert.Equal(button == EditorButton.SizeToggle, EditorIcons.ClickOpensFlyout(button));
             if (group)
             {
                 Assert.False(EditorIcons.IsStub(button));
             }
+        }
+    }
+
+    /// <summary>
+    /// The text-faced buttons and only them (wave 2h): the size toggle wears its current
+    /// size — RegionCells 1/2/4 → "8"/"16"/"32", moving with Tab and the list alike — and
+    /// the layer tabs their 1-based numbers; every other button answers null and keeps its
+    /// glyph. A text-faced button must never reach IconFor — that is the throw pinned at the
+    /// end, so the renderer's ButtonText-first branch cannot be silently bypassed.
+    /// </summary>
+    [Fact]
+    public void TextFacesBelongToTheSizeToggleAndLayerTabsOnly()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "quarp-icons-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            var session = new SpriteEditorSession(root);
+            Assert.Equal("8", EditorIcons.ButtonText(EditorButton.SizeToggle, session));
+            session.SelectRegionSize(2);
+            Assert.Equal("16", EditorIcons.ButtonText(EditorButton.SizeToggle, session));
+            session.SelectRegionSize(4);
+            Assert.Equal("32", EditorIcons.ButtonText(EditorButton.SizeToggle, session));
+            for (int i = 0; i < SpriteEditorSession.LayerCount; i++)
+            {
+                Assert.Equal((i + 1).ToString(), EditorIcons.ButtonText(EditorButton.LayerTab1 + i, session));
+            }
+            foreach (EditorButton button in AllButtons)
+            {
+                bool textFaced = button == EditorButton.SizeToggle
+                    || (button >= EditorButton.LayerTab1 && button <= EditorButton.LayerTab5);
+                Assert.Equal(textFaced, EditorIcons.ButtonText(button, session) is not null);
+                if (textFaced)
+                {
+                    Assert.Throws<ArgumentOutOfRangeException>(() => EditorIcons.IconFor(button));
+                }
+            }
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
         }
     }
 
@@ -80,13 +127,20 @@ public class EditorIconsTests
     {
         Assert.Throws<ArgumentOutOfRangeException>(() => EditorIcons.VariantIcon(EditorButton.ToolPencil, 0));
         Assert.Throws<ArgumentOutOfRangeException>(() => EditorIcons.VariantIcon(EditorButton.ToolShape, 2));
+        // The size toggle is a group but its faces are text, not glyphs — the renderer must
+        // branch on ButtonText/SizeLabel, never end up here.
+        Assert.Throws<ArgumentOutOfRangeException>(() => EditorIcons.VariantIcon(EditorButton.SizeToggle, 0));
     }
 
     /// <summary>Every flyout variant has an ASCII tooltip naming its key path — the 3-second contract extends to variants.</summary>
     [Fact]
     public void VariantTooltipsExistAndNameTheKeys()
     {
-        foreach (EditorButton slot in new[] { EditorButton.ToolSelect, EditorButton.ToolShape, EditorButton.ToolTransform })
+        foreach (EditorButton slot in new[]
+        {
+            EditorButton.ToolSelect, EditorButton.ToolShape, EditorButton.ToolTransform,
+            EditorButton.SizeToggle,
+        })
         {
             for (int i = 0; i < EditorIcons.GroupVariantCount(slot); i++)
             {
@@ -176,6 +230,13 @@ public class EditorIconsTests
         Assert.Contains("CTRL+Y", EditorIcons.Tooltip(EditorButton.Redo), StringComparison.Ordinal);
         // The keyboard drawing vocabulary is surfaced on the pencil, per the order.
         Assert.Contains("Z/SPACE", EditorIcons.Tooltip(EditorButton.ToolPencil), StringComparison.Ordinal);
+        // Wave 2h parity: the size toggle names Tab, the layer tabs name PgUp/PgDn, and the
+        // buttonless slider's tooltip names its drag, wheel and bracket keys.
+        Assert.Contains("TAB", EditorIcons.Tooltip(EditorButton.SizeToggle), StringComparison.Ordinal);
+        Assert.Contains("PGUP", EditorIcons.Tooltip(EditorButton.LayerTab3), StringComparison.Ordinal);
+        Assert.Contains("LAYER 3", EditorIcons.Tooltip(EditorButton.LayerTab3), StringComparison.Ordinal);
+        Assert.Contains("[", EditorIcons.SliderTooltip, StringComparison.Ordinal);
+        Assert.Contains("WHEEL", EditorIcons.SliderTooltip, StringComparison.Ordinal);
     }
 
     [Fact]

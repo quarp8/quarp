@@ -34,7 +34,11 @@ public readonly struct ShellCommands
     public bool TogglePause { get; init; }
     public bool StepForward { get; init; }
     public bool StepBack { get; init; }
+
+    /// <summary>Game: [ — slower along the time ladder. Editor: scroll the sheet window one sprite column left (wave 2h; the slider's tooltip names the keys).</summary>
     public bool Slower { get; init; }
+
+    /// <summary>Game: ] — faster. Editor: scroll the sheet window one sprite column right.</summary>
     public bool Faster { get; init; }
     public bool Rewinding { get; init; }
     public bool ToStart { get; init; }
@@ -137,6 +141,12 @@ public readonly struct ShellCommands
 
     /// <summary>Editor: . — next palette color, wrapping 15 → 0.</summary>
     public bool EditorColorNext { get; init; }
+
+    /// <summary>Editor: PageUp — one layer up the stack (toward the covering layers), clamped at 5. The layer tabs' keyboard half (wave 2h).</summary>
+    public bool EditorLayerUp { get; init; }
+
+    /// <summary>Editor: PageDown — one layer down, clamped at the base.</summary>
+    public bool EditorLayerDown { get; init; }
 }
 
 /// <summary>
@@ -195,6 +205,8 @@ public sealed class ShellCommandReader
             EditorShapeFill = ctrl,
             EditorColorPrev = Pressed(keyboard, Keys.OemComma),
             EditorColorNext = Pressed(keyboard, Keys.OemPeriod),
+            EditorLayerUp = Pressed(keyboard, Keys.PageUp),
+            EditorLayerDown = Pressed(keyboard, Keys.PageDown),
         };
         _previous = keyboard;
         return commands;

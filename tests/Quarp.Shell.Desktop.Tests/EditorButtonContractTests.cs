@@ -65,9 +65,11 @@ public class EditorButtonContractTests : IDisposable
     /// <summary>
     /// A session where every live button has work to do: ink at an asymmetric spot (clear and
     /// the transform's flip both move pixels), one stroke undone (undo AND redo both have a
-    /// step), dirt (save has a write, the exit tab has a prompt to raise), and a tool that is
+    /// step), dirt (save has a write, the exit tab has a prompt to raise), a tool that is
     /// not the one the button selects (so every tool click is a visible change — the pencil's
-    /// own case starts from the bucket).
+    /// own case starts from the bucket), and for the base layer's own tab a session standing
+    /// on layer 2 — a tab click must move the active layer, and layer 1 is where every
+    /// session opens.
     /// </summary>
     private static void Prepare(SpriteEditorSession editor, EditorButton button)
     {
@@ -79,27 +81,39 @@ public class EditorButtonContractTests : IDisposable
         {
             editor.SelectTool(SpriteEditorTool.Fill);
         }
+        if (button == EditorButton.LayerTab1)
+        {
+            editor.SelectLayer(1);
+        }
     }
 
-    /// <summary>Everything a button click may legally touch, in one comparable value.</summary>
+    /// <summary>
+    /// Everything a button click may legally touch, in one comparable value — the active
+    /// layer, the region size and the open flyout joined in wave 2h, because the layer tabs
+    /// move the first and the size toggle's click opens the third.
+    /// </summary>
     private sealed record Snapshot(
         ShellMode Mode, SpriteEditorTool Tool, int Version, bool Dirty, bool CanUndo,
         bool CanRedo, bool PromptShown, SelectionVariant Selection, ShapeVariant Shape,
-        TransformVariant Transform);
+        TransformVariant Transform, int ActiveLayer, int RegionCells, EditorButton? OpenFlyout);
 
-    private static Snapshot Observe(ShellModeMachine machine)
+    private static Snapshot Observe(ShellModeMachine machine, ToolbarFlyout flyout)
     {
         SpriteEditorSession editor = machine.Editor!;
         return new Snapshot(
             machine.Mode, editor.Tool, editor.Version, editor.IsDirty, editor.CanUndo,
             editor.CanRedo, editor.ExitPromptShown, editor.CurrentSelection,
-            editor.CurrentShape, editor.CurrentTransform);
+            editor.CurrentShape, editor.CurrentTransform, editor.ActiveLayerIndex,
+            editor.RegionCells, flyout.OpenSlot);
     }
 
     /// <summary>
     /// The shell's press dispatch over the real router pieces (see the type comment for why
     /// this one mirror exists). A group press whose button releases before the long-press
-    /// clock matures is a click — exactly what Arm + CompleteClick model.
+    /// clock matures is a click — exactly what Arm + CompleteClick model — and the size
+    /// toggle's click opens its list instead of acting, decided by the same
+    /// <see cref="EditorIcons.ClickOpensFlyout"/> the shell consults (one owner; break it
+    /// and this mirror goes red together with the window).
     /// </summary>
     private static void RouteClick(ShellModeMachine machine, ToolbarFlyout flyout, EditorButton button)
     {
@@ -113,7 +127,14 @@ public class EditorButtonContractTests : IDisposable
             flyout.Arm(button);
             if (flyout.CompleteClick(out EditorButton clicked))
             {
-                EditorIcons.ClickGroupSlot(editor, clicked);
+                if (EditorIcons.ClickOpensFlyout(clicked))
+                {
+                    flyout.Open(clicked);
+                }
+                else
+                {
+                    EditorIcons.ClickGroupSlot(editor, clicked);
+                }
             }
             return;
         }
@@ -127,7 +148,8 @@ public class EditorButtonContractTests : IDisposable
     /// The sweep itself. Live buttons must change the snapshot; stubs and the sprites tab
     /// (which names the mode already on screen — its correct meaning IS "nothing changes")
     /// must change exactly nothing, because a stub that acts is as much a wiring bug as a
-    /// live button that does not.
+    /// live button that does not. New buttons join by existing: the list comes from the
+    /// layout, so a placed-but-unwired button (the stamp's 2f defect class) is red on arrival.
     /// </summary>
     [Fact]
     public void EveryPlacedLiveButtonChangesSomethingObservable()
@@ -137,11 +159,11 @@ public class EditorButtonContractTests : IDisposable
             ShellModeMachine machine = MachineWithOpenEditor();
             var flyout = new ToolbarFlyout();
             Prepare(machine.Editor!, place.Id);
-            Snapshot before = Observe(machine);
+            Snapshot before = Observe(machine, flyout);
 
             RouteClick(machine, flyout, place.Id);
 
-            Snapshot after = Observe(machine);
+            Snapshot after = Observe(machine, flyout);
             if (EditorIcons.IsStub(place.Id) || place.Id == EditorButton.SpritesTab)
             {
                 Assert.True(before == after, $"{place.Id} is a no-op by contract but changed state");
@@ -151,6 +173,23 @@ public class EditorButtonContractTests : IDisposable
                 Assert.True(before != after, $"{place.Id} is placed and live but its click changed nothing — unwired?");
             }
         }
+    }
+
+    /// <summary>Wave 2h's wiring, pinned by name: a layer tab's click moves the active layer, the size toggle's click opens its list.</summary>
+    [Fact]
+    public void TheLayerTabsAndSizeToggleAreWired()
+    {
+        ShellModeMachine machine = MachineWithOpenEditor();
+        var flyout = new ToolbarFlyout();
+
+        RouteClick(machine, flyout, EditorButton.LayerTab4);
+        Assert.Equal(3, machine.Editor!.ActiveLayerIndex);
+
+        RouteClick(machine, flyout, EditorButton.SizeToggle);
+        Assert.Equal(EditorButton.SizeToggle, flyout.OpenSlot);
+        // Choosing from the open list applies the size — the whole mouse path to 16 px.
+        EditorIcons.ChooseVariant(machine.Editor!, EditorButton.SizeToggle, 1);
+        Assert.Equal(2, machine.Editor!.RegionCells);
     }
 
     /// <summary>The third review's bug 1, pinned by name: the stamp button's click selects the stamp tool.</summary>

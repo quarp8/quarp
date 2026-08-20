@@ -66,4 +66,22 @@ public class EditorMouseReaderTests
 
         Assert.Equal((123, 456), (mouse.X, mouse.Y));
     }
+
+    /// <summary>
+    /// The wheel arrives as a delta, not the cumulative value MonoGame reports (wave 2h —
+    /// the sheet scroll consumes it): one notch shows once, a still wheel shows zero.
+    /// </summary>
+    [Fact]
+    public void TheWheelReportsPerFrameDeltas()
+    {
+        var reader = new EditorMouseReader();
+        static MouseState Wheeled(int value) =>
+            new(0, 0, value, ButtonState.Released, ButtonState.Released,
+                ButtonState.Released, ButtonState.Released, ButtonState.Released);
+
+        Assert.Equal(0, reader.Read(Wheeled(0)).WheelDelta);
+        Assert.Equal(120, reader.Read(Wheeled(120)).WheelDelta);    // one notch up
+        Assert.Equal(0, reader.Read(Wheeled(120)).WheelDelta);      // wheel at rest — no repeat
+        Assert.Equal(-240, reader.Read(Wheeled(-120)).WheelDelta);  // two notches down
+    }
 }

@@ -51,6 +51,7 @@ public sealed class QuarpGame : Game
     private readonly EditorMouseReader _mouse = new();
     private readonly IconHoverTracker _hover = new();
     private readonly ToolbarFlyout _flyout = new();
+    private readonly SheetScroll _sheetScroll = new();
     private readonly ConsoleProfile _profile;
     private readonly ShellModeMachine _modes;
 
@@ -330,6 +331,9 @@ public sealed class QuarpGame : Game
             GraphicsDevice.PresentationParameters.BackBufferWidth,
             GraphicsDevice.PresentationParameters.BackBufferHeight,
             editor.RegionCells);
+        // A resize can shrink the scroll ceiling under a standing offset; re-clamping here
+        // keeps every hit test below inside the drawn slice.
+        _sheetScroll.Clamp(layout);
 
         if (editor.ExitPromptShown)
         {
@@ -437,6 +441,29 @@ public sealed class QuarpGame : Game
         {
             editor.SelectColor((editor.CurrentColor + 1) % Palette.VisibleCount);
         }
+        if (commands.EditorLayerUp)
+        {
+            editor.SelectLayer(editor.ActiveLayerIndex + 1);    // the session clamps at the top layer
+        }
+        if (commands.EditorLayerDown)
+        {
+            editor.SelectLayer(editor.ActiveLayerIndex - 1);
+        }
+        // The sheet window's keyboard and wheel scroll (wave 2h): [ ] step one sprite column,
+        // the wheel steps one column per notch, wheel-down meaning rightward like every
+        // horizontal-only scroller. All clamped by the scroll state against this layout.
+        if (commands.Slower)
+        {
+            _sheetScroll.ScrollBy(layout, -VirtualConsole.SpriteSize);
+        }
+        if (commands.Faster)
+        {
+            _sheetScroll.ScrollBy(layout, VirtualConsole.SpriteSize);
+        }
+        if (mouse.WheelDelta != 0 && layout.Sheet.Contains(mouse.X, mouse.Y))
+        {
+            _sheetScroll.ScrollBy(layout, -mouse.WheelDelta / 120 * VirtualConsole.SpriteSize);
+        }
 
         // Keyboard drawing: arrows steer the canvas cursor, Z/Space is the paint button
         // (pencil stroke, bucket click or shape anchor by tool), X the eyedropper — the whole
@@ -471,8 +498,9 @@ public sealed class QuarpGame : Game
         }
 
         // Hover: an open flyout's variants first (they float over everything), then buttons,
-        // then swatches. The tracker shows the frame highlight immediately and holds the
-        // label back for its three seconds — variants included, per the order.
+        // then swatches, then the slider (the one buttonless control — its tooltip is where
+        // the wheel and [ ] are announced). The tracker shows the frame highlight immediately
+        // and holds the label back for its three seconds — variants included, per the order.
         HoverTarget? hover = null;
         if (_flyout.OpenSlot is EditorButton openHover
             && layout.TryFlyoutVariant(mouse.X, mouse.Y, openHover, out int variantHover))
@@ -486,6 +514,10 @@ public sealed class QuarpGame : Game
         else if (layout.TrySwatch(mouse.X, mouse.Y, out int hoveredSwatch))
         {
             hover = HoverTarget.OfSwatch(hoveredSwatch);
+        }
+        else if (layout.SheetSlider.Contains(mouse.X, mouse.Y))
+        {
+            hover = HoverTarget.OfSlider();
         }
         _hover.Update(hover, elapsedSeconds);
 
@@ -521,7 +553,16 @@ public sealed class QuarpGame : Game
             }
             if (_flyout.CompleteClick(out EditorButton clicked))
             {
-                EditorIcons.ClickGroupSlot(editor, clicked);
+                // The size toggle's click IS "open the list" (EditorIcons.ClickOpensFlyout —
+                // one owner, the contract test mirrors the same consult); the tool groups act.
+                if (EditorIcons.ClickOpensFlyout(clicked))
+                {
+                    _flyout.Open(clicked);
+                }
+                else
+                {
+                    EditorIcons.ClickGroupSlot(editor, clicked);
+                }
                 return;
             }
         }
@@ -553,14 +594,24 @@ public sealed class QuarpGame : Game
             {
                 editor.SelectColor(color);
             }
-            else if (layout.TrySheetCell(mouse.X, mouse.Y, out int cellX, out int cellY))
+            else if (layout.TrySheetCell(mouse.X, mouse.Y, _sheetScroll.Offset, out int cellX, out int cellY))
             {
                 editor.SelectRegionCell(cellX, cellY);
+            }
+            else if (layout.SheetSlider.Contains(mouse.X, mouse.Y))
+            {
+                // The thumb jumps under the pointer and the drag owns the button until
+                // release — a press on the track never falls through to the canvas.
+                _sheetScroll.BeginDrag(layout, mouse.X);
             }
             else if (layout.TryCanvasPixel(mouse.X, mouse.Y, out int pressX, out int pressY))
             {
                 BeginCanvasGesture(editor, pressX, pressY);
             }
+        }
+        else if (mouse.LeftDown && _sheetScroll.Dragging)
+        {
+            _sheetScroll.DragTo(layout, mouse.X);
         }
         else if (mouse.LeftDown && editor.StrokeActive)
         {
@@ -584,6 +635,7 @@ public sealed class QuarpGame : Game
         RefreshGestures(editor, commands);
         if (mouse.LeftReleased)
         {
+            _sheetScroll.EndDrag();     // wherever the pointer wandered, the drag dies with the button
             EndCanvasGesture(editor);
         }
         if (mouse.RightPressed)
@@ -704,6 +756,7 @@ public sealed class QuarpGame : Game
                     _hover.Target,
                     _hover.TooltipVisible,
                     _flyout.OpenSlot,
+                    _sheetScroll,
                     gameTime.TotalGameTime.TotalSeconds);
                 break;
         }

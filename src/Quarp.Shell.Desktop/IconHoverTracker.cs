@@ -1,15 +1,17 @@
 namespace Quarp.Shell.Desktop;
 
 /// <summary>
-/// What the mouse is hovering in the sprite editor: an icon-button, a palette swatch, or —
-/// since wave 2e — a variant button inside an open group flyout (the 3-second tooltip
-/// contract extends to variants by the order). A record struct so two frames over the same
-/// target compare equal by value — the hover clock below hangs on that comparison; each
-/// factory fills every field so targets of different kinds can never collide by accident.
+/// What the mouse is hovering in the sprite editor: an icon-button, a palette swatch, a
+/// variant button inside an open group flyout (since wave 2e — the 3-second tooltip contract
+/// extends to variants by the order), or the sheet scroll slider (wave 2h — the slider has
+/// no button, and its tooltip is where the wheel and the [ ] keys are announced). A record
+/// struct so two frames over the same target compare equal by value — the hover clock below
+/// hangs on that comparison; each factory fills every field so targets of different kinds
+/// can never collide by accident.
 /// </summary>
 public readonly record struct HoverTarget
 {
-    /// <summary>The hovered icon-button, or null when the target is a swatch or a flyout variant.</summary>
+    /// <summary>The hovered icon-button, or null when the target is a swatch, a flyout variant or the slider.</summary>
     public EditorButton? Button { get; init; }
 
     /// <summary>The hovered palette swatch 0-15, or -1 otherwise.</summary>
@@ -21,14 +23,20 @@ public readonly record struct HoverTarget
     /// <summary>Variant index inside <see cref="FlyoutSlot"/>'s flyout, or -1 otherwise.</summary>
     public int FlyoutVariant { get; init; }
 
+    /// <summary>True when the target is the sheet scroll slider's track.</summary>
+    public bool Slider { get; init; }
+
     public static HoverTarget OfButton(EditorButton button) =>
-        new() { Button = button, Swatch = -1, FlyoutSlot = null, FlyoutVariant = -1 };
+        new() { Button = button, Swatch = -1, FlyoutSlot = null, FlyoutVariant = -1, Slider = false };
 
     public static HoverTarget OfSwatch(int swatch) =>
-        new() { Button = null, Swatch = swatch, FlyoutSlot = null, FlyoutVariant = -1 };
+        new() { Button = null, Swatch = swatch, FlyoutSlot = null, FlyoutVariant = -1, Slider = false };
 
     public static HoverTarget OfFlyoutVariant(EditorButton slot, int variant) =>
-        new() { Button = null, Swatch = -1, FlyoutSlot = slot, FlyoutVariant = variant };
+        new() { Button = null, Swatch = -1, FlyoutSlot = slot, FlyoutVariant = variant, Slider = false };
+
+    public static HoverTarget OfSlider() =>
+        new() { Button = null, Swatch = -1, FlyoutSlot = null, FlyoutVariant = -1, Slider = true };
 }
 
 /// <summary>

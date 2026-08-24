@@ -87,14 +87,29 @@ public enum SelectionVariant
 /// commits do, through door (4). <see cref="PngEncoder"/> re-checks on save as the owner of
 /// its own input contract; that check is unreachable from here by construction.</para>
 ///
-/// <para><b>Dirty is content, not history.</b> <see cref="IsDirty"/> compares the live
+/// <para><b>Dirty is content, not history.</b> <see cref="IsLayersDirty"/> compares the live
 /// <b>stack</b> against a snapshot of what the disk holds (or held nothing — an all-zero
 /// stack), because the save contract is about bytes: undoing back to the loaded picture makes
 /// the session clean again, and even hand-repainting a pixel to its old color counts, since
 /// saving then would change nothing. An 80 KB compare per query costs microseconds and cannot
 /// drift out of sync the way a depth counter under an undo/redo/new-stroke braid can.
 /// A change buried under an opaque upper layer is honestly dirty even though the composite —
-/// and therefore gfx.png — comes out byte-identical: the layers file still has to change.</para>
+/// and therefore gfx.png — comes out byte-identical: the layers file still has to change.
+/// <see cref="IsFlagsDirty"/> is the same kind of compare against flags.bin's own baseline, and
+/// <see cref="IsDirty"/> is simply either — the two banks are dirty independently and
+/// <see cref="Save"/> writes only the one(s) that are.</para>
+///
+/// <para><b>Sprite flags moved in from <see cref="MapEditorSession"/>, wave 3b-1.</b> The
+/// owner's verdict: all three reference consoles author flags in the sprite editor, not the
+/// map editor (PICO-8's row of circles, TIC-80's advanced mode and LIKO-12's icon row all sit
+/// beside the sheet). A flag is therefore a property of the sprite currently open on the
+/// canvas — <see cref="SpriteIndex"/> — with no separate "which sprite" argument, the same way
+/// <see cref="CurrentColor"/> is the pencil's ink without a repeated parameter. The 256-byte
+/// bank shares this session's <b>one</b> undo stack rather than a second one: a flag write is
+/// one <see cref="Snapshot"/> like a stroke, a fill or a transform, so a sheet edit and a flag
+/// edit undo/redo in the true order they happened. Length rules, absent-file-is-zeros, and the
+/// per-file dirty/save contract moved with the bank unchanged — see <see cref="ReadFlagsPayload"/>
+/// and <see cref="RequirePayload"/>.</para>
 ///
 /// <para><b>The region can never hang off the sheet.</b> The size setter (8/16/32 px a side)
 /// and the grid click are the only two writers of the region, and both go through the same
@@ -118,8 +133,23 @@ public sealed class SpriteEditorSession
     /// </summary>
     public const string LayersFileName = "gfx-layers.png";
 
+    /// <summary>
+    /// The sprite flags binary (SPEC-8 §6) — 256 flag bytes, one per sprite. Moved here from
+    /// <see cref="MapEditorSession"/> in wave 3b-1 (the owner's verdict: all three reference
+    /// consoles author flags in the sprite editor, not the map editor). One name owner: the
+    /// constructor reads it, <see cref="Save"/> writes it, tests point at it.
+    /// </summary>
+    public const string FlagsFileName = "flags.bin";
+
+    /// <summary>256 sprites in the sheet (SPEC-8 §3), one flag byte each — the flags payload size.</summary>
+    public const int FlagsPayloadSize = CartData.FlagCount;
+
+    /// <summary>Eight flags per sprite — the width of the byte, and of <c>Fget</c>'s bit index.</summary>
+    public const int FlagBits = 8;
+
     private readonly string _gfxPath;
     private readonly string _layersPath;
+    private readonly string _flagsPath;
 
     /// <summary>The stack the disk holds: the dirty comparison's baseline, replaced on save. Never aliases <see cref="_layers"/>.</summary>
     private byte[][] _savedLayers;
@@ -130,22 +160,39 @@ public sealed class SpriteEditorSession
     /// </summary>
     private byte[][] _layers;
 
+    /// <summary>The flags the disk holds, one byte per sprite: the dirty comparison's baseline for the flags bank, replaced on save. Never aliases <see cref="_flags"/>.</summary>
+    private byte[] _savedFlags;
+
+    /// <summary>The live flags. Mutated only by <see cref="SetFlags"/>, replaced wholesale by undo/redo alongside the layer stack.</summary>
+    private byte[] _flags;
+
     // The composite cache: rebuilt lazily when Version says the picture moved. 80 K byte
     // reads per rebuild is microseconds; caching exists so sixty Pixels reads a second on an
     // idle editor cost nothing, not because the rebuild is expensive.
     private readonly byte[] _composite = new byte[CartData.GfxWidth * CartData.GfxHeight];
     private int _compositeVersion = -1;
 
-    // Undo is a stack of pre-stroke layer stacks — the whole 5x16 KB every time (the wave's
-    // order), because a snapshot sharing the untouched layers' arrays would be corrupted the
-    // moment a later stroke mutated one of them in place. A hundred snapshots still cost
-    // less than one game texture, so there is no cap and no delta encoding — simplicity is
-    // what keeps "undo restores exactly" beyond doubt.
-    private readonly List<byte[][]> _undo = new();
-    private readonly List<byte[][]> _redo = new();
+    /// <summary>
+    /// One undo/redo entry: the layer stack and the flag bank together (wave 3b-1). A step
+    /// restores whichever of the two the operation actually moved — the same "the step is the
+    /// operation, whole" contract <see cref="MapEditorSession.Undo"/> used for its own two
+    /// banks before the flags moved out of it.
+    /// </summary>
+    private readonly record struct Snapshot(byte[][] Layers, byte[] Flags);
 
-    /// <summary>Pre-stroke stack while the button is down; null between strokes.</summary>
-    private byte[][]? _strokeBackup;
+    // Undo is a stack of pre-stroke snapshots — the whole 5x16 KB layer stack every time (the
+    // wave's order), because a snapshot sharing the untouched layers' arrays would be corrupted
+    // the moment a later stroke mutated one of them in place. Wave 3b-1 folds the 256-byte flag
+    // bank into the SAME snapshot rather than a second stack: a flag write is one step of this
+    // one undo stack, exactly like a stroke, a fill or a transform, so undo/redo walk sheet
+    // edits and flag edits in one true chronological order instead of two stacks that could
+    // disagree about "what happened when". 256 bytes on top of an already-cloned 80 KB stack
+    // is noise, so there is still no delta encoding and no cap.
+    private readonly List<Snapshot> _undo = new();
+    private readonly List<Snapshot> _redo = new();
+
+    /// <summary>Pre-stroke snapshot while the button is down; null between strokes.</summary>
+    private Snapshot? _strokeBackup;
     private bool _strokeChanged;
     private int _lastPaintX = -1;
     private int _lastPaintY;
@@ -224,6 +271,7 @@ public sealed class SpriteEditorSession
         CartName = Path.GetFileName(Path.TrimEndingDirectorySeparator(cartFolder));
         _gfxPath = Path.Combine(cartFolder, "gfx.png");
         _layersPath = Path.Combine(cartFolder, LayersFileName);
+        _flagsPath = Path.Combine(cartFolder, FlagsFileName);
         int sheetSize = CartData.GfxWidth * CartData.GfxHeight;
         byte[]? gfxOnDisk = File.Exists(_gfxPath)
             ? PngDecoder.DecodeToPaletteIndices(
@@ -257,6 +305,11 @@ public sealed class SpriteEditorSession
             }
         }
         _layers = CloneStack(_savedLayers);
+        // flags.bin, wave 3b-1: absent file = zeros (SPEC-8 §6), same rule as the sheet itself.
+        // A wrong length is refused here with the same failure and wording CartSource produces
+        // for the same file, exactly as gfx.png and gfx-layers.png are refused above.
+        _savedFlags = ReadFlagsPayload(_flagsPath);
+        _flags = (byte[])_savedFlags.Clone();
     }
 
     /// <summary>Folder name, for the header. The manifest is deliberately not read — same call as <see cref="CartLibraryEntry"/>.</summary>
@@ -412,6 +465,22 @@ public sealed class SpriteEditorSession
     /// <summary>Sprite number of the region's anchor cell — the "#NNN" the header shows, same numbering Spr(n) uses.</summary>
     public int SpriteIndex => RegionCellY * GridCells + RegionCellX;
 
+    /// <summary>
+    /// The flags byte of the SELECTED sprite (<see cref="SpriteIndex"/>) — moved here from
+    /// <see cref="MapEditorSession"/> in wave 3b-1. A flag is a property of whichever sprite is
+    /// open on the canvas, not a value the panel names by number, so this door takes no sprite
+    /// argument: it always answers for <see cref="SpriteIndex"/>, the same sprite the region
+    /// anchor, the pixels and the eyedropper already answer for.
+    /// </summary>
+    public byte Flags => _flags[SpriteIndex];
+
+    /// <summary>One flag bit of the selected sprite, the shape <c>Fget</c> has (API-8 §3).</summary>
+    public bool IsFlagSet(int bit)
+    {
+        ValidateBit(bit);
+        return (_flags[SpriteIndex] & (1 << bit)) != 0;
+    }
+
     /// <summary>True while a pencil stroke is open (button held). The shell checks this before feeding drag positions.</summary>
     public bool StrokeActive => _strokeBackup is not null;
 
@@ -425,8 +494,8 @@ public sealed class SpriteEditorSession
     /// </summary>
     public IReadOnlyList<(int X, int Y)> ShapePreview => _shapePoints;
 
-    /// <summary>True when the live stack differs from what the disk holds — see the type comment for why this is a content compare.</summary>
-    public bool IsDirty
+    /// <summary>True when the live layer stack differs from what gfx-layers.png holds — see the type comment for why this is a content compare.</summary>
+    public bool IsLayersDirty
     {
         get
         {
@@ -440,6 +509,12 @@ public sealed class SpriteEditorSession
             return false;
         }
     }
+
+    /// <summary>True when the live flags differ from what flags.bin holds — its own file, its own compare, wave 3b-1's per-file dirty rule.</summary>
+    public bool IsFlagsDirty => !_flags.AsSpan().SequenceEqual(_savedFlags);
+
+    /// <summary>True when either the sheet or the flags differ from the disk — what the exit prompt and Ctrl+S both ask.</summary>
+    public bool IsDirty => IsLayersDirty || IsFlagsDirty;
 
     public bool CanUndo => _undo.Count > 0;
 
@@ -528,7 +603,7 @@ public sealed class SpriteEditorSession
         {
             return;     // A second press without a release (focus loss glitches) folds into the open stroke.
         }
-        _strokeBackup = CloneStack(_layers);
+        _strokeBackup = TakeSnapshot();
         _strokeChanged = false;
         _lastPaintX = -1;
     }
@@ -567,7 +642,7 @@ public sealed class SpriteEditorSession
     /// </summary>
     public void EndStroke()
     {
-        if (_strokeBackup is not byte[][] backup)
+        if (_strokeBackup is not Snapshot backup)
         {
             return;
         }
@@ -1181,7 +1256,7 @@ public sealed class SpriteEditorSession
         }
         // target != CurrentColor guarantees at least the seed pixel changes, so the undo
         // snapshot is taken unconditionally — there is no "nothing changed" path from here.
-        _undo.Add(CloneStack(_layers));
+        _undo.Add(TakeSnapshot());
         _redo.Clear();
         VisitConnectedColor(localX, localY, (x, y) => ActiveSheet[SheetOffset(x, y)] = (byte)CurrentColor);
         Version++;
@@ -1308,7 +1383,7 @@ public sealed class SpriteEditorSession
         {
             return;
         }
-        _undo.Add(CloneStack(_layers));
+        _undo.Add(TakeSnapshot());
         _redo.Clear();
         for (int y = 0; y < n; y++)
         {
@@ -1338,9 +1413,11 @@ public sealed class SpriteEditorSession
         {
             return;
         }
-        _redo.Add(_layers);
-        _layers = _undo[^1];
+        _redo.Add(new Snapshot(_layers, _flags));
+        Snapshot previous = _undo[^1];
         _undo.RemoveAt(_undo.Count - 1);
+        _layers = previous.Layers;
+        _flags = previous.Flags;
         Version++;
     }
 
@@ -1352,25 +1429,66 @@ public sealed class SpriteEditorSession
         {
             return;
         }
-        _undo.Add(_layers);
-        _layers = _redo[^1];
+        _undo.Add(new Snapshot(_layers, _flags));
+        Snapshot next = _redo[^1];
         _redo.RemoveAt(_redo.Count - 1);
+        _layers = next.Layers;
+        _flags = next.Flags;
         Version++;
     }
 
     /// <summary>
+    /// The flag panel's write door: the whole flags byte of the SELECTED sprite
+    /// (<see cref="SpriteIndex"/>), one operation, one step of this session's <b>one</b> undo
+    /// stack — wave 3b-1's whole point, so a flag edit and a stroke undo/redo in the true order
+    /// they happened, never on two stacks that could disagree. An open stroke, shape or select
+    /// gesture is closed first through <see cref="InterruptGesture"/> — otherwise the flag step
+    /// would land <em>under</em> the pre-gesture snapshot and undo would replay the two
+    /// operations backwards; this is the exact ordering <c>MapEditorSession.SetFlags</c>
+    /// established first, back when the flag bank still lived there (there via a plain
+    /// <c>EndStroke</c>, the map editor's only open gesture) — carried over rather than
+    /// reinvented, generalized here to <see cref="InterruptGesture"/> because the sprite editor
+    /// has more kinds of open gesture than a stroke. Writing the value already there changes
+    /// nothing and is therefore not a step and not dirt, exactly like a stroke that painted the
+    /// color already at a pixel.
+    /// </summary>
+    public void SetFlags(byte value)
+    {
+        InterruptGesture();
+        int sprite = SpriteIndex;
+        if (_flags[sprite] == value)
+        {
+            return;
+        }
+        _undo.Add(TakeSnapshot());
+        _redo.Clear();
+        _flags[sprite] = value;
+        Version++;
+    }
+
+    /// <summary>One checkbox in the flag panel: flips a single bit of the selected sprite, through <see cref="SetFlags"/> so there is one write door.</summary>
+    public void ToggleFlag(int bit)
+    {
+        ValidateBit(bit);
+        SetFlags((byte)(_flags[SpriteIndex] ^ (1 << bit)));
+    }
+
+    /// <summary>
     /// Ctrl+S, and the Z of the exit prompt. The clean guard is the save contract's heart:
-    /// a session whose stack equals the disk writes <b>nothing</b> — open-and-close leaves
-    /// both files untouched and, for a cart that never had them, uncreated; a repeated Ctrl+S
-    /// is a no-op. A dirty save writes BOTH files (ADR-027): the stack into gfx-layers.png,
-    /// the flattened composite into gfx.png — the layers file <b>first</b>, because it is the
-    /// authoring source: if the disk dies between the two writes, a saved stack with a stale
-    /// gfx.png reloads into the edited picture (plus the out-of-sync notice), while the
-    /// opposite order would resurrect the pre-edit layers and silently roll the work back.
+    /// a session whose stack AND flags equal the disk writes <b>nothing</b> — open-and-close
+    /// leaves every file untouched and, for a cart that never had them, uncreated; a repeated
+    /// Ctrl+S is a no-op. A dirty save writes only the dirty banks, each independently
+    /// (wave 3b-1): the sheet's two files (ADR-027 — the stack into gfx-layers.png, the
+    /// flattened composite into gfx.png, layers <b>first</b> because it is the authoring
+    /// source: if the disk dies between the two writes, a saved stack with a stale gfx.png
+    /// reloads into the edited picture plus the out-of-sync notice, while the opposite order
+    /// would resurrect the pre-edit layers and silently roll the work back) only if
+    /// <see cref="IsLayersDirty"/>, and flags.bin only if <see cref="IsFlagsDirty"/> — a flag
+    /// edit alone never rewrites gfx.png, and a sheet edit alone never creates flags.bin.
     /// Failures land in <see cref="SaveError"/> instead of throwing, because a full disk must
     /// leave the author their picture and a message, not a dead window.
     /// </summary>
-    /// <returns>True when the disk now matches the stack (including "already did"), false when a write failed.</returns>
+    /// <returns>True when the disk now matches the stack and the flags (including "already did"), false when a write failed.</returns>
     public bool Save()
     {
         InterruptGesture();
@@ -1381,19 +1499,31 @@ public sealed class SpriteEditorSession
         }
         try
         {
-            var stacked = new byte[LayerCount * CartData.GfxWidth * CartData.GfxHeight];
-            for (int i = 0; i < LayerCount; i++)
+            if (IsLayersDirty)
             {
-                _layers[i].CopyTo(stacked, i * _layers[i].Length);
+                var stacked = new byte[LayerCount * CartData.GfxWidth * CartData.GfxHeight];
+                for (int i = 0; i < LayerCount; i++)
+                {
+                    _layers[i].CopyTo(stacked, i * _layers[i].Length);
+                }
+                File.WriteAllBytes(
+                    _layersPath,
+                    PngEncoder.EncodeFromPaletteIndices(stacked, CartData.GfxWidth, CartData.GfxHeight * LayerCount));
+                File.WriteAllBytes(
+                    _gfxPath,
+                    PngEncoder.EncodeFromPaletteIndices(Pixels.ToArray(), CartData.GfxWidth, CartData.GfxHeight));
+                _savedLayers = CloneStack(_layers);
+                GfxOutOfSyncOnDisk = false;     // both files just came from this very stack
             }
-            File.WriteAllBytes(
-                _layersPath,
-                PngEncoder.EncodeFromPaletteIndices(stacked, CartData.GfxWidth, CartData.GfxHeight * LayerCount));
-            File.WriteAllBytes(
-                _gfxPath,
-                PngEncoder.EncodeFromPaletteIndices(Pixels.ToArray(), CartData.GfxWidth, CartData.GfxHeight));
-            _savedLayers = CloneStack(_layers);
-            GfxOutOfSyncOnDisk = false;     // both files just came from this very stack
+            if (IsFlagsDirty)
+            {
+                // Its own file, independent of the sheet (wave 3b-1) — a flag-only save must
+                // never touch gfx.png/gfx-layers.png, and a sheet-only save must never create
+                // flags.bin: that is what keeps the pinned demo hashes untouched by this move.
+                RequirePayload(_flags, FlagsPayloadSize, FlagsFileName);
+                File.WriteAllBytes(_flagsPath, _flags);
+                _savedFlags = (byte[])_flags.Clone();
+            }
             SaveError = null;
             return true;
         }
@@ -1448,6 +1578,44 @@ public sealed class SpriteEditorSession
             copy[i] = (byte[])layers[i].Clone();
         }
         return copy;
+    }
+
+    /// <summary>One undo entry: a deep copy of the live stack AND the live flags (wave 3b-1) — nothing else may hold these arrays.</summary>
+    private Snapshot TakeSnapshot() => new(CloneStack(_layers), (byte[])_flags.Clone());
+
+    private static void ValidateBit(int bit)
+    {
+        if (bit is < 0 or >= FlagBits)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(bit), bit, $"a sprite has flags 0-{FlagBits - 1} (SPEC-8 §6).");
+        }
+    }
+
+    /// <summary>Absent flags.bin = zeros (SPEC-8 §6); present file = its bytes, length-checked below.</summary>
+    private static byte[] ReadFlagsPayload(string path)
+    {
+        if (!File.Exists(path))
+        {
+            return new byte[FlagsPayloadSize];
+        }
+        byte[] bytes = File.ReadAllBytes(path);
+        RequirePayload(bytes, FlagsPayloadSize, FlagsFileName);
+        return bytes;
+    }
+
+    /// <summary>
+    /// The only thing the flat flags payload can be wrong about (SPEC-8 §6: one byte per
+    /// sprite, no illegal values) — one owner for both directions, load and save, exactly the
+    /// check <see cref="MapEditorSession"/> ran for the same file before this bank moved, so
+    /// the wording the author sees has not changed along with the ownership.
+    /// </summary>
+    private static void RequirePayload(byte[] payload, int expectedLength, string name)
+    {
+        if (payload.Length != expectedLength)
+        {
+            throw new CartLoadException($"{name}: {payload.Length} bytes, must be exactly {expectedLength}.");
+        }
     }
 
     /// <summary>

@@ -77,7 +77,13 @@ public class SpriteEditorLayoutTests
         var layout = Default();
         var window = new Rectangle(0, 0, 1280, 720);
 
-        Assert.Equal(AllButtons.Length, layout.Buttons.Count);          // all 22, none forgotten
+        // Every button that belongs to THIS screen is placed, none forgotten. The list stopped
+        // being "the whole enum" in M9 stage 3: one enum now serves two editors, and
+        // EditorIcons.BelongsToSpriteEditor is the one owner of which button lives where — so a
+        // button added and not placed is still red here, and the map's own is not a false alarm.
+        Assert.Equal(
+            AllButtons.Count(EditorIcons.BelongsToSpriteEditor), layout.Buttons.Count);
+        Assert.All(layout.Buttons, place => Assert.True(EditorIcons.BelongsToSpriteEditor(place.Id)));
         for (int i = 0; i < layout.Buttons.Count; i++)
         {
             Assert.True(window.Contains(layout.Buttons[i].Rect));
@@ -298,9 +304,11 @@ public class SpriteEditorLayoutTests
     [Fact]
     public void ExactlyTheVerdictsButtonsAreStubs()
     {
+        // The tilemap tab left this list in M9 stage 3 — its editor landed, so the icon is live
+        // and EditorIcons.TabTarget routes it. Three future editors remain honestly dead.
         var stubs = new[]
         {
-            EditorButton.CodeTab, EditorButton.TilemapTab, EditorButton.SoundTab, EditorButton.MusicTab,
+            EditorButton.CodeTab, EditorButton.SoundTab, EditorButton.MusicTab,
         };
         foreach (EditorButton button in AllButtons)
         {

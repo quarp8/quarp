@@ -52,6 +52,15 @@ public enum EditorButton
     LayerTab3,
     LayerTab4,
     LayerTab5,
+
+    /// <summary>
+    /// The map editor's second tool column (M9 stage 3): "the empty tile". Clicking it selects
+    /// tile 0, which MAP-FORMAT §2 defines as emptiness rather than sprite 0, so this button IS
+    /// the map's eraser; Del is its keyboard twin. It is the one member of this enum the sprite
+    /// editor never places — see <see cref="EditorIcons.BelongsToSpriteEditor"/>, the owner of
+    /// which screen a button belongs to now that two screens share this list.
+    /// </summary>
+    ToolEraser,
 }
 
 /// <summary>
@@ -84,6 +93,7 @@ public enum EditorIcon
     // so new glyphs only ever join at the end.
     SelectBrush,
     Wand,
+    Eraser,
 }
 
 /// <summary>
@@ -349,6 +359,17 @@ public static class EditorIcons
             0b01000000,
             0b10000000,
         },
+        new byte[] // Eraser: a tilted block rubber over the line it is wiping — the map's "tile 0"
+        {
+            0b00000000,
+            0b00011100,
+            0b00111110,
+            0b01111110,
+            0b01111100,
+            0b00111000,
+            0b00000000,
+            0b11111111,
+        },
     };
 
     /// <summary>How many glyphs exist — the atlas sizes its strip from this.</summary>
@@ -366,7 +387,44 @@ public static class EditorIcons
     /// one edit here, never a drift between what looks dead and what is dead.
     /// </summary>
     public static bool IsStub(EditorButton button) => button is
-        EditorButton.CodeTab or EditorButton.TilemapTab or EditorButton.SoundTab or EditorButton.MusicTab;
+        EditorButton.CodeTab or EditorButton.SoundTab or EditorButton.MusicTab;
+
+    /// <summary>
+    /// The live editor tab a click asks the shell to open, or null for every button that is
+    /// not one. Consulted <b>before</b> <see cref="ClickButton"/> and <see cref="ClickMapButton"/>
+    /// by the shell and by the button-contract test alike, because a tab's verb belongs to
+    /// <see cref="ShellModeMachine"/> and not to either session — the same split
+    /// <see cref="ClickButton"/> already makes for the exit tab, made explicit now that there
+    /// are two live tabs to travel between (M9 stage 3). Clicking the tab of the screen you
+    /// are already on is the honest no-op the machine turns it into.
+    /// </summary>
+    public static ShellMode? TabTarget(EditorButton button) => button switch
+    {
+        EditorButton.SpritesTab => ShellMode.Editor,
+        EditorButton.TilemapTab => ShellMode.MapEditor,
+        _ => null,
+    };
+
+    /// <summary>
+    /// Which of the two editor screens places a button. One owner, because a single enum now
+    /// serves two layouts and "forgot to place it" must stay a red test rather than a missing
+    /// button: <see cref="SpriteEditorLayout"/> places everything this answers true for, and
+    /// <see cref="MapEditorLayout"/> everything <see cref="BelongsToMapEditor"/> does.
+    /// </summary>
+    public static bool BelongsToSpriteEditor(EditorButton button) => button is not EditorButton.ToolEraser;
+
+    /// <summary>
+    /// The map editor's own button list: the shared chrome (tabs, exit, save, undo, redo), the
+    /// pencil and the eraser. Everything the map has no model verb for — fill, stamp, shapes,
+    /// transforms, select, clear, the sprite-size toggle and the layer tabs — stays off this
+    /// screen, because a placed button with nothing behind it is the defect class the button
+    /// contract test closed in wave 2g.
+    /// </summary>
+    public static bool BelongsToMapEditor(EditorButton button) => button is
+        EditorButton.ExitTab or EditorButton.CodeTab or EditorButton.SpritesTab
+        or EditorButton.TilemapTab or EditorButton.SoundTab or EditorButton.MusicTab
+        or EditorButton.ToolPencil or EditorButton.ToolEraser
+        or EditorButton.Save or EditorButton.Undo or EditorButton.Redo;
 
     /// <summary>
     /// The photoshop-style group slots (owner's second review): a corner marker on the button,
@@ -489,6 +547,7 @@ public static class EditorIcons
         EditorButton.Save => EditorIcon.Saved,
         EditorButton.Undo => EditorIcon.Undo,
         EditorButton.Redo => EditorIcon.Redo,
+        EditorButton.ToolEraser => EditorIcon.Eraser,
         // The text-faced buttons (size toggle, layer tabs) have no glyph on purpose — the
         // renderer branches on ButtonText before ever asking here, so reaching this is a bug.
         _ => throw new ArgumentOutOfRangeException(nameof(button), button, "a text-faced button has no icon (ButtonText owns its face)."),
@@ -503,8 +562,8 @@ public static class EditorIcons
     {
         EditorButton.ExitTab => "EXIT  ESC",
         EditorButton.CodeTab => "CODE - IN A LATER PORTION",
-        EditorButton.SpritesTab => "SPRITES - ACTIVE",
-        EditorButton.TilemapTab => "MAPS - IN A LATER PORTION",
+        EditorButton.SpritesTab => "SPRITES  HOME SWITCHES",
+        EditorButton.TilemapTab => "MAPS  HOME SWITCHES",
         EditorButton.SoundTab => "SOUNDS - IN A LATER PORTION",
         EditorButton.MusicTab => "MUSIC - IN A LATER PORTION",
         EditorButton.ToolSelect => "SELECT  1 CYCLES   DRAG MARKS, GRAB INSIDE MOVES, ESC DROPS",
@@ -514,6 +573,7 @@ public static class EditorIcons
         EditorButton.ToolShape => "SHAPES  5 CYCLES   DRAG DRAWS, CTRL FILLS, HOLD/RCLICK VARIANTS",
         EditorButton.ToolTransform => "TRANSFORM  6 CYCLES, F/V/R APPLY   CLICK APPLIES, HOLD/RCLICK VARIANTS",
         EditorButton.Clear => "CLEAR  DEL",
+        EditorButton.ToolEraser => "EMPTY TILE 0  DEL",
         EditorButton.Save => "SAVE  CTRL+S",
         EditorButton.Undo => "UNDO  CTRL+Z",
         EditorButton.SizeToggle => "SPRITE SIZE  TAB CYCLES, CLICK LISTS 8/16/32",
@@ -538,6 +598,28 @@ public static class EditorIcons
             ? "STAMP  4   EMPTY - SELECT FIRST"
             : Tooltip(button);
     }
+
+    /// <summary>
+    /// The map editor's tooltip for a button whose meaning differs on that screen, falling
+    /// through to <see cref="Tooltip(EditorButton)"/> for everything shared. Two screens, one
+    /// tooltip file: keeping the fallback here rather than a second table there is what stops
+    /// "SAVE  CTRL+S" from existing twice and drifting once.
+    ///
+    /// <para>The two buttonless controls of that screen — the tile picker and the minimap —
+    /// have no <see cref="HoverTarget"/> kind of their own (that type is shared chrome and does
+    /// not fork for one editor), so their key paths are announced on the buttons next to them:
+    /// the picker's on the pencil, the view's travel keys on the tilemap tab. Every key on the
+    /// map screen is therefore reachable from some tooltip, which is what the parity sweep
+    /// checks.</para>
+    /// </summary>
+    public static string MapTooltip(EditorButton button) => button switch
+    {
+        EditorButton.ToolPencil =>
+            "PENCIL  ARROWS MOVE, Z/SPACE DRAW, X PICKS   SHIFT+ARROWS PICK A TILE",
+        EditorButton.TilemapTab =>
+            "MAPS - ACTIVE   [ ] PAGE ACROSS, PGUP/PGDN PAGE DOWN, HOME SWITCHES TAB",
+        _ => Tooltip(button),
+    };
 
     /// <summary>Swatch tooltip: the keyboard color mechanism, discoverable where the colors are.</summary>
     public static string SwatchTooltip(int color) => $"COLOR {color}   , PREV   . NEXT";
@@ -665,6 +747,48 @@ public static class EditorIcons
                 return false;
             default:
                 return false;                       // SpritesTab: already the mode on screen
+        }
+    }
+
+    /// <summary>
+    /// A click on a live, non-tab icon-button of the <b>map</b> editor, routed to the same
+    /// session calls the keys use — <see cref="ClickButton"/>'s twin, and headless for the same
+    /// reason: the routing table has to exist where no graphics device is required, so a
+    /// contract test can click every placed button and catch the "placed but never wired"
+    /// defect on arrival. Returns true when the click means "leave the editor" (the exit tab),
+    /// which is <see cref="ShellModeMachine"/>'s verb and not the session's. Tab clicks never
+    /// come here: <see cref="TabTarget"/> answers them first.
+    ///
+    /// <para>The pencil is the one honest no-op, exactly as the sprites tab is on the other
+    /// screen: it names the tool already in hand. The map model of stage 3 has a single
+    /// drawing verb (<see cref="MapEditorSession.PaintTile"/>) and a single reader
+    /// (<see cref="MapEditorSession.PickTile"/>), so there is nothing for a click to switch
+    /// to — inventing a tool the model does not have would be worse than a button that says
+    /// what is true.</para>
+    /// </summary>
+    public static bool ClickMapButton(MapEditorSession session, EditorButton button)
+    {
+        ArgumentNullException.ThrowIfNull(session);
+        switch (button)
+        {
+            case EditorButton.ExitTab:
+                return true;                        // clean → back; dirty → the prompt — MapEditorView judges
+            case EditorButton.ToolEraser:
+                // MAP-FORMAT §2: tile 0 is emptiness rather than sprite 0, so "select tile 0"
+                // IS the eraser. Legal on a read-only map — choosing a tile writes nothing.
+                session.SelectSprite(0);
+                return false;
+            case EditorButton.Save:
+                session.Save();                     // the modified/saved icon IS this button — click = Ctrl+S
+                return false;
+            case EditorButton.Undo:
+                session.Undo();
+                return false;
+            case EditorButton.Redo:
+                session.Redo();
+                return false;
+            default:
+                return false;                       // ToolPencil: the tool already in hand
         }
     }
 

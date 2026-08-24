@@ -36,8 +36,8 @@ public class SpriteEditorSessionTests : IDisposable
         Directory.Delete(_root, recursive: true);
     }
 
-    /// <summary>A cart folder, optionally with a gfx.png encoded from the given sheet.</summary>
-    private string CartFolder(byte[]? sheet = null)
+    /// <summary>A cart folder, optionally with a gfx.png encoded from the given sheet and/or a flags.bin.</summary>
+    private string CartFolder(byte[]? sheet = null, byte[]? flags = null)
     {
         string folder = Path.Combine(_root, "cart-" + Guid.NewGuid().ToString("N")[..8]);
         Directory.CreateDirectory(folder);
@@ -46,6 +46,10 @@ public class SpriteEditorSessionTests : IDisposable
             File.WriteAllBytes(
                 Path.Combine(folder, "gfx.png"),
                 PngEncoder.EncodeFromPaletteIndices(sheet, CartData.GfxWidth, CartData.GfxHeight));
+        }
+        if (flags is not null)
+        {
+            File.WriteAllBytes(Path.Combine(folder, SpriteEditorSession.FlagsFileName), flags);
         }
         return folder;
     }
@@ -60,6 +64,21 @@ public class SpriteEditorSessionTests : IDisposable
         }
         return sheet;
     }
+
+    /// <summary>Every flag byte distinct-ish — corruption anywhere shows up somewhere.</summary>
+    private static byte[] PatternFlags()
+    {
+        var flags = new byte[SpriteEditorSession.FlagsPayloadSize];
+        for (int i = 0; i < flags.Length; i++)
+        {
+            flags[i] = (byte)(i ^ 0x5A);
+        }
+        return flags;
+    }
+
+    /// <summary>Moves the region anchor so <see cref="SpriteEditorSession.SpriteIndex"/> equals the given sprite — the flag panel's implicit target.</summary>
+    private static void SelectSprite(SpriteEditorSession session, int sprite) =>
+        session.SelectRegionCell(sprite % SpriteEditorSession.GridCells, sprite / SpriteEditorSession.GridCells);
 
     private static byte PixelAt(SpriteEditorSession session, int sheetX, int sheetY) =>
         session.Pixels[sheetY * CartData.GfxWidth + sheetX];
@@ -425,5 +444,211 @@ public class SpriteEditorSessionTests : IDisposable
 
         Assert.False(session.RequestClose());   // still dirty: a third Esc raises it again
         Assert.True(session.ExitPromptShown);
+    }
+
+    // ---- sprite flags (moved from MapEditorSession, wave 3b-1) ----
+    //
+    // These are the flag bank's rules moved with it, not rewritten: absent file = zeros and
+    // clean; dirty is content against the disk, per file; Save writes only the dirty bank; a
+    // flag write mid-stroke commits the stroke first; a flag write shares this session's one
+    // undo stack with sheet edits (the wave's whole point, replacing MapEditorSession's old
+    // "one stack over two banks" now that there is only one bank left there); the length is
+    // checked on the way in and the way out by one helper.
+
+    [Fact]
+    public void ACartWithoutFlagsBinOpensAsZerosAndIsClean()
+    {
+        var session = new SpriteEditorSession(CartFolder());
+
+        // Every sprite reads zero, not just the one the region anchor starts on.
+        for (int sprite = 0; sprite < SpriteEditorSession.GridCells * SpriteEditorSession.GridCells; sprite += 37)
+        {
+            SelectSprite(session, sprite);
+            Assert.Equal((byte)0, session.Flags);
+        }
+        Assert.False(session.IsFlagsDirty);
+        Assert.False(session.IsDirty);
+        Assert.False(session.CanUndo);
+    }
+
+    /// <summary>The clean-session guarantee, existing-file half, flags side: a read-only flags.bin proves a clean session attempts no write at all.</summary>
+    [Fact]
+    public void ACleanSessionNeverTouchesAnExistingFlagsBin()
+    {
+        string folder = CartFolder(flags: PatternFlags());
+        string flagsPath = Path.Combine(folder, SpriteEditorSession.FlagsFileName);
+        DateTime before = File.GetLastWriteTimeUtc(flagsPath);
+        File.SetAttributes(flagsPath, FileAttributes.ReadOnly);
+        var session = new SpriteEditorSession(folder);
+
+        Assert.True(session.Save());
+
+        Assert.Null(session.SaveError);
+        Assert.Equal(before, File.GetLastWriteTimeUtc(flagsPath));
+    }
+
+    /// <summary>
+    /// Per-file dirty and per-file save: a flags-only edit must write flags.bin and NOTHING
+    /// else — no gfx.png, no gfx-layers.png — the proof that the two banks stayed independent
+    /// after sharing a class.
+    /// </summary>
+    [Fact]
+    public void ADirtyFlagsBankWritesOnlyFlagsBinAndExactlyItsLength()
+    {
+        string folder = CartFolder();
+        var session = new SpriteEditorSession(folder);
+        SelectSprite(session, 200);
+
+        session.ToggleFlag(7);
+        Assert.True(session.IsFlagsDirty);
+        Assert.False(session.IsLayersDirty);
+        Assert.True(session.Save());
+
+        string[] written = Directory.GetFiles(folder);
+        Assert.Single(written);
+        Assert.Equal(SpriteEditorSession.FlagsFileName, Path.GetFileName(written[0]));
+        Assert.Equal(SpriteEditorSession.FlagsPayloadSize, new FileInfo(written[0]).Length);
+        Assert.Equal(0b1000_0000, session.Flags);
+        Assert.False(session.IsDirty);
+    }
+
+    /// <summary>Dirty is content against the disk, not a history of edits — same rule as the sheet, one bank over.</summary>
+    [Fact]
+    public void AFlagToggledBackIsCleanAgain()
+    {
+        var session = new SpriteEditorSession(CartFolder(flags: PatternFlags()));
+        SelectSprite(session, 12);
+
+        session.ToggleFlag(3);
+        Assert.True(session.IsFlagsDirty);
+        session.ToggleFlag(3);
+
+        Assert.False(session.IsFlagsDirty);
+        Assert.False(session.IsDirty);
+    }
+
+    /// <summary>
+    /// One stack over both banks: a pencil stroke and a flag write undo in reverse order, and
+    /// each step carries a snapshot of BOTH — the sheet stays painted while the flag step alone
+    /// is rolled back, which is what "one shared undo stack" has to mean in practice. This is
+    /// the wave's replacement for the old two-banks-in-one-class test now that the banks live
+    /// in two different classes with two different "other" things (layers vs. a map).
+    /// </summary>
+    [Fact]
+    public void UndoAndRedoWalkTheSheetAndTheFlagsOneOperationAtATime()
+    {
+        var session = new SpriteEditorSession(CartFolder());
+        session.SelectColor(3);
+        Stroke(session, (0, 0));                 // step 1: the sheet
+        SelectSprite(session, 5);
+        session.ToggleFlag(2);                   // step 2: the flags
+
+        session.Undo();
+        Assert.False(session.IsFlagSet(2));
+        Assert.Equal(3, session.Pixels[0]);       // the sheet step is untouched by the flag step's undo
+
+        session.Undo();
+        Assert.Equal(0, session.Pixels[0]);
+        Assert.False(session.CanUndo);
+
+        session.Redo();
+        Assert.Equal(3, session.Pixels[0]);
+        Assert.False(session.IsFlagSet(2));
+
+        session.Redo();
+        Assert.True(session.IsFlagSet(2));
+        Assert.False(session.CanRedo);
+    }
+
+    [Fact]
+    public void AFlagWriteAfterAnUndoneStrokeClearsTheRedoFuture()
+    {
+        var session = new SpriteEditorSession(CartFolder());
+        session.SelectColor(2);
+        Stroke(session, (0, 0));
+        session.Undo();
+        Assert.True(session.CanRedo);
+
+        SelectSprite(session, 1);
+        session.ToggleFlag(0);                   // history branched; the old future is gone
+
+        Assert.False(session.CanRedo);
+    }
+
+    [Fact]
+    public void AFlagWriteThatChangesNothingIsInvisibleToUndoAndDirt()
+    {
+        var session = new SpriteEditorSession(CartFolder(flags: PatternFlags()));
+        SelectSprite(session, 40);
+        byte current = session.Flags;
+
+        session.SetFlags(current);
+
+        Assert.False(session.CanUndo);
+        Assert.False(session.IsFlagsDirty);
+    }
+
+    /// <summary>
+    /// A flag write while the pencil is still down closes the gesture first. Otherwise the flag
+    /// step would be pushed under the pre-stroke snapshot and undo would replay the two
+    /// operations in the wrong order — the first Ctrl+Z would erase the sheet instead of the
+    /// flag. The exact scenario <c>MapEditorSession.SetFlags</c> proved first, one class over.
+    /// </summary>
+    [Fact]
+    public void AFlagWriteMidStrokeCommitsTheGestureFirst()
+    {
+        var session = new SpriteEditorSession(CartFolder());
+        SelectSprite(session, 5);      // the flag panel and the pencil agree on which sprite
+        session.SelectColor(5);
+        session.BeginStroke();
+        session.Paint(1, 1);
+
+        session.ToggleFlag(0);         // still sprite 5 — the region anchor never moved
+
+        Assert.False(session.StrokeActive);
+        session.Undo();
+        Assert.False(session.IsFlagSet(0));
+        Assert.Equal(5, PixelAt(session, 5 * 8 + 1, 1));   // the sheet gesture is still a separate, later-undone step
+        session.Undo();
+        Assert.Equal(0, PixelAt(session, 5 * 8 + 1, 1));
+    }
+
+    [Fact]
+    public void AFlagsBinOfTheWrongLengthIsRefused()
+    {
+        string folder = CartFolder(flags: new byte[SpriteEditorSession.FlagsPayloadSize + 1]);
+
+        var e = Assert.Throws<CartLoadException>(() => new SpriteEditorSession(folder));
+
+        Assert.Contains(SpriteEditorSession.FlagsFileName, e.Message, StringComparison.Ordinal);
+        Assert.Contains("256", e.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void FlagBitsOutsideTheByteAreRejectedAtTheDoor()
+    {
+        var session = new SpriteEditorSession(CartFolder());
+
+        Assert.Throws<ArgumentOutOfRangeException>(() => session.IsFlagSet(SpriteEditorSession.FlagBits));
+        Assert.Throws<ArgumentOutOfRangeException>(() => session.IsFlagSet(-1));
+        Assert.Throws<ArgumentOutOfRangeException>(() => session.ToggleFlag(SpriteEditorSession.FlagBits));
+        Assert.Throws<ArgumentOutOfRangeException>(() => session.ToggleFlag(-1));
+        Assert.False(session.IsFlagsDirty);     // a rejected bit must not half-apply
+    }
+
+    /// <summary>The flag panel's target follows the region anchor, the same sprite the pixels and the eyedropper answer for.</summary>
+    [Fact]
+    public void TheFlagByteFollowsTheSelectedSpriteNotAnyOther()
+    {
+        var flags = new byte[SpriteEditorSession.FlagsPayloadSize];
+        flags[5] = 0b0000_0001;
+        flags[6] = 0b0000_0010;
+        var session = new SpriteEditorSession(CartFolder(flags: flags));
+
+        SelectSprite(session, 5);
+        Assert.Equal(0b0000_0001, session.Flags);
+
+        SelectSprite(session, 6);
+        Assert.Equal(0b0000_0010, session.Flags);
     }
 }

@@ -3,22 +3,6 @@ using Quarp.Core;
 
 namespace Quarp.Shell.Desktop;
 
-/// <summary>One placed icon-button: identity plus rectangle. Enabled-ness is not stored — <see cref="EditorIcons.IsStub"/> owns it.</summary>
-public readonly struct EditorButtonPlace
-{
-    public EditorButton Id { get; init; }
-
-    public Rectangle Rect { get; init; }
-}
-
-/// <summary>The three clickable verbs of the dirty-exit prompt line — mouse parity for Z / X / Esc.</summary>
-public enum EditorPromptVerb
-{
-    SaveAndExit,
-    Discard,
-    Stay,
-}
-
 /// <summary>
 /// Where everything on the sprite editor screen sits, as a pure function of the window size
 /// and the region size — computed fresh each frame, like every host-UI measurement (see
@@ -26,6 +10,9 @@ public enum EditorPromptVerb
 /// hash). This is the geometry's <b>single owner</b>: <see cref="SpriteEditorRenderer"/> draws
 /// these rectangles and <c>QuarpGame</c> hit-tests the mouse against the same ones, so a
 /// button can never be painted in one place and clicked in another.
+///
+/// <para>The shared frame — bands, button row, prompt line, margins — is measured by
+/// <see cref="EditorChrome"/> and only forwarded here; this struct owns what stands inside it.</para>
 ///
 /// <para><b>The shape is the owner's verdict (M9 stage 2.5) through his sixth review.</b>
 /// Top: a tab strip of icons only — exit at the left; from the right corner leftwards music,
@@ -40,8 +27,7 @@ public enum EditorPromptVerb
 /// moved left out of the places they used to hold — and under that row the sheet window
 /// takes every remaining pixel down to its horizontal slider. Nothing is reserved for
 /// future blocks any more; that reserve was exactly the emptiness the sixth review
-/// rejected. The dirty-exit prompt keeps a reserved text line just above the status bar, so
-/// its appearance never moves the canvas.</para>
+/// rejected.</para>
 ///
 /// <para><b>Every scale is a whole integer</b>, floored at 1: the canvas is the region's
 /// pixels multiplied up, the sheet view is the <see cref="SheetStrip"/> presentation strip
@@ -62,33 +48,35 @@ public readonly struct SpriteEditorLayout
     private const int SwatchColumns = 8;
     private const int SwatchRows = Palette.VisibleCount / SwatchColumns;
 
-    // The prompt's three verbs, owned here because the renderer draws them and the hit test
-    // measures them — two copies of these strings would be two opinions about where a click lands.
-    public const string PromptHeading = "UNSAVED CHANGES:";
-    public const string PromptSaveVerb = "Z SAVE+EXIT";
-    public const string PromptDiscardVerb = "X DISCARD";
-    public const string PromptStayVerb = "ESC STAY";
+    // The status band's row, outermost first: clear (the second review's move — right of redo,
+    // Del hotkey unchanged), then redo, undo, and the saved/modified icon — so save, the
+    // most-used, stays innermost and closest to the canvas.
+    // Slot 0 is the rightmost place in the status bar. Clear owns it here (the owner's second
+    // review: "кнопка очистки — вниз, в статус-бар, справа от redo"); the map screen leaves the
+    // same slot empty so Save, Undo and Redo do not move between editors.
+    private static readonly EditorButton?[] _statusSlots =
+    {
+        EditorButton.Clear, EditorButton.Redo, EditorButton.Undo, EditorButton.Save,
+    };
 
-    private static readonly string[] _promptVerbs = { PromptSaveVerb, PromptDiscardVerb, PromptStayVerb };
+    /// <summary>The frame this screen stands in — bands, margins, button size, prompt line. See <see cref="EditorChrome"/>.</summary>
+    public EditorChrome Chrome { get; private init; }
 
-    /// <summary>Host-UI text scale, same anchor the library uses (<see cref="PixelFontAtlas.UiScale"/>).</summary>
-    public int Ui { get; private init; }
+    // Forwarded, not recomputed — EditorChrome is the only place these exist.
+    public int Ui => Chrome.Ui;
 
-    /// <summary>Screen-edge inset, in window pixels — the library's 4 * ui, kept identical so the modes read as one shell.</summary>
-    public int Margin { get; private init; }
+    public int Margin => Chrome.Margin;
 
-    /// <summary>Side of every icon-button: an 8-px icon at scale <see cref="Ui"/> plus 2 * ui padding a side.</summary>
-    public int ButtonSize { get; private init; }
+    public int ButtonSize => Chrome.ButtonSize;
+
+    public Rectangle TabStrip => Chrome.TabStrip;
+
+    public Rectangle StatusBar => Chrome.StatusBar;
+
+    public int PromptY => Chrome.PromptY;
 
     /// <summary>All 22 placed buttons — tabs, tools, status, the size toggle and the layer tabs. The renderer walks it; the hit test walks it.</summary>
     public IReadOnlyList<EditorButtonPlace> Buttons { get; private init; }
-
-    /// <summary>
-    /// The full-width top band behind the tab icons (owner's second review: the strips get
-    /// their own background so they stop melting into the window). The renderer fills it;
-    /// panels start below it.
-    /// </summary>
-    public Rectangle TabStrip { get; private init; }
 
     /// <summary>The zoomed region view — the surface the pencil paints on.</summary>
     public Rectangle Canvas { get; private init; }
@@ -120,81 +108,22 @@ public readonly struct SpriteEditorLayout
     /// <summary>Bounding box of all 16 swatches — the renderer frames it, the hit test pre-filters with it.</summary>
     public Rectangle Swatches { get; private init; }
 
-    /// <summary>
-    /// The bottom band that holds the coordinates, the sprite number and the
-    /// save/undo/redo/clear buttons — full window width like <see cref="TabStrip"/>, filled
-    /// with the same strip tone.
-    /// </summary>
-    public Rectangle StatusBar { get; private init; }
-
-    /// <summary>Baseline for the status bar's text, vertically centred against its buttons.</summary>
-    public int StatusTextY { get; private init; }
-
-    /// <summary>Baseline of the reserved prompt/save-error line just above the status bar.</summary>
-    public int PromptY { get; private init; }
-
     /// <summary>Region side in pixels, denormalized from the session so hit tests need only the layout.</summary>
     public int RegionPixels { get; private init; }
 
     public static SpriteEditorLayout Compute(int width, int height, int regionCells)
     {
-        int ui = PixelFontAtlas.UiScale(width, height);
-        int margin = 4 * ui;
-        int gap = ui;
-        int button = (EditorIcons.IconPixels + 4) * ui;
-        int regionPixels = regionCells * VirtualConsole.SpriteSize;
-
         var buttons = new EditorButtonPlace[22];
         int placed = 0;
+        EditorChrome chrome = EditorChrome.Compute(width, height, buttons, ref placed, _statusSlots);
 
-        // Tab strip: a full-width band (owner's second review — its own background makes the
-        // top row read as chrome). Exit alone at the left; the five editor tabs hang off the
-        // right edge in the verdict's order — the rightmost is music, and walking leftwards:
-        // sounds, tilemaps, sprites, code. Buttons sit a margin in from every band edge.
-        var tabStrip = new Rectangle(0, 0, width, button + 2 * margin);
-        buttons[placed++] = new EditorButtonPlace
-        {
-            Id = EditorButton.ExitTab, Rect = new Rectangle(margin, margin, button, button),
-        };
-        EditorButton[] rightTabs =
-        {
-            EditorButton.MusicTab, EditorButton.SoundTab, EditorButton.TilemapTab,
-            EditorButton.SpritesTab, EditorButton.CodeTab,
-        };
-        for (int i = 0; i < rightTabs.Length; i++)
-        {
-            buttons[placed++] = new EditorButtonPlace
-            {
-                Id = rightTabs[i],
-                Rect = new Rectangle(width - margin - button - i * (button + gap), margin, button, button),
-            };
-        }
-
-        // Status bar: the mirror band at the bottom. Buttons off the right edge, outermost
-        // first: clear (the review's move — right of redo, Del hotkey unchanged), then redo,
-        // undo, and the saved/modified icon — so save, the most-used, stays innermost and
-        // closest to the canvas.
-        var statusBar = new Rectangle(0, height - button - 2 * margin, width, button + 2 * margin);
-        int statusButtonY = statusBar.Y + margin;
-        EditorButton[] statusButtons =
-        {
-            EditorButton.Clear, EditorButton.Redo, EditorButton.Undo, EditorButton.Save,
-        };
-        for (int i = 0; i < statusButtons.Length; i++)
-        {
-            buttons[placed++] = new EditorButtonPlace
-            {
-                Id = statusButtons[i],
-                Rect = new Rectangle(width - margin - button - i * (button + gap), statusButtonY, button, button),
-            };
-        }
-
-        // The prompt line is reserved whether or not a prompt is up: a canvas that jumps the
-        // frame the author gets asked about unsaved work would move the very pixels they are
-        // deciding over.
-        int promptY = statusBar.Y - 2 * ui - PixelFontAtlas.LineHeight(ui);
-        int top = tabStrip.Bottom + 2 * ui;
-        int bottom = promptY - 2 * ui;
+        int ui = chrome.Ui;
+        int margin = chrome.Margin;
+        int gap = chrome.Gap;
+        int button = chrome.ButtonSize;
+        int top = chrome.ContentTop;
+        int bottom = chrome.ContentBottom;
+        int regionPixels = regionCells * VirtualConsole.SpriteSize;
 
         // Left toolbar: one column of tool slots, top to bottom — the action row died in the
         // owner's second review (its verbs live in the transform group slot and in the status
@@ -290,11 +219,8 @@ public readonly struct SpriteEditorLayout
 
         return new SpriteEditorLayout
         {
-            Ui = ui,
-            Margin = margin,
-            ButtonSize = button,
+            Chrome = chrome,
             Buttons = buttons,
-            TabStrip = tabStrip,
             Canvas = canvas,
             CanvasScale = canvasScale,
             Sheet = sheet,
@@ -302,9 +228,6 @@ public readonly struct SpriteEditorLayout
             SheetSlider = slider,
             SwatchSize = swatchSize,
             Swatches = swatches,
-            StatusBar = statusBar,
-            StatusTextY = statusButtonY + (button - PixelFontAtlas.LineHeight(ui)) / 2,
-            PromptY = promptY,
             RegionPixels = regionPixels,
         };
     }
@@ -384,44 +307,21 @@ public readonly struct SpriteEditorLayout
     }
 
     /// <summary>The placed rectangle of one button — the tooltip anchors to it.</summary>
-    public Rectangle ButtonRect(EditorButton id)
-    {
-        foreach (EditorButtonPlace place in Buttons)
-        {
-            if (place.Id == id)
-            {
-                return place.Rect;
-            }
-        }
-        throw new ArgumentOutOfRangeException(nameof(id), id, "every EditorButton is placed by Compute.");
-    }
+    public Rectangle ButtonRect(EditorButton id) => EditorChrome.ButtonRect(Buttons, id);
 
-    /// <summary>The icon's destination inside a button: centred, at scale <see cref="Ui"/> — a whole multiple of the 8-px mask.</summary>
-    public Rectangle ButtonIconRect(Rectangle buttonRect)
-    {
-        int side = EditorIcons.IconPixels * Ui;
-        int pad = (ButtonSize - side) / 2;
-        return new Rectangle(buttonRect.X + pad, buttonRect.Y + pad, side, side);
-    }
+    /// <summary>The icon's destination inside a button: centred, at scale <see cref="Ui"/>.</summary>
+    public Rectangle ButtonIconRect(Rectangle buttonRect) => Chrome.ButtonIconRect(buttonRect);
 
-    /// <summary>
-    /// Window point → button under it, stubs included — hover needs the dead buttons too
-    /// (their tooltips say when they wake up); the click routing filters by
-    /// <see cref="EditorIcons.IsStub"/> itself.
-    /// </summary>
-    public bool TryButton(int x, int y, out EditorButton id)
-    {
-        foreach (EditorButtonPlace place in Buttons)
-        {
-            if (place.Rect.Contains(x, y))
-            {
-                id = place.Id;
-                return true;
-            }
-        }
-        id = default;
-        return false;
-    }
+    /// <summary>Window point → button under it, stubs included — hover needs the dead buttons too.</summary>
+    public bool TryButton(int x, int y, out EditorButton id) =>
+        EditorChrome.TryButton(Buttons, x, y, out id);
+
+    /// <summary>Clickable area of one prompt verb — <see cref="EditorChrome"/> owns the prompt line.</summary>
+    public Rectangle PromptVerbRect(EditorPromptVerb verb) => Chrome.PromptVerbRect(verb);
+
+    /// <summary>Window point → prompt verb, or false. Checked only while the prompt is up.</summary>
+    public bool TryPromptVerb(int x, int y, out EditorPromptVerb verb) =>
+        Chrome.TryPromptVerb(x, y, out verb);
 
     /// <summary>Swatch rectangle for a visible palette index — the one place swatch geometry exists.</summary>
     public Rectangle SwatchRect(int color)
@@ -525,39 +425,6 @@ public readonly struct SpriteEditorLayout
             }
         }
         color = 0;
-        return false;
-    }
-
-    /// <summary>
-    /// Clickable area of one prompt verb, ui-padded around its text on the prompt line. Only
-    /// meaningful while the session's <see cref="SpriteEditorSession.ExitPromptShown"/> is up —
-    /// the shell gates the hit test on that, the same way it gates the keys.
-    /// </summary>
-    public Rectangle PromptVerbRect(EditorPromptVerb verb)
-    {
-        int x = Margin + PixelFontAtlas.MeasureWidth(PromptHeading, Ui) + 4 * Ui;
-        for (int i = 0; i < (int)verb; i++)
-        {
-            x += PixelFontAtlas.MeasureWidth(_promptVerbs[i], Ui) + 6 * Ui;
-        }
-        return new Rectangle(
-            x - Ui, PromptY - Ui,
-            PixelFontAtlas.MeasureWidth(_promptVerbs[(int)verb], Ui) + 2 * Ui,
-            PixelFontAtlas.LineHeight(Ui) + 2 * Ui);
-    }
-
-    /// <summary>Window point → prompt verb, or false. Three rectangles, checked only while the prompt is up.</summary>
-    public bool TryPromptVerb(int x, int y, out EditorPromptVerb verb)
-    {
-        for (int i = 0; i < _promptVerbs.Length; i++)
-        {
-            if (PromptVerbRect((EditorPromptVerb)i).Contains(x, y))
-            {
-                verb = (EditorPromptVerb)i;
-                return true;
-            }
-        }
-        verb = default;
         return false;
     }
 }

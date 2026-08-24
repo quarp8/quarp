@@ -304,9 +304,9 @@ public class InputParityInstrumentTests : IDisposable
     {
         if (layout.TryButton(x, y, out EditorButton pressed))
         {
-            if (EditorIcons.IsStub(pressed))
+            if (EditorIcons.IsStub(pressed) || EditorIcons.TabTarget(pressed) is not null)
             {
-                return;
+                return;     // stubs act on nothing; a tab's verb is the mode machine's, not the session's
             }
             if (EditorIcons.IsGroupSlot(pressed))
             {
@@ -534,6 +534,9 @@ public class InputParityInstrumentTests : IDisposable
             [EditorButton.LayerTab3] = "PGUP",
             [EditorButton.LayerTab4] = "PGUP",
             [EditorButton.LayerTab5] = "PGUP",
+            // Live since M9 stage 3: the tilemap tab travels to the map editor, and Home is
+            // the key that does it without a mouse.
+            [EditorButton.TilemapTab] = "HOME",
         };
 
         foreach (EditorButtonPlace place in SpriteEditorLayout.Compute(1280, 720, regionCells: 1).Buttons)

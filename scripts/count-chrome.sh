@@ -50,13 +50,22 @@
 # сам хром»). Он исключён из хрома ЦЕЛИКОМ — это подтверждённый недосчёт
 # (несколько строк реального роутинга кликов в хром не попали), а не выдумка.
 #
+# ВОЛНА УПРОЩЕНИЯ (2026-08-24, после пробития порога на 2592). Общее двух редакторов
+# вынесено в два новых файла, и оба — хром целиком, поэтому оба в списке ниже:
+#   EditorChrome.cs         — рама обоих экранов (полоса вкладок, статус-бар и его ряд кнопок,
+#                             строка промпта, поля, размер кнопки, хит-тесты кнопок и верб).
+#   EditorChromeRenderer.cs — пиксели этой рамы (роли палитры, рамка, полосы, кнопка, текст
+#                             статуса, строка промпта, тултип).
+# Оба редактора теперь ДЕЛЕГИРУЮТ туда, а не повторяют. Число падает ровно на то, что раньше
+# существовало дважды; всё, что просто переехало, продолжает считаться — на то и прибор.
+#
 # ГРАНИЦА, НА КОТОРОЙ ВИСИТ ВЕРДИКТ: SpriteEditorLayout.cs считается ЦЕЛИКОМ
-# (527 строк), хотя часть его методов (TryCanvasPixel, TrySheetCell и подобные)
+# (434 строки после волны), хотя часть его методов (TryCanvasPixel, TrySheetCell и подобные)
 # это координатная математика холста/листа, а не кнопок. Считаю их хромом
 # по букве определения карточки ("роутинг кликов оболочки" — курсор попадает
 # в пиксель тоже через клик), но это спорно: более узкое прочтение (только
 # кнопки/свотчи/слайдер/флаут/подсказки, без holst-хиттестов) даёт для этого
-# файла не 527, а ориентировочно ~400 строк, и тогда общий итог опускается
+# файла не 434, а ориентировочно ~330 строк, и тогда общий итог опускается
 # примерно на 120 строк. Это разошлось бы с порогом в другую сторону — записано
 # в отчёте как «Расхождение», а не решено втихую.
 set -u
@@ -72,6 +81,8 @@ SHELL_DIR="src/Quarp.Shell.Desktop"
 
 # --- файлы, которые целиком — хром (виджеты/раскладка/иконки/подсказки/скролл) ---
 FILES_CHROME_WHOLE=(
+  "$SHELL_DIR/EditorChrome.cs"         # ОБЩЕЕ: рама обоих редакторов (волна упрощения)
+  "$SHELL_DIR/EditorChromeRenderer.cs" # ОБЩЕЕ: пиксели этой рамы (волна упрощения)
   "$SHELL_DIR/EditorIconAtlas.cs"   # иконки: атлас, тот же приём, что PixelFontAtlas
   "$SHELL_DIR/IconHoverTracker.cs"  # подсказки по наведению (3-секундный контракт)
   "$SHELL_DIR/ToolbarFlyout.cs"     # флаут группового слота тулбара
@@ -94,6 +105,8 @@ RENDERER_METHODS=(
   "public SpriteEditorRenderer(GraphicsDevice device)|infra"
   "public void Draw(|infra"
   "public void Dispose()|infra"
+  "private static string SheetCoordinates(SpriteEditorSession editor)|chrome"
+  "private static string? StandingNotice(SpriteEditorSession editor) =>|chrome"
   "private void UploadSheetIfChanged(SpriteEditorSession editor)|content"
   "private void DrawButtons(SpriteBatch batch, in SpriteEditorLayout layout, SpriteEditorSession editor, HoverTarget? hover)|chrome"
   "private static int CurrentVariant(SpriteEditorSession editor, EditorButton slot) => slot switch|chrome"
@@ -106,11 +119,7 @@ RENDERER_METHODS=(
   "private void DrawSwatches(SpriteBatch batch, in SpriteEditorLayout layout, SpriteEditorSession editor)|chrome"
   "private void DrawSheet(SpriteBatch batch, in SpriteEditorLayout layout, SpriteEditorSession editor, int scroll)|content"
   "private void DrawSlider(SpriteBatch batch, in SpriteEditorLayout layout, SheetScroll scroll, HoverTarget? hover)|chrome"
-  "private void DrawStatusText(SpriteBatch batch, in SpriteEditorLayout layout, SpriteEditorSession editor)|chrome"
-  "private void DrawPromptLine(SpriteBatch batch, in SpriteEditorLayout layout, SpriteEditorSession editor)|chrome"
-  "private void DrawPromptVerb(SpriteBatch batch, in SpriteEditorLayout layout, EditorPromptVerb verb, string text)|chrome"
   "private void DrawTooltip(|chrome"
-  "private void DrawFrame(SpriteBatch batch, Rectangle rect, int thickness, Color color)|chrome"
 )
 
 # --- QuarpGame.cs: весь файл — игровой цикл оболочки (не предмет этого фальсификатора),
@@ -130,7 +139,31 @@ GAME_METHODS=(
   "private static void EndCanvasGesture(SpriteEditorSession editor)|content"
   "private static void RefreshGestures(SpriteEditorSession editor, in ShellCommands commands)|content"
   "private bool HandleEditorButton(SpriteEditorSession editor, EditorButton button)|chrome"
+  "private bool HandleMapButton(MapEditorSession map, EditorButton button)|chrome"
   "protected override void Draw(GameTime gameTime)|infra"
+)
+
+# --- Редактор карт (M9 этап 3, волна 3b). Раскладка и вид — хром целиком, как SheetScroll;
+# рендерер разбирается по методам, как рендерер спрайтов: полотно карты и полоса листа —
+# контент (они кастомны в любом мире), кнопки/пикер/миникарта/статус — хром.
+MAPUI_FILES_WHOLE=(
+  "$SHELL_DIR/MapEditorLayout.cs"
+  "$SHELL_DIR/MapEditorView.cs"
+)
+MAP_RENDERER_FILE="$SHELL_DIR/MapEditorRenderer.cs"
+MAP_RENDERER_METHODS=(
+  "public MapEditorRenderer(GraphicsDevice device)|infra"
+  "public void Draw(|infra"
+  "public void Dispose()|infra"
+  "private static string MapCoordinates(MapEditorView view) =>|chrome"
+  "private static string? StandingNotice(MapEditorSession map) =>|chrome"
+  "private void UploadSheetIfChanged(SpriteEditorSession sheet)|content"
+  "private void UploadMinimapIfChanged(MapEditorSession map)|content"
+  "private void DrawCanvas(SpriteBatch batch, in MapEditorLayout layout, MapEditorSession map, MapEditorView view)|content"
+  "private void DrawButtons(SpriteBatch batch, in MapEditorLayout layout, MapEditorSession map, HoverTarget? hover)|chrome"
+  "private void DrawPicker(SpriteBatch batch, in MapEditorLayout layout, MapEditorSession map)|content"
+  "private void DrawMinimap(SpriteBatch batch, in MapEditorLayout layout, MapEditorView view)|chrome"
+  "private void DrawTooltip(|chrome"
 )
 
 fail_env=0
@@ -229,6 +262,24 @@ if [ "$fail_env" -eq 0 ]; then
   printf '%-55s всего %4d = хром %4d + холст/лист %4d + инфра %4d\n' \
     "$rf" "$rtotal" "$rchrome" "$rcontent" "$rinfra"
   total_chrome=$((total_chrome + rchrome))
+fi
+
+echo
+echo "=== Редактор карт (волна 3b): раскладка и вид целиком, рендерер по методам ==="
+for f in "${MAPUI_FILES_WHOLE[@]}"; do
+  check_file "$f"
+  [ "$fail_env" -eq 1 ] && continue
+  n=$(wc -l < "$f")
+  printf '%-55s %8d\n' "$f" "$n"
+  total_chrome=$((total_chrome + n))
+done
+check_file "$MAP_RENDERER_FILE"
+if [ "$fail_env" -eq 0 ]; then
+  row=$(split_by_methods "$MAP_RENDERER_FILE" "${MAP_RENDERER_METHODS[@]}") || exit 2
+  IFS=$'\t' read -r mf mtotal mchrome mcontent minfra <<< "$row"
+  printf '%-55s всего %4d = хром %4d + полотно/лист %4d + инфра %4d\n' \
+    "$mf" "$mtotal" "$mchrome" "$mcontent" "$minfra"
+  total_chrome=$((total_chrome + mchrome))
 fi
 
 echo

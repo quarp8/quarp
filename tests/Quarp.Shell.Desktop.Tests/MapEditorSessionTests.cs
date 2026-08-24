@@ -5,11 +5,11 @@ using Xunit;
 namespace Quarp.Shell.Desktop.Tests;
 
 /// <summary>
-/// The map editor's model contract, proven headless (M9 stage 3, wave 3a): the two payloads,
-/// the per-file dirty rule, the save contract, the read-only map of a cart that still has
-/// <c>map.csv</c>, and one undo stack over both banks — driven through
-/// <see cref="MapEditorSession"/> alone, the way <see cref="SpriteEditorSessionTests"/> drives
-/// the sprite editor.
+/// The map editor's model contract, proven headless (M9 stage 3, wave 3a; the flag bank moved
+/// out to <see cref="SpriteEditorSession"/> in wave 3b-1): the one payload, the dirty rule, the
+/// save contract, the read-only map of a cart that still has <c>map.csv</c>, and one undo stack
+/// over it — driven through <see cref="MapEditorSession"/> alone, the way
+/// <see cref="SpriteEditorSessionTests"/> drives the sprite editor.
 ///
 /// <para>The stage's named negative-control targets live here: (a) a clean session writes
 /// nothing — proven twice, by an empty directory listing and by a read-only file whose write
@@ -44,18 +44,14 @@ public class MapEditorSessionTests : IDisposable
 
     // ---- helpers ----
 
-    /// <summary>An empty cart folder, optionally seeded with a map and/or flags payload and/or a map.csv.</summary>
-    private string CartFolder(byte[]? map = null, byte[]? flags = null, bool mapSource = false)
+    /// <summary>An empty cart folder, optionally seeded with a map payload and/or a map.csv.</summary>
+    private string CartFolder(byte[]? map = null, bool mapSource = false)
     {
         string folder = Path.Combine(_root, "cart-" + Guid.NewGuid().ToString("N")[..8]);
         Directory.CreateDirectory(folder);
         if (map is not null)
         {
             File.WriteAllBytes(Path.Combine(folder, MapEditorSession.MapFileName), map);
-        }
-        if (flags is not null)
-        {
-            File.WriteAllBytes(Path.Combine(folder, MapEditorSession.FlagsFileName), flags);
         }
         if (mapSource)
         {
@@ -73,16 +69,6 @@ public class MapEditorSessionTests : IDisposable
             map[i] = (byte)(i * 7 + i / MapEditorSession.MapColumns);
         }
         return map;
-    }
-
-    private static byte[] PatternFlags()
-    {
-        var flags = new byte[MapEditorSession.FlagsPayloadSize];
-        for (int i = 0; i < flags.Length; i++)
-        {
-            flags[i] = (byte)(i ^ 0x5A);
-        }
-        return flags;
     }
 
     /// <summary>Walks up from the test bin folder to the repo root, same as PngEncoderTests/SnakeCartTests.</summary>
@@ -103,8 +89,8 @@ public class MapEditorSessionTests : IDisposable
 
     /// <summary>
     /// A copy of a demo cart's root files in the temp tree. Only the root files matter to this
-    /// session (map.bin, flags.bin, map.csv), and copying only them keeps the demo's replays and
-    /// sources — the pinned goldens — where they belong: read, never written.
+    /// session (map.bin, map.csv), and copying only them keeps the demo's replays and sources —
+    /// the pinned goldens — where they belong: read, never written.
     /// </summary>
     private string CopyDemoCart(string name)
     {
@@ -160,7 +146,6 @@ public class MapEditorSessionTests : IDisposable
         Assert.Null(session.SaveError);                      // "no error" means "no write was attempted"
         Assert.True(File.ReadAllBytes(mapPath).SequenceEqual(original));
         Assert.Equal(before, File.GetLastWriteTimeUtc(mapPath));
-        Assert.False(File.Exists(Path.Combine(folder, MapEditorSession.FlagsFileName)));
     }
 
     /// <summary>
@@ -212,42 +197,17 @@ public class MapEditorSessionTests : IDisposable
         Assert.False(session.CanUndo);
     }
 
-    /// <summary>map.csv owns the map, not the sprite flags (MAP-FORMAT §10): the flag bank stays fully editable.</summary>
-    [Fact]
-    public void FlagsStayEditableOnACartWhoseMapIsReadOnly()
-    {
-        string folder = CartFolder(map: PatternMap(), mapSource: true);
-        string mapPath = Path.Combine(folder, MapEditorSession.MapFileName);
-        byte[] mapBefore = File.ReadAllBytes(mapPath);
-        File.SetAttributes(mapPath, FileAttributes.ReadOnly);
-        var session = new MapEditorSession(folder);
-
-        session.SetFlags(3, 0b0000_0101);
-
-        Assert.True(session.IsFlagsDirty);
-        Assert.False(session.IsMapDirty);
-        Assert.True(session.Save());
-        Assert.Null(session.SaveError);         // the read-only map.bin was never opened for writing
-        Assert.True(File.ReadAllBytes(mapPath).SequenceEqual(mapBefore));
-        Assert.Equal(
-            MapEditorSession.FlagsPayloadSize,
-            new FileInfo(Path.Combine(folder, MapEditorSession.FlagsFileName)).Length);
-    }
-
-    // ---- absent files, clean sessions ----
+    // ---- absent file, clean session ----
 
     [Fact]
-    public void ACartWithoutMapOrFlagsOpensAsZerosAndIsClean()
+    public void ACartWithoutMapOpensAsZerosAndIsClean()
     {
         var session = new MapEditorSession(CartFolder());
 
         Assert.Equal(MapEditorSession.MapPayloadSize, session.Map.Length);
-        Assert.Equal(MapEditorSession.FlagsPayloadSize, session.Flags.Length);
         Assert.True(session.Map.IndexOfAnyExcept((byte)0) < 0);
-        Assert.True(session.Flags.IndexOfAnyExcept((byte)0) < 0);
         Assert.False(session.IsDirty);
         Assert.False(session.IsMapDirty);
-        Assert.False(session.IsFlagsDirty);
         Assert.False(session.MapReadOnly);
         Assert.False(session.CanUndo);
     }
@@ -265,31 +225,27 @@ public class MapEditorSessionTests : IDisposable
     }
 
     /// <summary>
-    /// The clean-session guarantee, existing-file half — both payloads present and both marked
+    /// The clean-session guarantee, existing-file half — the map payload present and marked
     /// read-only: if the guard were gone, the write would fail against the attribute and show up
     /// in SaveError, so "no error and same mtime" means "nothing was written", not "the same
     /// bytes were written".
     /// </summary>
     [Fact]
-    public void ACleanSessionNeverTouchesExistingFiles()
+    public void ACleanSessionNeverTouchesAnExistingMapFile()
     {
-        string folder = CartFolder(map: PatternMap(), flags: PatternFlags());
+        string folder = CartFolder(map: PatternMap());
         string mapPath = Path.Combine(folder, MapEditorSession.MapFileName);
-        string flagsPath = Path.Combine(folder, MapEditorSession.FlagsFileName);
         DateTime mapBefore = File.GetLastWriteTimeUtc(mapPath);
-        DateTime flagsBefore = File.GetLastWriteTimeUtc(flagsPath);
         File.SetAttributes(mapPath, FileAttributes.ReadOnly);
-        File.SetAttributes(flagsPath, FileAttributes.ReadOnly);
         var session = new MapEditorSession(folder);
 
         Assert.True(session.Save());
 
         Assert.Null(session.SaveError);
         Assert.Equal(mapBefore, File.GetLastWriteTimeUtc(mapPath));
-        Assert.Equal(flagsBefore, File.GetLastWriteTimeUtc(flagsPath));
     }
 
-    /// <summary>Second Ctrl+S without new edits: the banks equal the disk again, so nothing is attempted.</summary>
+    /// <summary>Second Ctrl+S without new edits: the bank equals the disk again, so nothing is attempted.</summary>
     [Fact]
     public void ARepeatedSaveWithoutNewEditsIsANoOp()
     {
@@ -305,8 +261,6 @@ public class MapEditorSessionTests : IDisposable
         Assert.Null(session.SaveError);
     }
 
-    // ---- per-file dirt ----
-
     [Fact]
     public void ADirtyMapWritesOnlyMapBinAndExactlyItsLength()
     {
@@ -316,7 +270,6 @@ public class MapEditorSessionTests : IDisposable
 
         Stroke(session, (0, 0));
         Assert.True(session.IsMapDirty);
-        Assert.False(session.IsFlagsDirty);
         Assert.True(session.Save());
 
         string[] written = Directory.GetFiles(folder);
@@ -326,26 +279,7 @@ public class MapEditorSessionTests : IDisposable
         Assert.False(session.IsDirty);
     }
 
-    [Fact]
-    public void ADirtyFlagsBankWritesOnlyFlagsBinAndExactlyItsLength()
-    {
-        string folder = CartFolder();
-        var session = new MapEditorSession(folder);
-
-        session.ToggleFlag(200, 7);
-        Assert.True(session.IsFlagsDirty);
-        Assert.False(session.IsMapDirty);
-        Assert.True(session.Save());
-
-        string[] written = Directory.GetFiles(folder);
-        Assert.Single(written);
-        Assert.Equal(MapEditorSession.FlagsFileName, Path.GetFileName(written[0]));
-        Assert.Equal(MapEditorSession.FlagsPayloadSize, new FileInfo(written[0]).Length);
-        Assert.Equal(0b1000_0000, session.FlagsAt(200));
-        Assert.False(session.IsDirty);
-    }
-
-    /// <summary>Dirty is content against the disk, not a history of edits — the sprite editor's rule, one bank over.</summary>
+    /// <summary>Dirty is content against the disk, not a history of edits.</summary>
     [Fact]
     public void PaintingACellBackToItsLoadedTileIsCleanAgain()
     {
@@ -365,20 +299,7 @@ public class MapEditorSessionTests : IDisposable
         Assert.True(session.CanUndo);           // ...even though two real operations happened
     }
 
-    /// <summary>Same rule for the flag bank: a flag switched on and back off leaves the file untouchable-clean.</summary>
-    [Fact]
-    public void AFlagToggledBackIsCleanAgain()
-    {
-        var session = new MapEditorSession(CartFolder(flags: PatternFlags()));
-
-        session.ToggleFlag(12, 3);
-        Assert.True(session.IsFlagsDirty);
-        session.ToggleFlag(12, 3);
-
-        Assert.False(session.IsFlagsDirty);
-    }
-
-    // ---- undo / redo: one stack, both banks, step = operation ----
+    // ---- undo / redo: one stack, step = operation ----
 
     [Fact]
     public void OneStrokeIsOneUndoStepHoweverManyCellsItPainted()
@@ -394,22 +315,18 @@ public class MapEditorSessionTests : IDisposable
         Assert.False(session.IsDirty);
     }
 
-    /// <summary>
-    /// One stack over both banks: a map operation and a flag operation undo in reverse order,
-    /// and each step carries a snapshot of <em>both</em> banks — the map stays painted while the
-    /// flag step is rolled back, which is what "снимок обеих банок" has to mean in practice.
-    /// </summary>
     [Fact]
-    public void UndoAndRedoWalkBothBanksOneOperationAtATime()
+    public void UndoAndRedoWalkTwoStrokesOneOperationAtATime()
     {
         var session = new MapEditorSession(CartFolder());
         session.SelectSprite(3);
-        Stroke(session, (7, 7));                 // step 1: map
-        session.ToggleFlag(3, 2);                // step 2: flags
+        Stroke(session, (7, 7));                 // step 1
+        session.SelectSprite(9);
+        Stroke(session, (2, 2));                 // step 2
 
         session.Undo();
-        Assert.False(session.IsFlagSet(3, 2));
-        Assert.Equal(3, session.TileAt(7, 7));   // the map step is untouched by the flag step's undo
+        Assert.Equal(0, session.TileAt(2, 2));
+        Assert.Equal(3, session.TileAt(7, 7));   // the first step is untouched by the second step's undo
 
         session.Undo();
         Assert.Equal(0, session.TileAt(7, 7));
@@ -417,10 +334,10 @@ public class MapEditorSessionTests : IDisposable
 
         session.Redo();
         Assert.Equal(3, session.TileAt(7, 7));
-        Assert.False(session.IsFlagSet(3, 2));
+        Assert.Equal(0, session.TileAt(2, 2));
 
         session.Redo();
-        Assert.True(session.IsFlagSet(3, 2));
+        Assert.Equal(9, session.TileAt(2, 2));
         Assert.False(session.CanRedo);
     }
 
@@ -433,7 +350,8 @@ public class MapEditorSessionTests : IDisposable
         session.Undo();
         Assert.True(session.CanRedo);
 
-        session.ToggleFlag(1, 0);               // history branched; the old future is gone
+        session.SelectSprite(1);
+        Stroke(session, (4, 4));                // history branched; the old future is gone
 
         Assert.False(session.CanRedo);
     }
@@ -448,41 +366,6 @@ public class MapEditorSessionTests : IDisposable
 
         Assert.False(session.CanUndo);          // an idle click must not make Ctrl+Z look dead
         Assert.False(session.IsDirty);
-    }
-
-    [Fact]
-    public void AFlagWriteThatChangesNothingIsInvisibleToUndoAndDirt()
-    {
-        var session = new MapEditorSession(CartFolder(flags: PatternFlags()));
-        byte current = session.FlagsAt(40);
-
-        session.SetFlags(40, current);
-
-        Assert.False(session.CanUndo);
-        Assert.False(session.IsFlagsDirty);
-    }
-
-    /// <summary>
-    /// A flag write while the pencil is still down closes the gesture first. Otherwise the flag
-    /// step would be pushed under the pre-stroke snapshot and undo would replay the two
-    /// operations in the wrong order — the first Ctrl+Z would erase the map instead of the flag.
-    /// </summary>
-    [Fact]
-    public void AFlagWriteMidStrokeCommitsTheGestureFirst()
-    {
-        var session = new MapEditorSession(CartFolder());
-        session.SelectSprite(5);
-        session.BeginStroke();
-        session.PaintTile(1, 1);
-
-        session.ToggleFlag(5, 0);
-
-        Assert.False(session.StrokeActive);
-        session.Undo();
-        Assert.False(session.IsFlagSet(5, 0));
-        Assert.Equal(5, session.TileAt(1, 1));   // the map gesture is still a separate, later-undone step
-        session.Undo();
-        Assert.Equal(0, session.TileAt(1, 1));
     }
 
     [Fact]
@@ -514,17 +397,6 @@ public class MapEditorSessionTests : IDisposable
         Assert.Contains("18432", e.Message, StringComparison.Ordinal);
     }
 
-    [Fact]
-    public void AFlagsBinOfTheWrongLengthIsRefused()
-    {
-        string folder = CartFolder(flags: new byte[MapEditorSession.FlagsPayloadSize + 1]);
-
-        var e = Assert.Throws<CartLoadException>(() => new MapEditorSession(folder));
-
-        Assert.Contains(MapEditorSession.FlagsFileName, e.Message, StringComparison.Ordinal);
-        Assert.Contains("256", e.Message, StringComparison.Ordinal);
-    }
-
     // ---- tile picker, eyedropper, coordinate guards ----
 
     [Fact]
@@ -547,8 +419,6 @@ public class MapEditorSessionTests : IDisposable
 
         Assert.Throws<ArgumentOutOfRangeException>(() => session.SelectSprite(MapEditorSession.SpriteCount));
         Assert.Throws<ArgumentOutOfRangeException>(() => session.SelectSprite(-1));
-        Assert.Throws<ArgumentOutOfRangeException>(() => session.FlagsAt(MapEditorSession.SpriteCount));
-        Assert.Throws<ArgumentOutOfRangeException>(() => session.ToggleFlag(0, MapEditorSession.FlagBits));
         Assert.Equal(MapEditorSession.SpriteCount - 1, session.SelectedSprite);   // a rejected value must not half-apply
     }
 

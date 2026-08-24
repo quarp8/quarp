@@ -1,6 +1,7 @@
 using Microsoft.Xna.Framework;
 using Microsoft.Xna.Framework.Graphics;
 using Quarp.Core;
+using static Quarp.Shell.Desktop.EditorChromeRenderer;
 
 namespace Quarp.Shell.Desktop;
 
@@ -32,9 +33,7 @@ namespace Quarp.Shell.Desktop;
 public sealed class SpriteEditorRenderer : IDisposable
 {
     private readonly GraphicsDevice _device;
-    private readonly PixelFontAtlas _font;
-    private readonly EditorIconAtlas _icons;
-    private readonly Texture2D _white;
+    private readonly EditorChromeRenderer _chrome;
     private readonly Texture2D _sheetTexture;
     private readonly Color[] _sheetPixels;
 
@@ -47,22 +46,6 @@ public sealed class SpriteEditorRenderer : IDisposable
     private SpriteEditorSession? _shownSession;
     private int _shownVersion;
 
-    // Palette roles, same cast as the library's (Palette.cs documented visible slots).
-    private static readonly Color Ink = PaletteColors.Opaque(0);
-    private static readonly Color Dim = PaletteColors.Opaque(1);
-    private static readonly Color Text = PaletteColors.Opaque(2);
-    private static readonly Color Bright = PaletteColors.Opaque(3);
-    private static readonly Color ActiveBg = PaletteColors.Opaque(4);   // blue: the library's selection bar, reused as "this is on"
-    private static readonly Color Warn = PaletteColors.Opaque(8);       // yellow: the exit prompt and the modified icon — a decision, not a failure
-    private static readonly Color Error = PaletteColors.Opaque(10);     // red: a save that did not happen
-
-    // The strips' background (owner's second review: the tab and status bands must separate
-    // from the window instead of melting into it). Master32[16] is the ink's own secret twin —
-    // the "twilight lift of near-black" (Palette.cs) — so the bands read as raised chrome one
-    // honest step lighter than the Ink-cleared window while Text and Dim keep their contrast
-    // on top of it.
-    private static readonly Color StripBg = PaletteColors.Opaque(16);
-
     // The marching ants' dash buffer, reused every frame: the outline is rebuilt each Draw
     // (it marches), but the list is not reallocated sixty times a second.
     private readonly List<AntDash> _ants = new();
@@ -71,10 +54,7 @@ public sealed class SpriteEditorRenderer : IDisposable
     {
         ArgumentNullException.ThrowIfNull(device);
         _device = device;
-        _font = new PixelFontAtlas(device);
-        _icons = new EditorIconAtlas(device);
-        _white = new Texture2D(device, 1, 1);
-        _white.SetData(new[] { Color.White });
+        _chrome = new EditorChromeRenderer(device);
         _sheetTexture = new Texture2D(device, VirtualConsole.SheetWidth, VirtualConsole.SheetHeight);
         _sheetPixels = new Color[VirtualConsole.SheetWidth * VirtualConsole.SheetHeight];
         _palette = new Color[Palette.VisibleCount];
@@ -112,16 +92,19 @@ public sealed class SpriteEditorRenderer : IDisposable
         batch.Begin(samplerState: SamplerState.PointClamp);
 
         // The bands go first: everything in the strips sits ON them.
-        batch.Draw(_white, layout.TabStrip, StripBg);
-        batch.Draw(_white, layout.StatusBar, StripBg);
+        _chrome.DrawBands(batch, layout.Chrome);
 
         DrawCanvas(batch, layout, editor, timeSeconds);
         DrawButtons(batch, layout, editor, hover);
         DrawSwatches(batch, layout, editor);
         DrawSheet(batch, layout, editor, scroll.Offset);
         DrawSlider(batch, layout, scroll, hover);
-        DrawStatusText(batch, layout, editor);
-        DrawPromptLine(batch, layout, editor);
+        // The readouts: the cursor in SHEET pixels — the coordinate an author would type into
+        // code — and the sprite number, which is Spr(n)'s n for the region's anchor cell.
+        _chrome.DrawStatusText(
+            batch, layout.Chrome, SheetCoordinates(editor), $"#{editor.SpriteIndex:D3}");
+        _chrome.DrawPromptLine(
+            batch, layout.Chrome, editor.ExitPromptShown, editor.SaveError, StandingNotice(editor));
         DrawFlyout(batch, layout, editor, flyoutSlot, hover);
         DrawTooltip(batch, layout, width, height, editor, hover, tooltipVisible);
 
@@ -130,11 +113,27 @@ public sealed class SpriteEditorRenderer : IDisposable
 
     public void Dispose()
     {
-        _font.Dispose();
-        _icons.Dispose();
-        _white.Dispose();
+        _chrome.Dispose();
         _sheetTexture.Dispose();
     }
+
+    /// <summary>
+    /// The status band's readout, in <b>sheet</b> pixels — the coordinate an author would type
+    /// into code, not a window position.
+    /// </summary>
+    private static string SheetCoordinates(SpriteEditorSession editor)
+    {
+        int size = VirtualConsole.SpriteSize;
+        return $"{editor.RegionCellX * size + editor.CursorX:D3},{editor.RegionCellY * size + editor.CursorY:D3}";
+    }
+
+    /// <summary>
+    /// The screen's standing line under the prompt and the save error (ADR-027): gfx.png was
+    /// edited outside while gfx-layers.png stood — the stack wins and the next save will
+    /// overwrite it, which must be announced, not sprung.
+    /// </summary>
+    private static string? StandingNotice(SpriteEditorSession editor) =>
+        editor.GfxOutOfSyncOnDisk ? "GFX.PNG EDITED OUTSIDE - LAYERS WIN, SAVING OVERWRITES IT" : null;
 
     private void UploadSheetIfChanged(SpriteEditorSession editor)
     {
@@ -156,15 +155,12 @@ public sealed class SpriteEditorRenderer : IDisposable
     }
 
     /// <summary>
-    /// Every icon-button through the one mechanism: state decides the ink, hover decides the
-    /// frame. Stubs are dim (visible, honest, dead); the active tool, the sprites tab and the
-    /// active layer tab get the library's blue bar as a background — thickness and fill carry
-    /// the signal, not hue alone. The save button is also the dirty indicator: the modified
-    /// glyph in warn yellow while unsaved work exists, the plain floppy otherwise. Group
-    /// slots show their CURRENT variant's glyph (the wave's card) plus a corner marker — the
-    /// photoshop cue that more hides underneath. Text-faced buttons (the size toggle's
-    /// number, the layer tabs' digits — <see cref="EditorIcons.ButtonText"/> owns which) draw
-    /// the font instead of a glyph, centred the way the icons are.
+    /// Every icon-button through the one mechanism <see cref="EditorChromeRenderer.DrawButton"/>
+    /// owns. What only this screen can answer is decided here: which buttons read as active
+    /// (the sprites tab, the tool in hand, the layer tab you are on), which face a group slot
+    /// wears — its CURRENT variant's glyph (the wave's card), with the corner marker drawn over
+    /// it in the same ink as the photoshop cue that more hides underneath — and which buttons
+    /// are text-faced at all (<see cref="EditorIcons.ButtonText"/> owns that list).
     /// </summary>
     private void DrawButtons(SpriteBatch batch, in SpriteEditorLayout layout, SpriteEditorSession editor, HoverTarget? hover)
     {
@@ -178,36 +174,17 @@ public sealed class SpriteEditorRenderer : IDisposable
                 || (place.Id == EditorButton.ToolShape && editor.Tool == SpriteEditorTool.Shape)
                 || (place.Id >= EditorButton.LayerTab1 && place.Id <= EditorButton.LayerTab5
                     && editor.ActiveLayerIndex == place.Id - EditorButton.LayerTab1);
-            bool hovered = hover is HoverTarget target && target.Button == place.Id;
-            Color color =
-                place.Id == EditorButton.Save && editor.IsDirty ? Warn
-                : place.Id == EditorButton.Undo && !editor.CanUndo ? Dim
-                : place.Id == EditorButton.Redo && !editor.CanRedo ? Dim
-                : EditorIcons.IsStub(place.Id) ? Dim
-                : active ? Bright
-                : Text;
-            if (active)
-            {
-                batch.Draw(_white, place.Rect, ActiveBg);
-            }
-            DrawFrame(batch, place.Rect, 1, hovered ? Bright : Dim);
-            if (EditorIcons.ButtonText(place.Id, editor) is string text)
-            {
-                _font.Draw(
-                    batch, text,
-                    place.Rect.X + (place.Rect.Width - PixelFontAtlas.MeasureWidth(text, layout.Ui)) / 2,
-                    place.Rect.Y + (place.Rect.Height - PixelFontAtlas.LineHeight(layout.Ui)) / 2,
-                    layout.Ui, color);
-            }
-            else
-            {
-                EditorIcon icon = place.Id == EditorButton.Save
-                    ? editor.IsDirty ? EditorIcon.Modified : EditorIcon.Saved
-                    : EditorIcons.IsGroupSlot(place.Id)
-                        ? EditorIcons.VariantIcon(place.Id, CurrentVariant(editor, place.Id))
-                        : EditorIcons.IconFor(place.Id);
-                _icons.Draw(batch, icon, layout.ButtonIconRect(place.Rect), color);
-            }
+            var state = new EditorButtonState(
+                Active: active,
+                Hovered: hover is HoverTarget target && target.Button == place.Id,
+                Dirty: editor.IsDirty,
+                CanUndo: editor.CanUndo,
+                CanRedo: editor.CanRedo);
+            EditorIcon icon = EditorIcons.IsGroupSlot(place.Id)
+                ? EditorIcons.VariantIcon(place.Id, CurrentVariant(editor, place.Id))
+                : EditorIcons.IconFor(place.Id);
+            Color color = _chrome.DrawButton(
+                batch, layout.Chrome, place, state, icon, EditorIcons.ButtonText(place.Id, editor));
             if (EditorIcons.IsGroupSlot(place.Id))
             {
                 DrawGroupMarker(batch, layout, place.Rect, color);
@@ -235,7 +212,7 @@ public sealed class SpriteEditorRenderer : IDisposable
         for (int step = 0; step < 3; step++)
         {
             batch.Draw(
-                _white,
+                _chrome.White,
                 new Rectangle(slot.Right - u * (step + 1), slot.Bottom - u * (3 - step), u, u * (3 - step)),
                 color);
         }
@@ -260,13 +237,13 @@ public sealed class SpriteEditorRenderer : IDisposable
         {
             Rectangle rect = layout.FlyoutVariantRect(slot, i);
             bool hovered = hover is HoverTarget target && target.FlyoutSlot == slot && target.FlyoutVariant == i;
-            batch.Draw(_white, rect, i == current ? ActiveBg : Ink);
-            DrawFrame(batch, rect, 1, hovered ? Bright : Dim);
+            batch.Draw(_chrome.White, rect, i == current ? ActiveBg : Ink);
+            _chrome.DrawFrame(batch, rect, 1, hovered ? Bright : Dim);
             Color ink = i == current ? Bright : Text;
             if (slot == EditorButton.SizeToggle)
             {
                 string label = EditorIcons.SizeLabel(EditorIcons.SizeVariantCells(i));
-                _font.Draw(
+                _chrome.Font.Draw(
                     batch, label,
                     rect.X + (rect.Width - PixelFontAtlas.MeasureWidth(label, layout.Ui)) / 2,
                     rect.Y + (rect.Height - PixelFontAtlas.LineHeight(layout.Ui)) / 2,
@@ -274,7 +251,7 @@ public sealed class SpriteEditorRenderer : IDisposable
             }
             else
             {
-                _icons.Draw(batch, EditorIcons.VariantIcon(slot, i), layout.ButtonIconRect(rect), ink);
+                _chrome.Icons.Draw(batch, EditorIcons.VariantIcon(slot, i), layout.ButtonIconRect(rect), ink);
             }
         }
     }
@@ -282,7 +259,7 @@ public sealed class SpriteEditorRenderer : IDisposable
     private void DrawCanvas(SpriteBatch batch, in SpriteEditorLayout layout, SpriteEditorSession editor, double timeSeconds)
     {
         // The frame is what separates sheet-ink pixels from the ink-cleared window behind them.
-        DrawFrame(batch, layout.Canvas, layout.Ui, Dim);
+        _chrome.DrawFrame(batch, layout.Canvas, layout.Ui, Dim);
         int size = VirtualConsole.SpriteSize;
         var region = new Rectangle(
             editor.RegionCellX * size, editor.RegionCellY * size, layout.RegionPixels, layout.RegionPixels);
@@ -298,7 +275,7 @@ public sealed class SpriteEditorRenderer : IDisposable
         {
             foreach ((int px, int py) in editor.ShapePreview)
             {
-                batch.Draw(_white, PixelRect(layout, px, py), _palette[editor.CurrentColor]);
+                batch.Draw(_chrome.White, PixelRect(layout, px, py), _palette[editor.CurrentColor]);
             }
         }
 
@@ -308,7 +285,7 @@ public sealed class SpriteEditorRenderer : IDisposable
         // The canvas cursor — where the keyboard pencil is and what the status bar's
         // coordinates read. A frame around the pixel, not over it: the color being placed
         // must stay visible under the cursor.
-        DrawFrame(batch, PixelRect(layout, editor.CursorX, editor.CursorY), Math.Max(1, layout.Ui / 2), Bright);
+        _chrome.DrawFrame(batch, PixelRect(layout, editor.CursorX, editor.CursorY), Math.Max(1, layout.Ui / 2), Bright);
     }
 
     /// <summary>One region pixel's quad on the canvas — the single mapping the shape preview, the selection, the ghost and the cursor all share.</summary>
@@ -350,7 +327,7 @@ public sealed class SpriteEditorRenderer : IDisposable
                 {
                     if (editor.IsSelected(x, y))
                     {
-                        batch.Draw(_white, PixelRect(layout, x, y), _palette[0]);
+                        batch.Draw(_chrome.White, PixelRect(layout, x, y), _palette[0]);
                     }
                 }
             }
@@ -361,7 +338,7 @@ public sealed class SpriteEditorRenderer : IDisposable
                     if (editor.IsSelected(x, y))
                     {
                         byte color = editor.Pixels[(sheetY0 + y) * VirtualConsole.SheetWidth + sheetX0 + x];
-                        batch.Draw(_white, PixelRect(layout, x + dx, y + dy), _palette[color]);
+                        batch.Draw(_chrome.White, PixelRect(layout, x + dx, y + dy), _palette[color]);
                     }
                 }
             }
@@ -376,7 +353,7 @@ public sealed class SpriteEditorRenderer : IDisposable
         foreach (AntDash dash in _ants)
         {
             batch.Draw(
-                _white,
+                _chrome.White,
                 new Rectangle(layout.Canvas.X + dash.X, layout.Canvas.Y + dash.Y, dash.Width, dash.Height),
                 dash.Bright ? Bright : Ink);
         }
@@ -407,7 +384,7 @@ public sealed class SpriteEditorRenderer : IDisposable
                 {
                     continue;   // transparent source, or the part the border will clip off the print
                 }
-                batch.Draw(_white, PixelRect(layout, x, y), _palette[color] * 0.5f);
+                batch.Draw(_chrome.White, PixelRect(layout, x, y), _palette[color] * 0.5f);
             }
         }
     }
@@ -422,14 +399,14 @@ public sealed class SpriteEditorRenderer : IDisposable
             // filling the space between swatches without covering a neighbour — visible even
             // when the current color is white, because thickness carries the signal, not hue.
             bool current = i == editor.CurrentColor;
-            DrawFrame(batch, rect, current ? layout.Ui : 1, current ? Bright : Dim);
-            batch.Draw(_white, rect, _palette[i]);
+            _chrome.DrawFrame(batch, rect, current ? layout.Ui : 1, current ? Bright : Dim);
+            batch.Draw(_chrome.White, rect, _palette[i]);
         }
     }
 
     private void DrawSheet(SpriteBatch batch, in SpriteEditorLayout layout, SpriteEditorSession editor, int scroll)
     {
-        DrawFrame(batch, layout.Sheet, layout.Ui, Dim);
+        _chrome.DrawFrame(batch, layout.Sheet, layout.Ui, Dim);
         int visibleRight = scroll + layout.SheetVisiblePixels;
         for (int lane = 0; lane < SheetStrip.Lanes; lane++)
         {
@@ -470,7 +447,7 @@ public sealed class SpriteEditorRenderer : IDisposable
             Rectangle visible = Rectangle.Intersect(highlight, layout.Sheet);
             if (visible.Width > 0 && visible.Height > 0)
             {
-                DrawFrame(batch, visible, Math.Max(1, layout.Ui / 2), Bright);
+                _chrome.DrawFrame(batch, visible, Math.Max(1, layout.Ui / 2), Bright);
             }
         }
     }
@@ -487,76 +464,17 @@ public sealed class SpriteEditorRenderer : IDisposable
     /// </summary>
     private void DrawSlider(SpriteBatch batch, in SpriteEditorLayout layout, SheetScroll scroll, HoverTarget? hover)
     {
-        DrawFrame(batch, layout.SheetSlider, 1, Dim);
-        batch.Draw(_white, layout.SheetSlider, StripBg);
+        _chrome.DrawFrame(batch, layout.SheetSlider, 1, Dim);
+        batch.Draw(_chrome.White, layout.SheetSlider, StripBg);
         bool hot = scroll.Dragging || (hover is HoverTarget target && target.Slider);
-        batch.Draw(_white, layout.SheetThumb(scroll.Offset), hot ? Bright : Text);
+        batch.Draw(_chrome.White, layout.SheetThumb(scroll.Offset), hot ? Bright : Text);
     }
 
     /// <summary>
-    /// The status bar's text half (its buttons are drawn with all the others): the cursor's
-    /// position in <b>sheet</b> pixels — the coordinate an author would type into code — and
-    /// the sprite number, which is Spr(n)'s n for the region's anchor cell.
-    /// </summary>
-    private void DrawStatusText(SpriteBatch batch, in SpriteEditorLayout layout, SpriteEditorSession editor)
-    {
-        int size = VirtualConsole.SpriteSize;
-        string coords =
-            $"{editor.RegionCellX * size + editor.CursorX:D3},{editor.RegionCellY * size + editor.CursorY:D3}";
-        // The band spans the whole window, so the text takes the screen margin, not the band's X.
-        _font.Draw(batch, coords, layout.Margin, layout.StatusTextY, layout.Ui, Text);
-        _font.Draw(
-            batch, $"#{editor.SpriteIndex:D3}",
-            layout.Margin + PixelFontAtlas.MeasureWidth(coords + "   ", layout.Ui),
-            layout.StatusTextY, layout.Ui, Bright);
-    }
-
-    /// <summary>
-    /// The reserved line above the status bar: the dirty-exit prompt when it is up (its three
-    /// verbs are the clickable rectangles <see cref="SpriteEditorLayout.PromptVerbRect"/> owns —
-    /// mouse parity for Z/X/Esc), otherwise the last save error if there is one, then the
-    /// out-of-sync notice (ADR-027: gfx.png was edited outside while gfx-layers.png stood —
-    /// the stack wins and the next save will overwrite, which must be announced, not sprung).
-    /// When several exist each moves one line up rather than being traded away: a failed
-    /// save is why the prompt is still up, and hiding any of them would lie.
-    /// </summary>
-    private void DrawPromptLine(SpriteBatch batch, in SpriteEditorLayout layout, SpriteEditorSession editor)
-    {
-        int lineY = layout.PromptY;
-        int lineStep = PixelFontAtlas.LineHeight(layout.Ui) + layout.Ui;
-        if (editor.ExitPromptShown)
-        {
-            _font.Draw(batch, SpriteEditorLayout.PromptHeading, layout.Margin, layout.PromptY, layout.Ui, Warn);
-            DrawPromptVerb(batch, layout, EditorPromptVerb.SaveAndExit, SpriteEditorLayout.PromptSaveVerb);
-            DrawPromptVerb(batch, layout, EditorPromptVerb.Discard, SpriteEditorLayout.PromptDiscardVerb);
-            DrawPromptVerb(batch, layout, EditorPromptVerb.Stay, SpriteEditorLayout.PromptStayVerb);
-            lineY -= lineStep;
-        }
-        if (editor.SaveError is string error)
-        {
-            _font.Draw(batch, $"SAVE FAILED: {error}".ToUpperInvariant(), layout.Margin, lineY, layout.Ui, Error);
-            lineY -= lineStep;
-        }
-        if (editor.GfxOutOfSyncOnDisk)
-        {
-            _font.Draw(
-                batch, "GFX.PNG EDITED OUTSIDE - LAYERS WIN, SAVING OVERWRITES IT",
-                layout.Margin, lineY, layout.Ui, Warn);
-        }
-    }
-
-    private void DrawPromptVerb(SpriteBatch batch, in SpriteEditorLayout layout, EditorPromptVerb verb, string text)
-    {
-        Rectangle rect = layout.PromptVerbRect(verb);
-        DrawFrame(batch, rect, 1, Warn);
-        _font.Draw(batch, text, rect.X + layout.Ui, rect.Y + layout.Ui, layout.Ui, Bright);
-    }
-
-    /// <summary>
-    /// The tooltip, last so it sits over everything: name + hotkey from <see cref="EditorIcons"/>,
-    /// anchored under the hovered rectangle, flipped above it when the bottom of the window is
-    /// too close, and clamped into the horizontal margins — a label that runs off screen
-    /// answers nothing.
+    /// The tooltip's sprite-editor half: which text and which anchor. This screen has four
+    /// kinds of hover target (button, flyout variant, slider, swatch) and each names its own
+    /// tooltip and its own rectangle; the box itself belongs to the shared painter, which is
+    /// where the flip-and-clamp rules live for both editors.
     /// </summary>
     private void DrawTooltip(
         SpriteBatch batch, in SpriteEditorLayout layout, int width, int height,
@@ -576,27 +494,6 @@ public sealed class SpriteEditorRenderer : IDisposable
             : target.FlyoutSlot is EditorButton anchorSlot ? layout.FlyoutVariantRect(anchorSlot, target.FlyoutVariant)
             : target.Slider ? layout.SheetSlider
             : layout.SwatchRect(target.Swatch);
-        int boxWidth = PixelFontAtlas.MeasureWidth(text, layout.Ui) + 2 * layout.Ui;
-        int boxHeight = PixelFontAtlas.LineHeight(layout.Ui) + 2 * layout.Ui;
-        int x = Math.Clamp(anchor.X, layout.Margin, Math.Max(layout.Margin, width - layout.Margin - boxWidth));
-        int y = anchor.Bottom + 2 * layout.Ui;
-        if (y + boxHeight > height - layout.Margin)
-        {
-            y = anchor.Y - 2 * layout.Ui - boxHeight;
-        }
-        var box = new Rectangle(x, y, boxWidth, boxHeight);
-        batch.Draw(_white, box, Ink);
-        DrawFrame(batch, box, 1, Bright);
-        _font.Draw(batch, text, box.X + layout.Ui, box.Y + layout.Ui, layout.Ui, Text);
-    }
-
-    /// <summary>A rectangle outline of the given thickness drawn <b>outside</b> <paramref name="rect"/>, so content is never covered.</summary>
-    private void DrawFrame(SpriteBatch batch, Rectangle rect, int thickness, Color color)
-    {
-        int t = thickness;
-        batch.Draw(_white, new Rectangle(rect.X - t, rect.Y - t, rect.Width + 2 * t, t), color);
-        batch.Draw(_white, new Rectangle(rect.X - t, rect.Bottom, rect.Width + 2 * t, t), color);
-        batch.Draw(_white, new Rectangle(rect.X - t, rect.Y, t, rect.Height), color);
-        batch.Draw(_white, new Rectangle(rect.Right, rect.Y, t, rect.Height), color);
+        _chrome.DrawTooltip(batch, layout.Chrome, width, height, text, anchor);
     }
 }

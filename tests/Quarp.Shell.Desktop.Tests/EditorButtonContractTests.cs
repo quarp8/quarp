@@ -122,6 +122,11 @@ public class EditorButtonContractTests : IDisposable
         {
             return;                                 // the router refuses stubs before any verb
         }
+        if (EditorIcons.TabTarget(button) is ShellMode tab)
+        {
+            machine.SwitchEditorTab(tab);           // travel is the mode machine's verb (M9 stage 3)
+            return;
+        }
         if (EditorIcons.IsGroupSlot(button))
         {
             flyout.Arm(button);

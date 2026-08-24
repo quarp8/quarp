@@ -3,15 +3,19 @@ using Quarp.CartKit;
 namespace Quarp.Shell.Desktop;
 
 /// <summary>
-/// The three faces of the one console window (ADR-026: library ↔ game ↔ editor). Since M9
-/// stage 2 the editor is real: it holds a <see cref="SpriteEditorSession"/> for the cart the
-/// library's bar was on.
+/// The faces of the one console window (ADR-026: library ↔ game ↔ editor). Since M9 stage 2
+/// the editor is real: it holds a <see cref="SpriteEditorSession"/> for the cart the library's
+/// bar was on. Since stage 3 the editor has two faces of its own — the sprite sheet and the
+/// map of the SAME cart, two modes rather than one with a flag, because the window draws a
+/// different screen and routes different input for each, and <c>QuarpGame</c>'s update and
+/// draw switches are where that difference has to be visible.
 /// </summary>
 public enum ShellMode
 {
     Library,
     Game,
     Editor,
+    MapEditor,
 }
 
 /// <summary>
@@ -88,8 +92,27 @@ public sealed class ShellModeMachine
     /// <summary>The running cartridge; non-null exactly while <see cref="Mode"/> is <see cref="ShellMode.Game"/>.</summary>
     public CartSession? Session { get; private set; }
 
-    /// <summary>The open sprite sheet; non-null exactly while <see cref="Mode"/> is <see cref="ShellMode.Editor"/>.</summary>
+    /// <summary>
+    /// The open sprite sheet; non-null while <see cref="Mode"/> is <see cref="ShellMode.Editor"/>
+    /// <b>or</b> <see cref="ShellMode.MapEditor"/> — the two tabs are two faces of one open
+    /// cartridge, and the sheet stays alive (unsaved pixels and all) while the author is on the
+    /// map tab. That is the stage-3 promise "there and back without losing unsaved work".
+    /// </summary>
     public SpriteEditorSession? Editor { get; private set; }
+
+    /// <summary>
+    /// The open map of the same cart, created lazily by the first visit to the tilemap tab and
+    /// then kept until the whole editor closes — so flipping tabs never costs an unsaved cell.
+    /// Null until that first visit: a cart whose map is never opened must not get a session
+    /// (and therefore cannot get a file) it never asked for.
+    /// </summary>
+    public MapEditorSession? MapEditor { get; private set; }
+
+    /// <summary>The map screen's camera, cursor and exit prompt; non-null exactly while <see cref="MapEditor"/> is.</summary>
+    public MapEditorView? MapView { get; private set; }
+
+    /// <summary>The folder both editor sessions belong to — remembered because a session does not carry its own path.</summary>
+    private string? _editorFolder;
 
     /// <summary>
     /// True once Escape meant "leave the process". The shell polls this and calls
@@ -115,10 +138,18 @@ public sealed class ShellModeMachine
                 break;
             case ShellMode.Editor:
                 // The session judges (clean closes, dirty raises or lowers its prompt);
-                // the machine only executes the verdict.
+                // the machine only executes the verdict — and then asks the OTHER open bank
+                // the same question, because leaving the editor must not drop a dirty map that
+                // happens to be on the tab the author is not looking at.
                 if (Editor!.RequestClose())
                 {
-                    CloseEditor();
+                    CloseAfterSheetResolved();
+                }
+                break;
+            case ShellMode.MapEditor:
+                if (MapView!.RequestClose(MapEditor!))
+                {
+                    CloseAfterMapResolved();
                 }
                 break;
             default:
@@ -184,6 +215,7 @@ public sealed class ShellModeMachine
         try
         {
             Editor = new SpriteEditorSession(entry.Path);
+            _editorFolder = entry.Path;
             Mode = ShellMode.Editor;
             LibraryMessage = null;
         }
@@ -198,7 +230,49 @@ public sealed class ShellModeMachine
     }
 
     /// <summary>
-    /// Z on the editor's exit prompt: save, then leave — but only if the save really landed;
+    /// The tilemap and sprites tabs, clicked or keyed — the one door between the editor's two
+    /// faces (<see cref="EditorIcons.TabTarget"/> owns which button means which). Asking for
+    /// the tab already on screen is the honest no-op the tab strip promises. The map session is
+    /// born here, on first arrival, and a cart whose map.bin is the wrong length reports the way
+    /// a failed launch does instead of throwing the shell away.
+    /// </summary>
+    public void SwitchEditorTab(ShellMode target)
+    {
+        if (Mode is not (ShellMode.Editor or ShellMode.MapEditor))
+        {
+            return;
+        }
+        if (target == ShellMode.Editor)
+        {
+            Mode = ShellMode.Editor;
+            return;
+        }
+        if (target != ShellMode.MapEditor)
+        {
+            return;
+        }
+        if (MapEditor is null)
+        {
+            try
+            {
+                MapEditor = new MapEditorSession(_editorFolder!);
+                MapView = new MapEditorView();
+            }
+            catch (Exception e) when (e is CartLoadException or IOException or UnauthorizedAccessException)
+            {
+                LibraryMessage = $"{Editor!.CartName}: {FirstLine(e.Message)}";
+                return;     // stay on the sheet: a broken map must not take the open sprites with it
+            }
+        }
+        Mode = ShellMode.MapEditor;
+    }
+
+    /// <summary>The keyboard half of the tab strip: one key flips between the two open faces.</summary>
+    public void ToggleEditorTab() =>
+        SwitchEditorTab(Mode == ShellMode.MapEditor ? ShellMode.Editor : ShellMode.MapEditor);
+
+    /// <summary>
+    /// Z on the sheet's exit prompt: save, then leave — but only if the save really landed;
     /// a failed write keeps the editor (and the author's pixels) alive with the error in the
     /// footer. Guarded to the prompt because a bare Z has no exit meaning in the editor.
     /// </summary>
@@ -210,18 +284,78 @@ public sealed class ShellModeMachine
         }
         if (editor.Save())
         {
-            CloseEditor();
+            CloseAfterSheetResolved();
         }
     }
 
-    /// <summary>X on the editor's exit prompt: leave without saving — the disk stays byte-for-byte untouched.</summary>
+    /// <summary>X on the sheet's exit prompt: leave without saving — the disk stays byte-for-byte untouched.</summary>
     public void DiscardEditorAndClose()
     {
         if (Mode != ShellMode.Editor || Editor is not { ExitPromptShown: true })
         {
             return;
         }
-        CloseEditor();
+        CloseAfterSheetResolved();
+    }
+
+    /// <summary>Z on the map's exit prompt — the map half of <see cref="SaveEditorAndClose"/>, same failure rule.</summary>
+    public void SaveMapAndClose()
+    {
+        if (Mode != ShellMode.MapEditor || MapView is not { ExitPromptShown: true })
+        {
+            return;
+        }
+        if (MapEditor!.Save())
+        {
+            MapView.CloseExitPrompt();
+            CloseAfterMapResolved();
+        }
+    }
+
+    /// <summary>X on the map's exit prompt: leave the cells unsaved — map.bin stays byte-for-byte untouched.</summary>
+    public void DiscardMapAndClose()
+    {
+        if (Mode != ShellMode.MapEditor || MapView is not { ExitPromptShown: true })
+        {
+            return;
+        }
+        MapView.CloseExitPrompt();
+        CloseAfterMapResolved();
+    }
+
+    /// <summary>
+    /// The sheet's half of the exit is settled — now the map's. A dirty map raises its own
+    /// prompt on its own tab (the author is shown what is unsaved where, rather than being
+    /// asked about pixels they cannot see), and only when both banks are settled does the
+    /// editor close. This is the whole reason the two tabs share one exit.
+    /// </summary>
+    private void CloseAfterSheetResolved()
+    {
+        if (MapEditor is null || !MapEditor.IsDirty)
+        {
+            CloseEditor();
+            return;
+        }
+        Mode = ShellMode.MapEditor;
+        if (!MapView!.ExitPromptShown)
+        {
+            MapView.RequestClose(MapEditor);    // dirty and down ⇒ this raises it, exactly once
+        }
+    }
+
+    /// <summary>The mirror: the map is settled, ask the sheet.</summary>
+    private void CloseAfterMapResolved()
+    {
+        if (!Editor!.IsDirty)
+        {
+            CloseEditor();
+            return;
+        }
+        Mode = ShellMode.Editor;
+        if (!Editor.ExitPromptShown)
+        {
+            Editor.RequestClose();
+        }
     }
 
     /// <summary>
@@ -232,6 +366,9 @@ public sealed class ShellModeMachine
     private void CloseEditor()
     {
         Editor = null;
+        MapEditor = null;
+        MapView = null;
+        _editorFolder = null;
         Mode = ShellMode.Library;
         Library.Rescan();
     }

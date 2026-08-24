@@ -21,15 +21,21 @@ namespace Quarp.Shell.Desktop;
 /// <para><b>Escape means different things on purpose</b> (work order, stage 1): a cart started
 /// as <c>quarp run &lt;cart&gt;</c> is the author's F5 loop, and Esc quits the process like it
 /// always has — the library must not wedge itself into that loop. A cart started from the
-/// library returns to the library. Esc in the library quits; Esc in the editor returns to the
-/// library when the session is clean, and raises the session's footer prompt when it is not —
-/// unsaved pixels leave only through an explicit Z (save) or X (discard), never silently.</para>
+/// library returns to the library. Esc in the library returns to the boot menu (ADR-028; it
+/// used to quit, before the menu existed to return to); Esc in the menu quits — except that
+/// mid-intro it skips, and in the name field it cancels the field. Esc in the editor returns
+/// to the library when the session is clean, and raises the session's footer prompt when it
+/// is not — unsaved pixels leave only through an explicit Z (save) or X (discard), never
+/// silently.</para>
 /// </summary>
 public sealed class ShellModeMachine
 {
     private readonly Func<string, CartSession> _startSession;
     private readonly Action _drainAudio;
     private readonly bool _directLaunch;
+
+    /// <summary>Where CREATE GAME scaffolds — the cwd-relative carts root by default, injectable for tests.</summary>
+    private readonly string _createRoot;
 
     /// <summary>
     /// Library entry when <paramref name="directSession"/> is null; game entry around an
@@ -50,7 +56,8 @@ public sealed class ShellModeMachine
         CartLibrary library,
         Func<string, CartSession> startSession,
         Action drainAudio,
-        CartSession? directSession = null)
+        CartSession? directSession = null,
+        string? createRoot = null)
     {
         ArgumentNullException.ThrowIfNull(library);
         ArgumentNullException.ThrowIfNull(startSession);
@@ -58,6 +65,9 @@ public sealed class ShellModeMachine
         Library = library;
         _startSession = startSession;
         _drainAudio = drainAudio;
+        // The same cwd-relative root the library's default scan reads: a cart born in the
+        // menu must appear in the library the moment the author comes back to it.
+        _createRoot = createRoot ?? Path.Combine(Environment.CurrentDirectory, CartLibrary.FolderName);
         if (directSession is not null)
         {
             Session = directSession;
@@ -66,13 +76,17 @@ public sealed class ShellModeMachine
         }
         else
         {
-            Mode = ShellMode.Library;
-            library.Rescan();
+            // The boot menu, not the library (ADR-028): the library is the menu's first door,
+            // and its scan now runs on entry through that door rather than here.
+            Mode = ShellMode.Menu;
         }
     }
 
     /// <summary>The list the library screen shows; scanned on every entry into the library.</summary>
     public CartLibrary Library { get; }
+
+    /// <summary>The boot screen's model — intro clock, selection, the name field. Idle on a direct launch.</summary>
+    public MainMenuSession Menu { get; } = new();
 
     public ShellMode Mode { get; private set; }
 
@@ -123,6 +137,20 @@ public sealed class ShellModeMachine
             case ShellMode.Game when !_directLaunch:
                 LeaveGameForLibrary();
                 break;
+            case ShellMode.Menu when Menu.Phase == MenuPhase.Intro:
+                // Esc is "any key" here like every other key: it cuts the intro, it does not
+                // quit — nobody presses Esc during a boot animation to leave the console.
+                Menu.SkipIntro();
+                break;
+            case ShellMode.Menu when Menu.Phase == MenuPhase.NameEntry:
+                Menu.CancelNameEntry();
+                break;
+            case ShellMode.Library:
+                // Back out the way the author came in (ADR-028); the menu is the root now.
+                LibraryMessage = null;
+                Menu.Message = null;
+                Mode = ShellMode.Menu;
+                break;
             case ShellMode.Editor:
                 // The session judges (clean closes, dirty raises or lowers its prompt);
                 // the machine only executes the verdict — and then asks the OTHER open bank
@@ -140,7 +168,7 @@ public sealed class ShellModeMachine
                 }
                 break;
             default:
-                // A direct-launch game or the library itself: leave the process. The session,
+                // A direct-launch game, or the menu at rest: leave the process. The session,
                 // if any, is deliberately left standing — QuarpGame's OnExiting/Dispose path
                 // saves and unloads it, same as it always has.
                 ExitRequested = true;
@@ -213,6 +241,120 @@ public sealed class ShellModeMachine
         catch (Exception e) when (e is IOException or UnauthorizedAccessException)
         {
             LibraryMessage = $"{entry.Name}: {FirstLine(e.Message)}";
+        }
+    }
+
+    /// <summary>Door 1 of the menu: the library, scanned fresh on the way in — same promise as every entry.</summary>
+    public void OpenLibrary()
+    {
+        if (Mode != ShellMode.Menu || Menu.Phase != MenuPhase.Menu)
+        {
+            return;
+        }
+        Menu.Message = null;
+        LibraryMessage = null;
+        Mode = ShellMode.Library;
+        Library.Rescan();
+    }
+
+    /// <summary>Door 3 of the menu: raises the name field; creation happens on <see cref="ConfirmCreateGame"/>.</summary>
+    public void BeginCreateGame()
+    {
+        if (Mode == ShellMode.Menu)
+        {
+            Menu.BeginNameEntry();
+        }
+    }
+
+    /// <summary>
+    /// Enter in the name field: scaffold <c>carts/&lt;name&gt;</c> from the very template
+    /// <c>quarp new</c> writes (<see cref="CartScaffold"/> — one owner both entrances call),
+    /// then open the sprite editor on the newborn cart. Straight into the editor by the
+    /// owner's decision on the boot-menu order: create-and-draw without leaving the console
+    /// is the full-cycle promise of M9 stage 4. Refusals (bad name, name taken, disk trouble)
+    /// land on the menu's message line and keep the field up — the author fixes the name
+    /// instead of retyping it.
+    /// </summary>
+    public void ConfirmCreateGame()
+    {
+        if (Mode != ShellMode.Menu || Menu.Phase != MenuPhase.NameEntry)
+        {
+            return;
+        }
+        string name = Menu.NameText;
+        if (!CartScaffold.IsValidName(name))
+        {
+            Menu.Message = "NAME: a-z 0-9 - _";
+            return;
+        }
+        string root = Path.Combine(_createRoot, name);
+        try
+        {
+            if (CartScaffold.CartridgeExists(root))
+            {
+                Menu.Message = $"{name}: ALREADY EXISTS";
+                return;
+            }
+            CartScaffold.Create(root);
+            // Best effort, like the CLI: a cartridge that exists outweighs IDE integration,
+            // and the window has no terminal to show these on — stderr still tells the
+            // author who launched from one.
+            if (CartScaffold.TryWriteDevProject(root, out string? devWarning) is false && devWarning is not null)
+            {
+                Console.Error.WriteLine(devWarning);
+            }
+            if (CartScaffold.TryWriteVsCodeFiles(root, out string? vsCodeWarning) is false && vsCodeWarning is not null)
+            {
+                Console.Error.WriteLine(vsCodeWarning);
+            }
+            Editor = new SpriteEditorSession(root);
+            _editorFolder = root;
+            Mode = ShellMode.Editor;
+            Menu.CancelNameEntry();     // the menu the author eventually returns to is at rest
+        }
+        catch (Exception e) when (e is CartLoadException or IOException or UnauthorizedAccessException)
+        {
+            Menu.Message = FirstLine(e.Message);
+        }
+    }
+
+    /// <summary>
+    /// A cartridge arriving by path — the menu's LOAD CART dialog or a file dropped into the
+    /// window (both roads by the owner's decision, ADR-028; the drop is the niche's own way,
+    /// PICO-8 manual). Works from the menu and from the library, the two screens where no
+    /// session owns the window; a failure reports on the screen the author is looking at,
+    /// and a mid-entry drop simply puts the name field away first. Returns the new session
+    /// (so the shell wires sound and title, like <see cref="LaunchSelected"/>) or null.
+    /// </summary>
+    public CartSession? LoadCartFromPath(string path)
+    {
+        if (Mode is not (ShellMode.Menu or ShellMode.Library) || (Mode == ShellMode.Menu && Menu.Phase == MenuPhase.Intro))
+        {
+            return null;
+        }
+        Menu.CancelNameEntry();
+        string name = Path.GetFileNameWithoutExtension(path.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
+        try
+        {
+            CartSession session = _startSession(path);
+            Session = session;
+            Mode = ShellMode.Game;
+            Menu.Message = null;
+            LibraryMessage = null;
+            return session;
+        }
+        catch (Exception e) when (e is CartLoadException or IOException or UnauthorizedAccessException)
+        {
+            string report = $"{name}: {FirstLine(e.Message)}";
+            if (Mode == ShellMode.Library)
+            {
+                LibraryMessage = report;
+            }
+            else
+            {
+                Menu.Message = report;
+            }
+            return null;
         }
     }
 
@@ -352,12 +494,20 @@ public sealed class ShellModeMachine
     /// </summary>
     private void CloseEditor()
     {
+        string? edited = _editorFolder;
         Editor = null;
         MapEditor = null;
         MapView = null;
         _editorFolder = null;
         Mode = ShellMode.Library;
         Library.Rescan();
+        if (edited is not null)
+        {
+            // The bar lands on the cart just edited even when the editor was opened from the
+            // menu's CREATE GAME — the rescan's own keep-by-path only knows the previous
+            // selection, and a newborn cart never was one.
+            Library.SelectPath(edited);
+        }
     }
 
     /// <summary>

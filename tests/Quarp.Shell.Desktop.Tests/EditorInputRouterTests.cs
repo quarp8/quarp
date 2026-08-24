@@ -160,6 +160,8 @@ public class EditorInputRouterTests : IDisposable
             Path.Combine(cartFolder, "manifest.json"), "{\"name\":\"router\",\"author\":\"\",\"profile\":8}");
         var machine = new ShellModeMachine(
             new CartLibrary(root), static path => CartSession.Start(path), static () => { });
+        machine.Menu.SkipIntro();           // the real road since ADR-028: menu → library → editor
+        machine.OpenLibrary();
         machine.OpenEditor();
         Assert.Equal(ShellMode.Editor, machine.Mode);
         return new Harness(machine);

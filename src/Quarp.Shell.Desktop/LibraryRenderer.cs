@@ -61,7 +61,7 @@ public sealed class LibraryRenderer : IDisposable
 
         // The bottom strip: key hints always, the error line above them only when there is one.
         int footerY = height - margin - PixelFontAtlas.LineHeight(scale);
-        _font.Draw(batch, "UP/DOWN SELECT   Z/ENTER PLAY   X EDITOR   ESC QUIT", margin, footerY, scale, Dim);
+        _font.Draw(batch, "UP/DOWN SELECT   Z/ENTER PLAY   X EDITOR   ESC MENU", margin, footerY, scale, Dim);
         int listBottom = footerY - scale * 2;
         if (message is not null)
         {

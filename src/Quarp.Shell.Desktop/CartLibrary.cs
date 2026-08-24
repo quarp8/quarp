@@ -62,6 +62,21 @@ public sealed class CartLibrary
     public CartLibraryEntry? Selected => _entries.Count == 0 ? null : _entries[SelectedIndex];
 
     /// <summary>
+    /// Puts the bar on the entry with this path, if the list holds one — how the shell lands
+    /// the selection on a cart it knows by path rather than by position (the cart just
+    /// edited, including one the menu's CREATE GAME made moments ago). A path the scan did
+    /// not find leaves the bar where it was: the list is the truth, not the caller.
+    /// </summary>
+    public void SelectPath(string path)
+    {
+        int index = _entries.FindIndex(e => string.Equals(e.Path, path, StringComparison.OrdinalIgnoreCase));
+        if (index >= 0)
+        {
+            SelectedIndex = index;
+        }
+    }
+
+    /// <summary>
     /// Moves the selection bar, clamped at both ends rather than wrapping: with a keyboard
     /// held down, a clamped list settles on an end while a wrapping one spins.
     /// </summary>

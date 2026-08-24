@@ -20,7 +20,11 @@
          to the test assembly. That apphost is what CliProcess runs, which is how the parts
          living in Program.cs's top-level statements (`quarp new`, the break-at parser) get
          tested at all. The alternative, moving CartTemplate and AudioSilenceCommand into a
-         library so a test could see them, would reshape the product to suit the test runner. -->
+         library so a test could see them, would reshape the product to suit the test runner.
+         (CartTemplate later did move to CartKit - boot-menu wave, M9 stage 4 - but for the
+         opposite reason: the shell's CREATE GAME became a second product caller of the same
+         writer. The product reshaped itself; the runner still goes through the child
+         process for everything Program.cs owns.) -->
     <ProjectReference Include="..\..\src\Quarp.Cli\Quarp.Cli.csproj" />
     <!-- FrameHash and the APU, which the silence digest is expressed in. Transitive through the
          CLI, named here for the same reason the other test projects name theirs. -->

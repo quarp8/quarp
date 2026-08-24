@@ -27,10 +27,16 @@ public class SpriteEditorMachineTests : IDisposable
 
     public void Dispose() => Directory.Delete(_root, recursive: true);
 
-    private ShellModeMachine Machine() => new(
-        new CartLibrary(_root),
-        static path => CartSession.Start(path),
-        static () => { });
+    private ShellModeMachine Machine()
+    {
+        var machine = new ShellModeMachine(
+            new CartLibrary(_root),
+            static path => CartSession.Start(path),
+            static () => { });
+        machine.Menu.SkipIntro();           // the real road since ADR-028: born on the menu,
+        machine.OpenLibrary();              // intro skipped, through door 1 into the library
+        return machine;
+    }
 
     private string CartFolder(string name, byte[]? sheet = null)
     {

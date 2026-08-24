@@ -381,28 +381,27 @@ static int RunSim(string path, int ticks, int every)
 
 static int CreateNewCart(string folder)
 {
+    // The writer itself lives in CartKit (CartScaffold) since the boot-menu wave: the shell's
+    // CREATE GAME writes the very same files, and the CLI cannot be referenced back by the
+    // shell (quarp is one exe: Cli -> Shell.Desktop). This function owns only the terminal:
+    // which refusals and warnings are printed, and what the summary says.
     string root = Path.GetFullPath(folder);
-    if (File.Exists(Path.Combine(root, "manifest.json")))
+    if (CartScaffold.CartridgeExists(root))
     {
         Console.Error.WriteLine($"quarp: {root} already contains a cartridge (manifest.json exists).");
         return 1;
     }
-    string name = Path.GetFileName(root.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
-    if (name.Length == 0)
+    string name = CartScaffold.Create(root);
+    bool devProject = CartScaffold.TryWriteDevProject(root, out string? devWarning);
+    if (devWarning is not null)
     {
-        name = "my-cart";
+        Console.Error.WriteLine(devWarning);
     }
-
-    Directory.CreateDirectory(Path.Combine(root, "src"));
-    string manifest = "{\n"
-        + $"    \"name\": {JsonSerializer.Serialize(name)},\n"
-        + "    \"author\": \"\",\n"
-        + "    \"profile\": 8\n"
-        + "}\n";
-    File.WriteAllText(Path.Combine(root, "manifest.json"), manifest);
-    File.WriteAllText(Path.Combine(root, "src", "main.cs"), CartTemplate.MainCs);
-    bool devProject = WriteDevProject(root);
-    bool vsCode = WriteVsCodeFiles(root);
+    bool vsCode = CartScaffold.TryWriteVsCodeFiles(root, out string? vsCodeWarning);
+    if (vsCodeWarning is not null)
+    {
+        Console.Error.WriteLine(vsCodeWarning);
+    }
     Console.WriteLine($"Created cartridge '{name}' in {root}");
     if (devProject)
     {
@@ -418,89 +417,4 @@ static int CreateNewCart(string folder)
     }
     Console.WriteLine($"  quarp run {folder}");
     return 0;
-}
-
-/// <summary>
-/// Writes <c>.quarp/cart.csproj</c>, the dev-only project that makes an IDE show the same
-/// determinism diagnostics <c>CartCompiler</c> enforces (M2 work order; API-8 §12).
-/// It is not part of the cartridge: the loader reads only <c>src/**/*.cs</c>, the packer
-/// writes only the named files, the watcher ignores it, and the code budget never sees it.
-///
-/// <para>Skipped, with a warning rather than a failure, when the analyzer is not sitting next
-/// to the CLI — a cartridge that exists is worth more than an editor integration, and a
-/// csproj pointing at a missing analyzer would produce silence rather than an error.</para>
-/// </summary>
-static bool WriteDevProject(string root)
-{
-    // Both DLLs are published next to quarp itself; BaseDirectory ends with a separator.
-    string toolsDir = AppContext.BaseDirectory;
-    string analyzer = Path.Combine(toolsDir, "Quarp.Analyzers.dll");
-    string api = Path.Combine(toolsDir, "Quarp.Api.dll");
-    if (!File.Exists(analyzer) || !File.Exists(api))
-    {
-        Console.Error.WriteLine(
-            $"quarp: skipped {CartTemplate.DevFolder}/{CartTemplate.DevProjectFile} — "
-            + $"Quarp.Api.dll or Quarp.Analyzers.dll is missing from {toolsDir}.");
-        return false;
-    }
-
-    string devFolder = Path.Combine(root, CartTemplate.DevFolder);
-    Directory.CreateDirectory(devFolder);
-    File.WriteAllText(
-        Path.Combine(devFolder, CartTemplate.DevProjectFile),
-        string.Format(CultureInfo.InvariantCulture, CartTemplate.DevProjectFormat, toolsDir));
-    return true;
-}
-
-/// <summary>
-/// Writes <c>.vscode/launch.json</c> and <c>.vscode/tasks.json</c> so that opening the cartridge
-/// folder in VS Code and pressing F5 runs the cart under the .NET debugger (ADR-019; M4 work
-/// order, stage 1). Dev-only in the same four senses <c>.quarp/</c> is: the loader globs
-/// <c>src/**/*.cs</c>, the packer writes only the named files, the watcher's filter is an
-/// allow-list, and the code budget never sees the folder.
-///
-/// <para>Skipped with a warning rather than a failure when the <c>quarp</c> executable cannot be
-/// located: a launch configuration pointing at nothing is worse than no launch configuration,
-/// and the cartridge itself is perfectly usable without one.</para>
-/// </summary>
-static bool WriteVsCodeFiles(string root)
-{
-    string? exePath = FindQuarpExecutable();
-    if (exePath is null)
-    {
-        Console.Error.WriteLine(
-            $"quarp: skipped {CartTemplate.VsCodeFolder}/ — could not find the quarp executable "
-            + $"in {AppContext.BaseDirectory}.");
-        return false;
-    }
-
-    // JSON, not string interpolation: a Windows path is backslashes all the way down and each
-    // one has to be escaped. Serialize gives back the quoted, escaped literal, so the token in
-    // the template carries its quotes and is replaced whole.
-    string quotedPath = JsonSerializer.Serialize(exePath);
-    string vsCodeFolder = Path.Combine(root, CartTemplate.VsCodeFolder);
-    Directory.CreateDirectory(vsCodeFolder);
-    File.WriteAllText(
-        Path.Combine(vsCodeFolder, CartTemplate.LaunchFile),
-        CartTemplate.LaunchJson.Replace(CartTemplate.ToolPathToken, quotedPath, StringComparison.Ordinal));
-    File.WriteAllText(
-        Path.Combine(vsCodeFolder, CartTemplate.TasksFile),
-        CartTemplate.TasksJson.Replace(CartTemplate.ToolPathToken, quotedPath, StringComparison.Ordinal));
-    return true;
-}
-
-/// <summary>
-/// The absolute path VS Code should launch. The apphost next to the tools is preferred over
-/// <see cref="Environment.ProcessPath"/> because that is the same folder the dev csproj already
-/// anchors on; the process path is the fallback for a layout where the apphost was not published.
-/// </summary>
-static string? FindQuarpExecutable()
-{
-    string beside = Path.Combine(AppContext.BaseDirectory, OperatingSystem.IsWindows() ? "quarp.exe" : "quarp");
-    if (File.Exists(beside))
-    {
-        return beside;
-    }
-    string? processPath = Environment.ProcessPath;
-    return processPath is not null && File.Exists(processPath) ? processPath : null;
 }

@@ -83,6 +83,16 @@
 # Оба редактора теперь ДЕЛЕГИРУЮТ туда, а не повторяют. Число падает ровно на то, что раньше
 # существовало дважды; всё, что просто переехало, продолжает считаться — на то и прибор.
 #
+# ПОЧИНКА 2026-08-24 (волна меню, этап 4). Волна 3c увезла роутеры ввода из QuarpGame в
+# SpriteEditorInput.cs / MapEditorInput.cs, а этот список обновить не успела — сессия
+# оборвалась, и прибор на том дереве ПАДАЛ с exit 2 (маркер ScrollSheetTo не находился).
+# Защита от 2g/2h сработала как задумано: молча посчитать неправильно он не стал. Списки
+# пересобраны здесь: у роутеров разбор по методам с ПРЕЖНИМИ границами (роутинг кликов и
+# клавиш по кнопкам/слайдеру — хром; жесты карандаша и большой Update, плотно мешающий
+# роутинг с рисованием, — контент целиком, та же честная неточность, что была у
+# QuarpGame.UpdateEditor и записана выше). В QuarpGame из старого списка остался один Draw;
+# новые методы меню этой же волны добавлены по правилу «новый метод — новая строка».
+#
 # ГРАНИЦА, НА КОТОРОЙ ВИСИТ ВЕРДИКТ: SpriteEditorLayout.cs считается ЦЕЛИКОМ
 # (434 строки после волны), хотя часть его методов (TryCanvasPixel, TrySheetCell и подобные)
 # это координатная математика холста/листа, а не кнопок. Считаю их хромом
@@ -112,6 +122,50 @@ FILES_CHROME_WHOLE=(
   "$SHELL_DIR/ToolbarFlyout.cs"     # флаут группового слота тулбара
   "$SHELL_DIR/SheetScroll.cs"       # владелец страничной раскладки листа + слайдер
   "$SHELL_DIR/SpriteEditorLayout.cs" # раскладка всего экрана редактора (см. оговорку выше)
+  "$SHELL_DIR/MainMenuLayout.cs"    # раскладка бут-экрана (волна меню, M9 этап 4)
+)
+
+# --- Бут-экран (M9 этап 4). Что хром, а что нет — решено здесь, а не по памяти:
+#   MainMenuLayout.cs    — целиком хром (раскладка, как обе Layout выше).
+#   MainMenuRenderer.cs  — по методам ниже: меню и его виджеты — хром; интро-анимация —
+#                          контент (рисунок, не виджет, как холст редактора); подъём
+#                          текстуры логотипа — контент по прецеденту UploadSheetIfChanged.
+#   MenuArt.cs           — код (два аксессора) — хром; блок строк Rows — ДАННЫЕ, исключены
+#                          маркерами ровно как _masks у EditorIcons.
+#   MainMenuSession.cs   — модель (слой «документ»), в хром не входит, как CartLibrary.
+#   BootJingle.cs        — ноты (данные о звуке), не виджеты — не хром.
+#   FilePicker.cs        — клей ОС (comdlg32), ни виджетов, ни раскладки — не хром; спорно,
+#                          записано здесь, чтобы спор был виден, а не съеден молчанием.
+MENUART_FILE="$SHELL_DIR/MenuArt.cs"
+MENUART_DATA_START_SIG='private static readonly string[] Rows'
+MENUART_DATA_END_SIG='public static int Width'
+MENU_RENDERER_FILE="$SHELL_DIR/MainMenuRenderer.cs"
+MENU_RENDERER_METHODS=(
+  "public MainMenuRenderer(GraphicsDevice device)|infra"
+  "private static Texture2D BuildLogo(GraphicsDevice device)|content"
+  "public void Draw(SpriteBatch batch, int width, int height, MainMenuSession session)|infra"
+  "public void Dispose()|infra"
+  "private void Cell(|chrome"
+  "private void Print(|chrome"
+  "private void DrawIntro(|content"
+  "private void DrawMenu(|chrome"
+  "private void DrawSpecLine(|chrome"
+)
+
+# --- Роутеры ввода редакторов (волна 3c; списки — починка волны меню, см. шапку) ---
+SPRITE_INPUT_FILE="$SHELL_DIR/SpriteEditorInput.cs"
+SPRITE_INPUT_METHODS=(
+  "public static void Update(|content"
+  "private static void ScrollSheetTo(in EditorShell shell, in SpriteEditorLayout layout, int column)|chrome"
+  "private static void BeginCanvasGesture(SpriteEditorSession editor, int localX, int localY)|content"
+  "private static void EndCanvasGesture(SpriteEditorSession editor)|content"
+  "private static void RefreshGestures(SpriteEditorSession editor, in ShellCommands commands)|content"
+  "private static bool HandleEditorButton(in EditorShell shell, SpriteEditorSession editor, EditorButton button)|chrome"
+)
+MAP_INPUT_FILE="$SHELL_DIR/MapEditorInput.cs"
+MAP_INPUT_METHODS=(
+  "public static void Update(|content"
+  "private static bool HandleMapButton(in EditorShell shell, MapEditorSession map, EditorButton button)|chrome"
 )
 
 # --- EditorIcons.cs: код хром, но внутри лежит блок битовых масок — данные ---
@@ -158,12 +212,13 @@ GAME_FILE="$SHELL_DIR/QuarpGame.cs"
 # поэтому пропущенный метод молча приписывается предыдущему. Аудит 2026-08-24 поймал ровно это:
 # ScrollSheetTo (слайдер листа, чистый хром) не был в списке и его строки уходили в счёт «не хром».
 GAME_METHODS=(
-  "private void ScrollSheetTo(in SpriteEditorLayout layout, int column)|chrome"
-  "private static void BeginCanvasGesture(SpriteEditorSession editor, int localX, int localY)|content"
-  "private static void EndCanvasGesture(SpriteEditorSession editor)|content"
-  "private static void RefreshGestures(SpriteEditorSession editor, in ShellCommands commands)|content"
-  "private bool HandleEditorButton(SpriteEditorSession editor, EditorButton button)|chrome"
-  "private bool HandleMapButton(MapEditorSession map, EditorButton button)|chrome"
+  "private void UpdateMenu(in ShellCommands commands, KeyboardState keyboard, in EditorMouse mouse, GameTime gameTime)|chrome"
+  "private void ActivateMenuItem(MenuItem item)|chrome"
+  "private void LaunchFromPath(string path)|infra"
+  "private bool ConsumeDroppedFile()|infra"
+  "private void OnSessionStarted()|infra"
+  "private void PlayBootJingle(GameTime gameTime, bool stopNow)|infra"
+  "private EditorShell EditorContext() =>|infra"
   "protected override void Draw(GameTime gameTime)|infra"
 )
 
@@ -278,6 +333,55 @@ if [ "$fail_env" -eq 0 ]; then
 fi
 
 echo
+echo "=== MenuArt.cs: код (хром) отдельно от строк-данных логотипа ==="
+check_file "$MENUART_FILE"
+if [ "$fail_env" -eq 0 ]; then
+  menuart_total=$(wc -l < "$MENUART_FILE")
+  astart=$(line_of "$MENUART_FILE" "$MENUART_DATA_START_SIG")
+  aendmarker=$(line_of "$MENUART_FILE" "$MENUART_DATA_END_SIG")
+  if [ -z "$astart" ] || [ -z "$aendmarker" ]; then
+    echo "МАРКЕР ДАННЫХ НЕ НАЙДЕН в $MENUART_FILE — обнови scripts/count-chrome.sh" >&2
+    exit 2
+  fi
+  aend=$(( aendmarker - 1 ))
+  art_data=$(( aend - astart + 1 ))
+  menuart_code=$(( menuart_total - art_data ))
+  printf '%-55s %8d  (код хрома)\n' "$MENUART_FILE" "$menuart_code"
+  printf '%-55s %8d  (данные — битмап логотипа, в итог НЕ входят)\n' "$MENUART_FILE (Rows)" "$art_data"
+  total_chrome=$((total_chrome + menuart_code))
+fi
+
+echo
+echo "=== MainMenuRenderer.cs: разбор по методам (chrome / content / infra) ==="
+check_file "$MENU_RENDERER_FILE"
+if [ "$fail_env" -eq 0 ]; then
+  row=$(split_by_methods "$MENU_RENDERER_FILE" "${MENU_RENDERER_METHODS[@]}") || exit 2
+  IFS=$'\t' read -r uf utotal uchrome ucontent uinfra <<< "$row"
+  printf '%-55s всего %4d = хром %4d + интро/логотип %4d + инфра %4d\n' \
+    "$uf" "$utotal" "$uchrome" "$ucontent" "$uinfra"
+  total_chrome=$((total_chrome + uchrome))
+fi
+
+echo
+echo "=== Роутеры ввода (волна 3c): разбор по методам, границы прежние ==="
+check_file "$SPRITE_INPUT_FILE"
+if [ "$fail_env" -eq 0 ]; then
+  row=$(split_by_methods "$SPRITE_INPUT_FILE" "${SPRITE_INPUT_METHODS[@]}") || exit 2
+  IFS=$'\t' read -r sf stotal schrome scontent sinfra <<< "$row"
+  printf '%-55s всего %4d = хром %4d + жесты/Update %4d + инфра %4d\n' \
+    "$sf" "$stotal" "$schrome" "$scontent" "$sinfra"
+  total_chrome=$((total_chrome + schrome))
+fi
+check_file "$MAP_INPUT_FILE"
+if [ "$fail_env" -eq 0 ]; then
+  row=$(split_by_methods "$MAP_INPUT_FILE" "${MAP_INPUT_METHODS[@]}") || exit 2
+  IFS=$'\t' read -r xf xtotal xchrome xcontent xinfra <<< "$row"
+  printf '%-55s всего %4d = хром %4d + жесты/Update %4d + инфра %4d\n' \
+    "$xf" "$xtotal" "$xchrome" "$xcontent" "$xinfra"
+  total_chrome=$((total_chrome + xchrome))
+fi
+
+echo
 echo "=== SpriteEditorRenderer.cs: разбор по методам (chrome / content / infra) ==="
 check_file "$RENDERER_FILE"
 if [ "$fail_env" -eq 0 ]; then
@@ -307,7 +411,7 @@ if [ "$fail_env" -eq 0 ]; then
 fi
 
 echo
-echo "=== QuarpGame.cs: разбор по методам (только роутер кнопок — хром) ==="
+echo "=== QuarpGame.cs: разбор по методам (после 3c роутер кнопок живёт в роутерах; хром здесь — меню) ==="
 check_file "$GAME_FILE"
 if [ "$fail_env" -eq 0 ]; then
   row=$(split_by_methods "$GAME_FILE" "${GAME_METHODS[@]}") || exit 2

@@ -1,7 +1,9 @@
 namespace Quarp.Shell.Desktop;
 
 /// <summary>
-/// The faces of the one console window (ADR-026: library ↔ game ↔ editor). Since M9 stage 2
+/// The faces of the one console window (ADR-026: library ↔ game ↔ editor; ADR-028 adds the
+/// boot menu in front — <c>quarp</c> without arguments now lands there, and the library is
+/// its first door). Since M9 stage 2
 /// the editor is real: it holds a <see cref="SpriteEditorSession"/> for the cart the library's
 /// bar was on. Since stage 3 the editor has two faces of its own — the sprite sheet and the
 /// map of the SAME cart, two modes rather than one with a flag, because the window draws a
@@ -25,4 +27,7 @@ public enum ShellMode
     Game,
     Editor,
     MapEditor,
+
+    /// <summary>The boot screen: intro, then LIBRARY / LOAD CART / CREATE GAME (ADR-028). Appended last so the four original faces keep their values.</summary>
+    Menu,
 }

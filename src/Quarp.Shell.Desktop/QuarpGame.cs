@@ -3,16 +3,19 @@ using Microsoft.Xna.Framework.Graphics;
 using Microsoft.Xna.Framework.Input;
 using Quarp.CartKit;
 using Quarp.Core;
+using Quarp.Core.Audio;
 
 namespace Quarp.Shell.Desktop;
 
 /// <summary>
-/// Desktop shell: one window, three modes (M9, ADR-026) — the game library, a running
-/// cartridge, and the sprite editor. Without a cart path it opens on the library (the console's
-/// face; the old windowed test pattern died with M9 — the palette is proven by
-/// <c>quarp pattern</c> and by the library itself, which is drawn on Master32); with a path it
-/// runs that cartridge directly, hot reload and all, and Esc quits the process — the
-/// developer's F5 loop, which the library never interrupts. Mode policy lives in
+/// Desktop shell: one window, five modes (M9, ADR-026; the boot menu — ADR-028) — the boot
+/// menu, the game library, a running cartridge, and the sprite/map editors. Without a cart
+/// path it opens on the boot screen: a short intro in the console's palette with its jingle
+/// (skippable by any key), then QUARP's main menu, whose first door is the library (the
+/// console's face; the old windowed test pattern died with M9 — the palette is proven by
+/// <c>quarp pattern</c> and by the boot screens themselves, drawn on Master32); with a path it
+/// runs that cartridge directly, hot reload and all, no intro, and Esc quits the process — the
+/// developer's F5 loop, which neither the menu nor the library interrupts. Mode policy lives in
 /// <see cref="ShellModeMachine"/>, editor policy in <see cref="SpriteEditorSession"/>; this
 /// class owns only what needs a graphics device, plus the routing of raw input to whichever
 /// mode is on screen. The mouse (new in M9 stage 2) is polled every frame but <b>acted on
@@ -61,10 +64,23 @@ public sealed class QuarpGame : Game
     private LibraryRenderer _hostUi = null!;
     private SpriteEditorRenderer _editorUi = null!;
     private MapEditorRenderer _mapUi = null!;
+    private MainMenuRenderer _menuUi = null!;
     private AudioOutput? _audio;
 
     private TimeSpeed _lastSpeed = TimeSpeed.At(TimeSpeed.NormalIndex);
     private bool _lastPaused;
+
+    /// <summary>The intro's voice: a bare APU with <see cref="BootJingle"/> loaded, alive only while the intro plays.</summary>
+    private Apu? _bootApu;
+
+    /// <summary>Banks real time into the jingle's 60 Hz ticks — the game's accumulator discipline, menu-sized.</summary>
+    private readonly TickAccumulator _menuTicks = new();
+
+    /// <summary>Characters from <c>Window.TextInput</c> since the last frame; consumed by the name field only.</summary>
+    private readonly List<char> _typedChars = new();
+
+    /// <summary>The last file dropped on the window, until the menu or the library consumes it.</summary>
+    private string? _droppedFile;
 
     /// <summary>
     /// Library mode when <paramref name="cartPath"/> is null; direct-launch cart mode
@@ -192,6 +208,20 @@ public sealed class QuarpGame : Game
         _hostUi = new LibraryRenderer(GraphicsDevice);
         _editorUi = new SpriteEditorRenderer(GraphicsDevice);
         _mapUi = new MapEditorRenderer(GraphicsDevice);
+        _menuUi = new MainMenuRenderer(GraphicsDevice);
+
+        // The two window events the boot screens live on. Characters buffer here and are
+        // consumed by the menu's name field once per frame (edge-ordering with the same
+        // frame's ShellCommands is then explicit); a dropped file parks until the menu or
+        // the library — the two screens where no session owns the window — picks it up.
+        Window.TextInput += (_, e) => _typedChars.Add(e.Character);
+        Window.FileDrop += (_, e) =>
+        {
+            if (e.Files is { Length: > 0 })
+            {
+                _droppedFile = e.Files[0];
+            }
+        };
 
         // Opened here rather than in the constructor: the audio device belongs to a running
         // Game, and an unavailable one is reported by AudioOutput rather than thrown.
@@ -226,7 +256,16 @@ public sealed class QuarpGame : Game
             case ShellMode.MapEditor:
                 MapEditorInput.Update(EditorContext(), commands, mouse, gameTime.ElapsedGameTime.TotalSeconds);
                 break;
+            case ShellMode.Menu:
+                UpdateMenu(commands, keyboard, mouse, gameTime);
+                break;
         }
+        // Typed characters not consumed by the name field this frame are stale by the next,
+        // and a file dropped on a screen that does not take drops (a running game, an open
+        // editor) is discarded rather than parked — surfacing it minutes later on some other
+        // screen would be a launch nobody just asked for.
+        _typedChars.Clear();
+        _droppedFile = null;
 
         if (_modes.ExitRequested)
         {
@@ -287,12 +326,16 @@ public sealed class QuarpGame : Game
         _audio?.EndFrame();
     }
 
-    /// <summary>One frame of the library: selection, launch, opening the sprite editor, or leaving.</summary>
+    /// <summary>One frame of the library: selection, launch, opening the sprite editor, or leaving for the menu.</summary>
     private void UpdateLibrary(in ShellCommands commands)
     {
+        if (ConsumeDroppedFile())
+        {
+            return;
+        }
         if (commands.Quit)
         {
-            _modes.HandleEscape();      // Library Esc = leave the process; Update picks it up.
+            _modes.HandleEscape();      // Library Esc = back to the boot menu (ADR-028).
             return;
         }
         if (commands.MenuUp)
@@ -310,13 +353,176 @@ public sealed class QuarpGame : Game
         }
         if (commands.MenuConfirm && _modes.LaunchSelected() is not null)
         {
-            // A fresh session starts at normal speed and unpaused; the banked remainder of
-            // however long the player browsed must not become a burst of catch-up ticks.
-            _accumulator.Reset();
-            _lastSpeed = TimeSpeed.At(TimeSpeed.NormalIndex);
-            _lastPaused = false;
-            UpdateWindowTitle();
+            OnSessionStarted();
         }
+    }
+
+    /// <summary>
+    /// One frame of the boot screen (M9 stage 4, ADR-028). The intro is its own little
+    /// world — the clock advances, the jingle ticks, any fresh key or click cuts to the menu
+    /// — and the menu itself is three doors: arrows or the 1-2-3 hotkeys the mockup prints,
+    /// Z/Enter to walk through, Esc to leave the console. The name field, while up, owns the
+    /// keyboard the way the editor's exit prompt does: characters land in it, Enter creates,
+    /// Esc cancels, and the rows underneath are deliberately deaf.
+    /// </summary>
+    private void UpdateMenu(in ShellCommands commands, KeyboardState keyboard, in EditorMouse mouse, GameTime gameTime)
+    {
+        MainMenuSession menu = _modes.Menu;
+        if (menu.Phase == MenuPhase.Intro)
+        {
+            bool anyInput = keyboard.GetPressedKeys().Length > 0 || mouse.LeftDown;
+            bool left = menu.AdvanceIntro(gameTime.ElapsedGameTime.TotalSeconds, anyInput);
+            PlayBootJingle(gameTime, stopNow: left);
+            return;
+        }
+        if (ConsumeDroppedFile())
+        {
+            return;
+        }
+        if (menu.Phase == MenuPhase.NameEntry)
+        {
+            foreach (char c in _typedChars)
+            {
+                if (c == '\b')
+                {
+                    menu.EraseChar();
+                }
+                else if (!char.IsControl(c))
+                {
+                    menu.TypeChar(c);   // the field folds case and drops what a folder cannot hold
+                }
+            }
+            if (commands.Quit)
+            {
+                _modes.HandleEscape();          // cancels the field, stays on the menu
+            }
+            else if (commands.MenuConfirm)
+            {
+                _modes.ConfirmCreateGame();     // straight into the editor on success
+            }
+            return;
+        }
+        if (commands.Quit)
+        {
+            _modes.HandleEscape();              // the menu is the root: Esc leaves the process
+            return;
+        }
+        if (commands.MenuUp)
+        {
+            menu.MoveSelection(-1);
+        }
+        if (commands.MenuDown)
+        {
+            menu.MoveSelection(+1);
+        }
+        // The reader's digit field is named for the editor's toolbar, but it reports plain
+        // D1..D6 edges and the menu's rows are numbered 1-3 on screen — a digit is select
+        // and go in one press.
+        bool digitGo = menu.ActivateDigit(commands.EditorToolDigit);
+        if (digitGo || commands.MenuConfirm)
+        {
+            ActivateMenuItem(menu.Selected);
+        }
+    }
+
+    /// <summary>The three doors. LOAD CART tries the OS picker and reports its refusal, if any, on the message line.</summary>
+    private void ActivateMenuItem(MenuItem item)
+    {
+        switch (item)
+        {
+            case MenuItem.Library:
+                _modes.OpenLibrary();
+                break;
+            case MenuItem.LoadCart:
+                if (FilePicker.TryPick(out string path, out string? refusal))
+                {
+                    LaunchFromPath(path);
+                }
+                else if (refusal is not null)
+                {
+                    _modes.Menu.Message = refusal;
+                }
+                break;
+            case MenuItem.CreateGame:
+                _modes.BeginCreateGame();
+                break;
+        }
+    }
+
+    /// <summary>A picked or dropped cart, launched with the same bookkeeping as a library launch.</summary>
+    private void LaunchFromPath(string path)
+    {
+        if (_modes.LoadCartFromPath(path) is not null)
+        {
+            OnSessionStarted();
+        }
+    }
+
+    /// <summary>
+    /// True when a file dropped on the window was just consumed — the menu and the library
+    /// both call this first, so a drop outranks whatever key landed the same frame. The
+    /// machine turns a bad drop into a message on the screen the author is looking at.
+    /// </summary>
+    private bool ConsumeDroppedFile()
+    {
+        if (_droppedFile is not string path)
+        {
+            return false;
+        }
+        _droppedFile = null;
+        LaunchFromPath(path);
+        return true;
+    }
+
+    /// <summary>
+    /// A fresh session starts at normal speed and unpaused; the banked remainder of however
+    /// long the player browsed must not become a burst of catch-up ticks. One owner for the
+    /// three launch roads (library row, OS picker, dropped file).
+    /// </summary>
+    private void OnSessionStarted()
+    {
+        _accumulator.Reset();
+        _lastSpeed = TimeSpeed.At(TimeSpeed.NormalIndex);
+        _lastPaused = false;
+        UpdateWindowTitle();
+    }
+
+    /// <summary>
+    /// The intro's sound, rendered by a bare APU at the same 60 Hz the accumulator gives a
+    /// cartridge, fed to the same speaker. Born on the intro's first audible frame; drained
+    /// and dropped the moment the intro ends, by clock or by skip — the menu is silent, and
+    /// a skipped jingle stopping mid-note is the honest cut (TIC-80's --skip skips the sound
+    /// too). No sound card, no jingle, nothing else changes — the audio arrow keeps pointing
+    /// one way (M3).
+    /// </summary>
+    private void PlayBootJingle(GameTime gameTime, bool stopNow)
+    {
+        if (_audio is not AudioOutput audio || !audio.IsAvailable)
+        {
+            return;
+        }
+        if (stopNow)
+        {
+            if (_bootApu is not null)
+            {
+                audio.Drain();
+                _bootApu = null;
+            }
+            return;
+        }
+        if (_bootApu is null)
+        {
+            _bootApu = new Apu();
+            BootJingle.Start(_bootApu);
+            _menuTicks.Reset();
+        }
+        int ticks = _menuTicks.Advance(gameTime.ElapsedGameTime.Ticks, TimeSpeed.At(TimeSpeed.NormalIndex));
+        for (int i = 0; i < ticks; i++)
+        {
+            _bootApu.RenderTick();
+            audio.Submit(_bootApu.Block);
+        }
+        audio.EndFrame();
     }
 
     /// <summary>
@@ -374,6 +580,13 @@ public sealed class QuarpGame : Game
                     _modes.MapView!,
                     _hover.Target,
                     _hover.TooltipVisible);
+                break;
+            case ShellMode.Menu:
+                _menuUi.Draw(
+                    _spriteBatch,
+                    GraphicsDevice.PresentationParameters.BackBufferWidth,
+                    GraphicsDevice.PresentationParameters.BackBufferHeight,
+                    _modes.Menu);
                 break;
         }
         base.Draw(gameTime);        // the game loop presents for us
@@ -471,6 +684,7 @@ public sealed class QuarpGame : Game
             _hostUi?.Dispose();
             _editorUi?.Dispose();
             _mapUi?.Dispose();
+            _menuUi?.Dispose();
             _audio?.Dispose();
         }
         base.Dispose(disposing);

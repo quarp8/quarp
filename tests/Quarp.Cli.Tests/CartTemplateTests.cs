@@ -1,4 +1,5 @@
 using System.Text.Json;
+using Quarp.CartKit;
 using Xunit;
 
 namespace Quarp.Cli.Tests;

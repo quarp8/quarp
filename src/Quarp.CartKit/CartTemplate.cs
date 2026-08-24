@@ -1,4 +1,4 @@
-namespace Quarp.Cli;
+namespace Quarp.CartKit;
 
 /// <summary>The files <c>quarp new</c> writes: the smallest playable cartridge, plus the dev-only IDE project.</summary>
 public static class CartTemplate

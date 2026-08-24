@@ -66,9 +66,19 @@ public class ModeTransitionTests : IDisposable
         public void Bump() => Calls++;
     }
 
-    /// <summary>A machine entered through the library, the way plain `quarp` enters it.</summary>
-    private ShellModeMachine LibraryMachine(DrainCounter drain) =>
-        new(new CartLibrary(_root), static path => CartSession.Start(path), drain.Bump);
+    /// <summary>
+    /// A machine standing in the library, reached the way plain <c>quarp</c> reaches it since
+    /// the boot menu (ADR-028): born on the menu, intro skipped, through door 1. The two
+    /// extra steps are the real road, not test scaffolding — a machine that could no longer
+    /// walk them would be the bug.
+    /// </summary>
+    private ShellModeMachine LibraryMachine(DrainCounter drain)
+    {
+        var machine = new ShellModeMachine(new CartLibrary(_root), static path => CartSession.Start(path), drain.Bump);
+        machine.Menu.SkipIntro();
+        machine.OpenLibrary();
+        return machine;
+    }
 
     [Fact]
     public void EscapeFromALibraryLaunchedGameReturnsToTheLibrary()
@@ -193,10 +203,20 @@ public class ModeTransitionTests : IDisposable
         Assert.Equal(0, drain.Calls);
     }
 
+    /// <summary>
+    /// ADR-028 rewired the exits: the library backs out to the menu it was entered from
+    /// (before the menu existed, this same keypress quit the process), and the menu at rest
+    /// is the root — its Esc is the one that leaves.
+    /// </summary>
     [Fact]
-    public void EscapeInTheLibraryRequestsExit()
+    public void EscapeWalksBackLibraryToMenuAndMenuOut()
     {
         var machine = LibraryMachine(new DrainCounter());
+
+        machine.HandleEscape();
+
+        Assert.Equal(ShellMode.Menu, machine.Mode);
+        Assert.False(machine.ExitRequested);
 
         machine.HandleEscape();
 

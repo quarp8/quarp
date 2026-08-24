@@ -131,6 +131,8 @@ LAYERS=(
   "TimeSpeed.cs|1"             # ступень лестницы скоростей, точная дробь
   "TickAccumulator.cs|1"       # фиксированный шаг: копит время, отдаёт тики
   "AudioQueue.cs|1"            # политика очереди блоков, без устройства
+  "MainMenuSession.cs|1"       # модель бут-экрана: фазы, часы интро, выбор, поле имени (+MenuPhase, MenuItem)
+  "BootJingle.cs|1"            # ноты джингла: строит AudioBank, устройства не знает
 
   # --- 2 «вид»: геометрия и состояние показа, headless ---
   "EditorChrome.cs|2"          # рама обоих редакторов (+EditorButtonPlace, EditorPromptVerb)
@@ -143,6 +145,8 @@ LAYERS=(
   "IconHoverTracker.cs|2"      # трёхсекундный контракт подсказки (+HoverTarget)
   "ToolbarFlyout.cs|2"         # состояние флаута группового слота
   "SelectionOutline.cs|2"      # геометрия бегущих муравьёв (+AntDash)
+  "MainMenuLayout.cs|2"        # раскладка бут-экрана: холст 160x90, целый масштаб, координаты мокапа
+  "MenuArt.cs|2"               # битмап логотипа с мокапа — данные плюс два аксессора
 
   # --- 3 «рендер»: владеет ресурсом устройства ---
   "PixelFontAtlas.cs|3"        # текстурная полоса глифов
@@ -151,6 +155,8 @@ LAYERS=(
   "SpriteEditorRenderer.cs|3"  # пиксели экрана спрайтов
   "MapEditorRenderer.cs|3"     # пиксели экрана карты
   "LibraryRenderer.cs|3"       # пиксели экрана библиотеки
+  "MainMenuRenderer.cs|3"      # пиксели бут-экрана: интро и меню
+  "FilePicker.cs|3"            # ресурс ОС: диалог выбора файла (comdlg32), читает только проводка
   "ShellOverlay.cs|3"          # текстовый слой поверх кадра
   "AudioOutput.cs|3"           # OpenAL-устройство
 

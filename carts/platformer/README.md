@@ -127,7 +127,7 @@ apex of an ordinary jump reaches well into the upper half of the screen, so the 
 during almost every jump.
 
 The same 26.25 px arc is why the tower has 30 platforms and not 32: the owner's playtest found
-the roof jammed against the top two (`bug-platformer-ceiling.md`), and a full held jump measured
+the roof jammed against the top two (`bug-platformer-ceiling.md`, закрыта — строка в `tasks/DONE.md`), and a full held jump measured
 0 px of clearance to the roof from both the old top platform (row 4) and the old summit ledge
 (row 2) — the arc was stopped mid-rise, not clipped by a hair. `tools/tower.py` now stops the
 regular staircase two platforms short (`LEDGE_COUNT = 30`, top platform at row 8, 21 px of

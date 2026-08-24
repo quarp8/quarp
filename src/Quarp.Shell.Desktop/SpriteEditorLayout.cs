@@ -247,6 +247,12 @@ public readonly struct SpriteEditorLayout
         int rowY = swatches.Bottom + 2 * ui;
         int sheetTop = rowY + button + 2 * ui;
         int sliderHeight = 4 * ui;
+        // Math.Max(1, ...) is a floor, not a fit: in a window below the shell's working size
+        // (320x180, the console's own resolution) even one-to-one does not fit under the row,
+        // and the sheet plus its slider are drawn over the prompt line. Known, measured and
+        // carded (tasks/open/debt-tiny-window-layout.md) rather than papered over — the honest
+        // repairs are a minimum window size or a vertically clipped strip, and neither belongs
+        // in a wave about the right column.
         int sheetScale = Math.Max(1, (bottom - sheetTop - sliderHeight - gap) / SheetStrip.PixelHeight);
         int sheetCell = VirtualConsole.SpriteSize * sheetScale;
         int columnRoom = width - margin - (canvasX + canvasBox + margin);

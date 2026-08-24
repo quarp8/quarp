@@ -63,8 +63,13 @@ public sealed class MapEditorSession
     /// <summary>Map height in cells — 72.</summary>
     public const int MapRows = CartData.MapHeight;
 
-    /// <summary>Exactly 18 432 bytes (MAP-FORMAT §2). Not a coincidence to be re-derived elsewhere: this is the file size.</summary>
-    public const int MapPayloadSize = MapColumns * MapRows;
+    /// <summary>
+    /// Exactly 18 432 bytes (MAP-FORMAT §2) — borrowed from <see cref="MapTextCompiler.PayloadSize"/>,
+    /// which owned the number before this editor existed. The audit of 2026-08-24 caught this
+    /// re-deriving it as <c>MapColumns * MapRows</c> under a doc-comment that told everyone else
+    /// not to: a second owner of a fact is a second owner even when it agrees today.
+    /// </summary>
+    public const int MapPayloadSize = MapTextCompiler.PayloadSize;
 
     /// <summary>
     /// 256 sprites in the sheet (SPEC-8 §3) and one flag byte each, which is why the flags

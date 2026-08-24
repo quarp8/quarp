@@ -16,7 +16,10 @@ namespace Quarp.Shell.Desktop;
 /// the same 256 sprites are re-cut as two 16x8 lanes (pages 0-1 stacked, then 2-3): 128
 /// sprites on screen instead of 48, and the strip still overflows, so the slider the owner
 /// kept stays real. Everything downstream reads these constants — nothing hard-codes 4 or
-/// 64 — so a seventh review's band is one edit here.</para>
+/// 64 — so a seventh review's band is one edit here, for any <see cref="Rows"/> that divides
+/// the sheet's 16 rows (1, 2, 4, 8, 16). A band that does not divide them would leave the last
+/// lane ragged; <c>SheetScrollTests.StripMappingRoundTripsEverySprite</c> is what turns that
+/// red rather than letting sprite 255 slide into a column that is not there.</para>
 /// </summary>
 public static class SheetStrip
 {
@@ -26,8 +29,16 @@ public static class SheetStrip
     /// <summary>Sprite cells across one lane: the canonical sheet's own width, never re-cut.</summary>
     public const int LaneColumns = VirtualConsole.SheetColumns;
 
-    /// <summary>How many lanes stand side by side to hold all <see cref="VirtualConsole.SpriteCount"/> sprites.</summary>
-    public const int Lanes = LaneColumns / Rows;
+    /// <summary>
+    /// How many lanes stand side by side to hold all <see cref="VirtualConsole.SpriteCount"/>
+    /// sprites: the sheet's own rows cut into bands of <see cref="Rows"/>. The audit of
+    /// 2026-08-24 caught this dividing the sheet's WIDTH instead — right only because the sheet
+    /// is square, and quietly wrong for any band that does not divide 16.
+    /// </summary>
+    public const int Lanes = SheetRows / Rows;
+
+    /// <summary>Sprite rows the canonical sheet is tall — the other half of the shape being re-cut.</summary>
+    public const int SheetRows = VirtualConsole.SpriteCount / VirtualConsole.SheetColumns;
 
     public const int Columns = LaneColumns * Lanes;
     public const int PixelWidth = Columns * VirtualConsole.SpriteSize;

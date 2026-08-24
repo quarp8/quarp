@@ -109,9 +109,13 @@ public sealed class GfxDumpCommandTests : IDisposable
     /// committed, and a dump that carried a timestamp, a compressor's mood or an enumeration
     /// order would turn every later run into a spurious diff.
     ///
-    /// <para>The second run is also the fixed-point check: by then the cart folder has the
-    /// gfx.png the first run wrote, so the console boots with that sheet loaded before
-    /// <c>Init</c> repaints it. Dumping a cart that already has art must not drift.</para>
+    /// <para>What the second run is NOT, corrected by the session audit of 2026-08-24: a
+    /// fixed-point check. This fixture's <c>Init</c> repaints all 16 384 pixels, so the sheet
+    /// the console loaded from the first run's file changes nothing and the test would stay
+    /// green even if <c>CartSource</c> stopped reading <c>gfx.png</c> at all. The real
+    /// fixed point — a cart whose committed art equals what its console holds after
+    /// <c>Init</c> — is pinned on the shipped demos by
+    /// <c>Quarp.CartKit.Tests.DemoSheetInvariantTests</c>, where the art is not repainted.</para>
     /// </summary>
     [Fact]
     public void DumpingTheSameCartridgeTwiceWritesTheSameBytes()

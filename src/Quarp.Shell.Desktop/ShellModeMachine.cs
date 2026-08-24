@@ -2,21 +2,8 @@ using Quarp.CartKit;
 
 namespace Quarp.Shell.Desktop;
 
-/// <summary>
-/// The faces of the one console window (ADR-026: library ↔ game ↔ editor). Since M9 stage 2
-/// the editor is real: it holds a <see cref="SpriteEditorSession"/> for the cart the library's
-/// bar was on. Since stage 3 the editor has two faces of its own — the sprite sheet and the
-/// map of the SAME cart, two modes rather than one with a flag, because the window draws a
-/// different screen and routes different input for each, and <c>QuarpGame</c>'s update and
-/// draw switches are where that difference has to be visible.
-/// </summary>
-public enum ShellMode
-{
-    Library,
-    Game,
-    Editor,
-    MapEditor,
-}
+// The four faces themselves are vocabulary, not wiring, and since the module-boundary wave
+// they live in ShellMode.cs — see the note there for why the split had to happen.
 
 /// <summary>
 /// Owns the transitions between the shell's modes and the <see cref="CartSession"/> lifetime

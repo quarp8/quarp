@@ -51,7 +51,7 @@ public readonly struct EditorChrome
         EditorButton.SpritesTab, EditorButton.CodeTab,
     };
 
-    /// <summary>Host-UI text scale, same anchor the library uses (<see cref="PixelFontAtlas.UiScale"/>).</summary>
+    /// <summary>Host-UI text scale, same anchor the library uses (<see cref="PixelFontMetrics.UiScale"/>).</summary>
     public int Ui { get; private init; }
 
     /// <summary>Screen-edge inset, in window pixels — the library's 4 * ui, kept identical so the modes read as one shell.</summary>
@@ -96,7 +96,7 @@ public readonly struct EditorChrome
         ArgumentNullException.ThrowIfNull(buttons);
         ArgumentNullException.ThrowIfNull(statusSlots);
 
-        int ui = PixelFontAtlas.UiScale(width, height);
+        int ui = PixelFontMetrics.UiScale(width, height);
         int margin = 4 * ui;
         int gap = ui;
         int button = (EditorIcons.IconPixels + 4) * ui;
@@ -136,7 +136,7 @@ public readonly struct EditorChrome
             };
         }
 
-        int promptY = statusBar.Y - 2 * ui - PixelFontAtlas.LineHeight(ui);
+        int promptY = statusBar.Y - 2 * ui - PixelFontMetrics.LineHeight(ui);
         return new EditorChrome
         {
             Ui = ui,
@@ -145,7 +145,7 @@ public readonly struct EditorChrome
             ButtonSize = button,
             TabStrip = tabStrip,
             StatusBar = statusBar,
-            StatusTextY = statusButtonY + (button - PixelFontAtlas.LineHeight(ui)) / 2,
+            StatusTextY = statusButtonY + (button - PixelFontMetrics.LineHeight(ui)) / 2,
             PromptY = promptY,
             ContentTop = tabStrip.Bottom + 2 * ui,
             ContentBottom = promptY - 2 * ui,
@@ -194,15 +194,15 @@ public readonly struct EditorChrome
     /// <summary>Clickable area of one prompt verb, ui-padded around its text. Only meaningful while that screen's exit prompt is up — the shell gates the hit test on that, as it gates the keys.</summary>
     public Rectangle PromptVerbRect(EditorPromptVerb verb)
     {
-        int x = Margin + PixelFontAtlas.MeasureWidth(PromptHeading, Ui) + 4 * Ui;
+        int x = Margin + PixelFontMetrics.MeasureWidth(PromptHeading, Ui) + 4 * Ui;
         for (int i = 0; i < (int)verb; i++)
         {
-            x += PixelFontAtlas.MeasureWidth(_promptVerbs[i], Ui) + 6 * Ui;
+            x += PixelFontMetrics.MeasureWidth(_promptVerbs[i], Ui) + 6 * Ui;
         }
         return new Rectangle(
             x - Ui, PromptY - Ui,
-            PixelFontAtlas.MeasureWidth(_promptVerbs[(int)verb], Ui) + 2 * Ui,
-            PixelFontAtlas.LineHeight(Ui) + 2 * Ui);
+            PixelFontMetrics.MeasureWidth(_promptVerbs[(int)verb], Ui) + 2 * Ui,
+            PixelFontMetrics.LineHeight(Ui) + 2 * Ui);
     }
 
     /// <summary>Window point → prompt verb, or false. Three rectangles, checked only while the prompt is up.</summary>

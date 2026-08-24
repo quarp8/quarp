@@ -172,6 +172,19 @@ jobs:
             dotnet "$QUARP_DLL" sim "$cart" --ticks 60 > /dev/null
           done
 
+      - name: Module boundaries hold
+        # The one question this step answers: does any shell file reference a type that lives
+        # in a HIGHER layer (document -> view -> renderer -> wiring)? A downward or sideways
+        # reference is normal; an upward one is spaghetti, and the instrument exits 1 on it.
+        # It runs here, in the matrix job, for two reasons: the rule has to hold on the tree
+        # rather than in the duty officer's memory (the same reason the demo hashes are
+        # pinned), and running it on both legs proves the parser reads the same on the Git
+        # for Windows gawk and on the Linux awk -- the instrument deliberately uses no gawk
+        # extension, and this is where that claim gets tested instead of asserted.
+        # Exit 2 (a file with no layer, a type declared twice, stripping broken) is an
+        # environment error and fails the job just as loudly: the instrument may not guess.
+        run: bash scripts/check-modules.sh
+
       - name: Upload test results
         if: always()
         uses: actions/upload-artifact@v7

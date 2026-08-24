@@ -52,26 +52,20 @@ public sealed class PixelFontAtlas : IDisposable
         _texture.SetData(pixels);
     }
 
-    /// <summary>
-    /// Width of one line of text at the given scale, spacing included — what layout code adds
-    /// to a cursor. The trailing 1 px of inter-character spacing is counted rather than
-    /// trimmed (contrast <c>ShellOverlay.MeasureWidth</c>): host-UI centring is off by half a
-    /// scaled pixel either way, and the simpler figure is the one that cannot be summed wrong.
-    /// </summary>
-    public static int MeasureWidth(string text, int scale) => text.Length * SystemFont.CellWidth * scale;
+    // The three text-metric questions have ONE owner, and since the module-boundary wave it is
+    // PixelFontMetrics — a device-free type the layout layer may read without reaching up into
+    // the drawing layer. What stays here are three forwarders, kept because a caller that
+    // already holds a font naturally asks the font, and because deleting them would rewrite
+    // call sites (a test among them) for no gain in behaviour. They compute nothing.
 
-    /// <summary>Line advance at the given scale, for callers laying out multiple rows.</summary>
-    public static int LineHeight(int scale) => SystemFont.CellHeight * scale;
+    /// <inheritdoc cref="PixelFontMetrics.MeasureWidth"/>
+    public static int MeasureWidth(string text, int scale) => PixelFontMetrics.MeasureWidth(text, scale);
 
-    /// <summary>
-    /// Whole-integer host-UI text scale from the window size — one formula for every host
-    /// screen (library, sprite editor), living with the font because it is a fact about text
-    /// density. Anchored at 320x180 rather than the console's 160x90 because host UI wants
-    /// density, not console-sized letters: a 1280x720 window gets x4 (24 px line height,
-    /// ~28 rows), and the floor of 2 keeps text legible in a window shrunk below the anchor.
-    /// </summary>
-    public static int UiScale(int width, int height) =>
-        Math.Max(2, Math.Min(width / 320, height / 180));
+    /// <inheritdoc cref="PixelFontMetrics.LineHeight"/>
+    public static int LineHeight(int scale) => PixelFontMetrics.LineHeight(scale);
+
+    /// <inheritdoc cref="PixelFontMetrics.UiScale"/>
+    public static int UiScale(int width, int height) => PixelFontMetrics.UiScale(width, height);
 
     /// <summary>
     /// Draws one line (no newline handling — the callers own their layout) inside an already

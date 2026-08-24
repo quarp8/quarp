@@ -183,8 +183,14 @@ public class EditorKeysAndStatusLayoutTests
     /// Every region size, every panel: whole-integer zoom, everything inside the window, and
     /// no two areas overlapping — checked pairwise over the named panels AND the narrow row's
     /// buttons, because wave 2k moved the size toggle and the layer tabs into a row whose
-    /// left edge is measured from the canvas box. A canvas that grew with the region (the
-    /// pre-2k formula) would push that row into the palette at 32 px and turn this red.
+    /// left edge is measured from the canvas box.
+    ///
+    /// <para>What this sweep does NOT prove, corrected by the session audit: it runs at
+    /// 1280x720 only, and at that size the free height happens to be a multiple of 32, so the
+    /// pre-2k canvas formula agreed with the current one by luck — deleting wave 2k's rounding
+    /// would leave this test green. The negative control for THAT lives in
+    /// <c>SpriteEditorLayoutTests.TabbingTheRegionSizeMovesNoPanel</c>, which runs five window
+    /// sizes including the ones where the two formulas disagree.</para>
     /// </summary>
     [Theory]
     [InlineData(1)]

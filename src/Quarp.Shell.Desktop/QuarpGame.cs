@@ -469,8 +469,12 @@ public sealed class QuarpGame : Game
         // (pencil stroke, bucket click or shape anchor by tool), X the eyedropper — the whole
         // mouse vocabulary without a mouse. The session clamps the cursor, so acting at it is
         // in-range by construction.
-        int dx = (commands.MenuRight ? 1 : 0) - (commands.MenuLeft ? 1 : 0);
-        int dy = (commands.MenuDown ? 1 : 0) - (commands.MenuUp ? 1 : 0);
+        // A frame that stepped the sheet does not also steer the cursor: Shift+arrow means one
+        // thing, not both. The guard sits here, in the editor, and not in the shared reader —
+        // see ShellCommandReader's note about the library losing Shift+Down to that mistake.
+        bool steppedSheet = commands.EditorSheetDx != 0 || commands.EditorSheetDy != 0;
+        int dx = steppedSheet ? 0 : (commands.MenuRight ? 1 : 0) - (commands.MenuLeft ? 1 : 0);
+        int dy = steppedSheet ? 0 : (commands.MenuDown ? 1 : 0) - (commands.MenuUp ? 1 : 0);
         if (dx != 0 || dy != 0)
         {
             editor.MoveCursor(dx, dy);
@@ -479,22 +483,15 @@ public sealed class QuarpGame : Game
                 editor.Paint(editor.CursorX, editor.CursorY);   // held pencil + arrows = a dragged stroke
             }
         }
-        // Shift+arrows: the keyboard half of clicking a cell in the sheet strip. It steps in
-        // strip space (SheetStrip.Columns x SheetStrip.Rows) through SheetStrip, the one owner
-        // of that mapping — so a re-cut strip moves both paths at once — and so the
-        // key path and the click path aim at the same cell by construction, and then scrolls
-        // just enough to keep the newly edited sprite on screen — a selection the author cannot
-        // see is the same bug as no selection at all.
+        // Shift+arrows: the keyboard half of clicking a cell in the sheet strip. The step
+        // itself lives in EditorSheetStep, the one owner of that arithmetic, because this
+        // method cannot be constructed without a GraphicsDevice and a rule written only here
+        // can only be tested by a copy of itself. Scrolling the new sprite into view stays
+        // here: it is view state, and the session neither has it nor needs it.
         if (commands.EditorSheetDx != 0 || commands.EditorSheetDy != 0)
         {
-            SheetStrip.SpriteToStripCell(editor.SpriteIndex, out int column, out int row);
-            column = Math.Clamp(column + commands.EditorSheetDx, 0, SheetStrip.Columns - 1);
-            row = Math.Clamp(row + commands.EditorSheetDy, 0, SheetStrip.Rows - 1);
-            if (SheetStrip.TryStripCellToSheetCell(column, row, out int sheetX, out int sheetY))
-            {
-                editor.SelectRegionCell(sheetX, sheetY);
-                ScrollSheetTo(layout, column);
-            }
+            int column = EditorSheetStep.Apply(editor, commands.EditorSheetDx, commands.EditorSheetDy);
+            ScrollSheetTo(layout, column);
         }
         if (commands.EditorPaintPressed)
         {
@@ -672,12 +669,6 @@ public sealed class QuarpGame : Game
     }
 
     /// <summary>
-    /// What the paint button means on the canvas, keyboard and mouse alike — one dispatch so
-    /// the two input worlds cannot drift (the parity law): the bucket and the stamp are
-    /// clicks, the shape and the select open preview gestures (a select press over the mask
-    /// is the grab — the session decides), the pencil opens a stroke.
-    /// </summary>
-    /// <summary>
     /// Scrolls the strip by the least amount that puts the given strip column fully inside the
     /// sheet window. Both edges are handled, and the clamp lives in <see cref="SheetScroll"/>
     /// as it does for every other writer of the offset — no path may scroll past the sheet.
@@ -698,6 +689,12 @@ public sealed class QuarpGame : Game
         }
     }
 
+    /// <summary>
+    /// What the paint button means on the canvas, keyboard and mouse alike — one dispatch so
+    /// the two input worlds cannot drift (the parity law): the bucket and the stamp are
+    /// clicks, the shape and the select open preview gestures (a select press over the mask
+    /// is the grab — the session decides), the pencil opens a stroke.
+    /// </summary>
     private static void BeginCanvasGesture(SpriteEditorSession editor, int localX, int localY)
     {
         switch (editor.Tool)

@@ -153,4 +153,34 @@ public class SheetScrollTests
 
         Assert.Equal(widened.SheetMaxScroll, scroll.Offset);
     }
+
+    /// <summary>
+    /// A window wide enough to show the whole strip — the case wave 2k created and the session
+    /// audit caught the renderer still denying ("the strip overflows at every window size the
+    /// shell is used at"). With 32 columns instead of 64 that stopped being true: at 1920x720
+    /// the strip fits, the scroll ceiling is zero, the thumb honestly fills the track and a
+    /// drag moves nothing. The branch was live and untested.
+    ///
+    /// <para>Negative control: give <c>SheetMaxScroll</c> a floor of one pixel and the first
+    /// assertion goes red; make <c>SheetThumb</c> return a fraction of the track when the
+    /// ceiling is zero and the second does.</para>
+    /// </summary>
+    [Fact]
+    public void AWindowWideEnoughForTheWholeStripHasADeadButHonestSlider()
+    {
+        var layout = SpriteEditorLayout.Compute(1920, 720, regionCells: 1);
+
+        Assert.True(
+            layout.SheetVisiblePixels >= SheetStrip.PixelWidth,
+            $"1920x720 should show the whole {SheetStrip.PixelWidth}px strip, shows {layout.SheetVisiblePixels}");
+        Assert.Equal(0, layout.SheetMaxScroll);
+        Assert.Equal(layout.SheetSlider.Width, layout.SheetThumb(0).Width);
+
+        var scroll = new SheetScroll();
+        scroll.BeginDrag(layout, layout.SheetSlider.X);
+        scroll.DragTo(layout, layout.SheetSlider.Right);
+        scroll.EndDrag();
+
+        Assert.Equal(0, scroll.Offset);
+    }
 }

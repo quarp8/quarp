@@ -117,7 +117,18 @@ RENDERER_METHODS=(
 # кроме одного метода — диспетчера кликов по кнопкам редактора, это и есть
 # "роутинг кликов оболочки" из определения карточки.
 GAME_FILE="$SHELL_DIR/QuarpGame.cs"
+# Дополнено после аудита сессии 2026-08-24: прибор ловил переименование маркера, но не
+# ДОБАВЛЕНИЕ нового хрома в этот файл — волна 2k положила сюда ScrollSheetTo (слайдер листа),
+# и метрика его не увидела. Правило теперь явное: любой новый метод QuarpGame, который
+# двигает виджет или маршрутизирует клик, добавляется сюда строкой, иначе число врёт.
+# ВНИМАНИЕ: список обязан идти в ПОРЯДКЕ ФАЙЛА — счёт ведётся от сигнатуры до следующей,
+# поэтому пропущенный метод молча приписывается предыдущему. Аудит 2026-08-24 поймал ровно это:
+# ScrollSheetTo (слайдер листа, чистый хром) не был в списке и его строки уходили в счёт «не хром».
 GAME_METHODS=(
+  "private void ScrollSheetTo(in SpriteEditorLayout layout, int column)|chrome"
+  "private static void BeginCanvasGesture(SpriteEditorSession editor, int localX, int localY)|content"
+  "private static void EndCanvasGesture(SpriteEditorSession editor)|content"
+  "private static void RefreshGestures(SpriteEditorSession editor, in ShellCommands commands)|content"
   "private bool HandleEditorButton(SpriteEditorSession editor, EditorButton button)|chrome"
   "protected override void Draw(GameTime gameTime)|infra"
 )

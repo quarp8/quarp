@@ -9,13 +9,15 @@ namespace Quarp.Cli;
 /// runs its <c>Init</c> and writes the sprite sheet the console is left holding as a
 /// <c>gfx.png</c> (M9 wave A1).
 ///
-/// <para><b>Why this exists.</b> Not one demo cartridge in this repository has a <c>gfx.png</c>:
-/// every sheet is painted in <c>Init</c> with <c>Sset</c> from hex strings, four of the five
-/// carts carrying their own copy of the same string parser. That makes the sheet real only while
-/// a console is running, which leaves the M9 sprite editor with nothing to open and reduces the
-/// ADR-026 criterion "the demo art round-trips byte for byte" to a test over empty sheets. This
-/// command is the extractor half of moving that art out of code and into files; the carts
-/// themselves are not touched here.</para>
+/// <para><b>Why this exists.</b> When this command was written, not one demo cartridge had a
+/// <c>gfx.png</c>: every sheet was painted in <c>Init</c> with <c>Sset</c> from hex strings, so
+/// the art was real only while a console was running — the M9 sprite editor had nothing to open
+/// and the ADR-026 criterion "the demo art round-trips byte for byte" ran over empty sheets.
+/// This command was the extractor half of moving that art into files, and wave A2 used it to do
+/// exactly that: dialogue, digger, platformer and shmup now carry their own <c>gfx.png</c>
+/// (breakout and snake draw with primitives and have no sheet at all). It stays useful for the
+/// next cart built that way, and as the gate that a sheet in a file still equals the sheet the
+/// console holds.</para>
 ///
 /// <para><b>The sheet comes from the console, never from the source text.</b> The cartridge is
 /// loaded, compiled and attached exactly the way <c>quarp sim</c> does it, and the bytes written

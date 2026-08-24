@@ -195,14 +195,16 @@ public sealed class ShellCommandReader
             ToStart = Pressed(keyboard, Keys.Home),
             SaveReplay = Pressed(keyboard, Keys.F5),
             PlayReplay = Pressed(keyboard, Keys.F8),
-            // Shift takes the arrows for the sheet strip, the way it takes them for a
-            // selection in any editor: bare arrows steer the canvas cursor, Shift+arrows step
-            // the edited sprite. Both edges are read from the same frame's Shift, so pressing
-            // Shift mid-hold moves the sprite instead of half-moving both.
-            MenuUp = !shift && Pressed(keyboard, Keys.Up),
-            MenuDown = !shift && Pressed(keyboard, Keys.Down),
-            MenuLeft = !shift && Pressed(keyboard, Keys.Left),
-            MenuRight = !shift && Pressed(keyboard, Keys.Right),
+            // The arrows stay the arrows for everyone. An earlier cut of this gated MenuUp..
+            // MenuRight on !shift so the editor could give Shift+arrows to the sheet strip —
+            // and silently took Shift+Down away from the LIBRARY, which reads the same four
+            // fields (QuarpGame's library navigation). The gate belongs where the meaning
+            // differs, not in the reader every mode shares: the editor ignores cursor movement
+            // on the frames where the sheet step fires, and nothing else changes.
+            MenuUp = Pressed(keyboard, Keys.Up),
+            MenuDown = Pressed(keyboard, Keys.Down),
+            MenuLeft = Pressed(keyboard, Keys.Left),
+            MenuRight = Pressed(keyboard, Keys.Right),
             EditorSheetDx = shift
                 ? (Pressed(keyboard, Keys.Right) ? 1 : 0) - (Pressed(keyboard, Keys.Left) ? 1 : 0)
                 : 0,

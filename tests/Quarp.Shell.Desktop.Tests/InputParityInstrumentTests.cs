@@ -204,23 +204,18 @@ public class InputParityInstrumentTests : IDisposable
             editor.SelectLayer(editor.ActiveLayerIndex - 1);
         }
 
-        // Mirror of QuarpGame's Shift+arrow sheet step (wave 2k): strip-space movement
-        // through SheetStrip, the one owner of the presentation mapping. The scroll that
-        // follows it there is view state only and has no effect on the session, so it is
-        // deliberately absent here.
+        // NOT a mirror: the shell and this driver call the SAME owner of the step,
+        // EditorSheetStep.Apply. That is the whole point of the type existing — a copy here
+        // would stay green if QuarpGame's call were deleted. The scroll that follows the call
+        // there is view state and has no effect on the session, so it is absent here.
         if (c.EditorSheetDx != 0 || c.EditorSheetDy != 0)
         {
-            SheetStrip.SpriteToStripCell(editor.SpriteIndex, out int column, out int row);
-            column = Math.Clamp(column + c.EditorSheetDx, 0, SheetStrip.Columns - 1);
-            row = Math.Clamp(row + c.EditorSheetDy, 0, SheetStrip.Rows - 1);
-            if (SheetStrip.TryStripCellToSheetCell(column, row, out int sheetX, out int sheetY))
-            {
-                editor.SelectRegionCell(sheetX, sheetY);
-            }
+            EditorSheetStep.Apply(editor, c.EditorSheetDx, c.EditorSheetDy);
         }
 
-        int dx = (c.MenuRight ? 1 : 0) - (c.MenuLeft ? 1 : 0);
-        int dy = (c.MenuDown ? 1 : 0) - (c.MenuUp ? 1 : 0);
+        bool steppedSheet = c.EditorSheetDx != 0 || c.EditorSheetDy != 0;
+        int dx = steppedSheet ? 0 : (c.MenuRight ? 1 : 0) - (c.MenuLeft ? 1 : 0);
+        int dy = steppedSheet ? 0 : (c.MenuDown ? 1 : 0) - (c.MenuUp ? 1 : 0);
         if (dx != 0 || dy != 0)
         {
             editor.MoveCursor(dx, dy);
@@ -568,10 +563,15 @@ public class InputParityInstrumentTests : IDisposable
     /// cursor, cycle tools, resize the region), and Shift+arrows must move it exactly where a
     /// click on the same strip cell would.
     ///
-    /// <para>Negative control: drop the Shift guard from MenuLeft/MenuRight in
-    /// <c>ShellCommandReader</c> and the first assertion goes red (a bare arrow starts moving
-    /// the anchor); drop the Shift+arrow block from <see cref="ApplyKeyboardFrame"/> and the
-    /// second goes red (the keyboard stops reaching the sprite the mouse can reach).</para>
+    /// <para>Negative controls, all against production code: drop the Shift guard from
+    /// MenuLeft/MenuRight in <c>ShellCommandReader</c> and the first assertion goes red (a bare
+    /// arrow starts moving the anchor); break the clamp or the strip mapping in
+    /// <see cref="EditorSheetStep.Apply"/> and the two channels stop landing on the same cell;
+    /// break <c>SpriteEditorLayout.TrySheetCell</c> and the mouse half misses. What this test
+    /// still cannot reach is the one line in <c>QuarpGame.UpdateEditor</c> that calls
+    /// <see cref="EditorSheetStep.Apply"/>: that method needs a GraphicsDevice to construct, so
+    /// its dispatch is covered by the owner's eyes, not by this file. Said out loud rather than
+    /// papered over — a mirror of that dispatch would have been green with the call deleted.</para>
     /// </summary>
     [Fact]
     public void ShiftArrowsPickTheSpriteAndBareKeysNeverDo()
@@ -617,12 +617,18 @@ public class InputParityInstrumentTests : IDisposable
         KeyFrame(reader, editor, Keys.LeftShift, Keys.Down);
         KeyFrame(reader, editor, Keys.LeftShift);
 
-        // What the mouse would have reached with one click on that same strip cell — the
-        // parity statement, not a restatement of the arithmetic above.
+        // The mouse twin is a real click, not a restatement: it goes through the same
+        // EditorMouseReader and the same layout hit test the shell uses, at the window pixel
+        // of that strip cell. Two channels that share only the session are what parity means.
         var mouseTwin = new SpriteEditorSession(FreshCartFolder("region-anchor-parity-mouse"));
         mouseTwin.SelectRegionSize(1);
-        Assert.True(SheetStrip.TryStripCellToSheetCell(3, 1, out int clickX, out int clickY));
-        mouseTwin.SelectRegionCell(clickX, clickY);
+        var layout = SpriteEditorLayout.Compute(1280, 720, mouseTwin.RegionCells);
+        var flyout = new ToolbarFlyout();
+        var mouseReader = new EditorMouseReader();
+        int cell = VirtualConsole.SpriteSize * layout.SheetScale;
+        int clickX = layout.Sheet.X + (3 * cell) + (cell / 2);
+        int clickY = layout.Sheet.Y + (1 * cell) + (cell / 2);
+        Click(mouseTwin, flyout, layout, mouseReader, clickX, clickY);
 
         Assert.Equal(
             (mouseTwin.RegionCellX, mouseTwin.RegionCellY),

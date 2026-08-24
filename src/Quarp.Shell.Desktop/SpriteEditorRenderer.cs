@@ -180,26 +180,18 @@ public sealed class SpriteEditorRenderer : IDisposable
                 Dirty: editor.IsDirty,
                 CanUndo: editor.CanUndo,
                 CanRedo: editor.CanRedo);
-            EditorIcon icon = EditorIcons.IsGroupSlot(place.Id)
-                ? EditorIcons.VariantIcon(place.Id, CurrentVariant(editor, place.Id))
-                : EditorIcons.IconFor(place.Id);
-            Color color = _chrome.DrawButton(
-                batch, layout.Chrome, place, state, icon, EditorIcons.ButtonText(place.Id, editor));
+            // The face — text or icon, exactly one — has one owner since the crash repair:
+            // EditorIcons.Face, the same call EditorButtonFaceTests drives headless. The old
+            // inline pick asked VariantIcon/IconFor for every button, and the first
+            // text-faced one (the size toggle) threw on the editor's first windowed frame.
+            (string? text, EditorIcon? icon) = EditorIcons.Face(place.Id, editor);
+            Color color = _chrome.DrawButton(batch, layout.Chrome, place, state, icon, text);
             if (EditorIcons.IsGroupSlot(place.Id))
             {
                 DrawGroupMarker(batch, layout, place.Rect, color);
             }
         }
     }
-
-    /// <summary>The session's remembered variant of a group slot, as the flyout index <see cref="EditorIcons.VariantIcon"/> expects.</summary>
-    private static int CurrentVariant(SpriteEditorSession editor, EditorButton slot) => slot switch
-    {
-        EditorButton.ToolSelect => (int)editor.CurrentSelection,
-        EditorButton.ToolShape => (int)editor.CurrentShape,
-        EditorButton.SizeToggle => EditorIcons.SizeVariantOf(editor.RegionCells),
-        _ => (int)editor.CurrentTransform,
-    };
 
     /// <summary>
     /// The corner marker of a group slot: a small stepped triangle in the bottom-right corner,
@@ -232,7 +224,7 @@ public sealed class SpriteEditorRenderer : IDisposable
         {
             return;
         }
-        int current = CurrentVariant(editor, slot);
+        int current = EditorIcons.CurrentVariant(editor, slot);
         for (int i = 0; i < EditorIcons.GroupVariantCount(slot); i++)
         {
             Rectangle rect = layout.FlyoutVariantRect(slot, i);

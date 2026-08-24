@@ -120,7 +120,7 @@ public sealed class EditorChromeRenderer : IDisposable
     /// <returns>The ink the face was drawn in, so the caller can decorate the slot in the same colour.</returns>
     public Color DrawButton(
         SpriteBatch batch, in EditorChrome chrome, EditorButtonPlace place,
-        in EditorButtonState state, EditorIcon icon, string? text)
+        in EditorButtonState state, EditorIcon? icon, string? text)
     {
         ArgumentNullException.ThrowIfNull(batch);
         Color color = ButtonInk(place.Id, state);
@@ -143,7 +143,11 @@ public sealed class EditorChromeRenderer : IDisposable
                 batch,
                 place.Id == EditorButton.Save
                     ? state.Dirty ? EditorIcon.Modified : EditorIcon.Saved
-                    : icon,
+                    // Nullable since the crash repair: a text-faced button legitimately
+                    // carries no glyph, and the throw below names the real breach — a button
+                    // with NEITHER face — instead of letting a wrong glyph draw quietly.
+                    : icon ?? throw new ArgumentNullException(
+                        nameof(icon), "a button with no text must carry an icon (EditorIcons.Face owns the choice)."),
                 chrome.ButtonIconRect(place.Rect),
                 color);
         }

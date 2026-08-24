@@ -187,7 +187,8 @@ RENDERER_METHODS=(
   "private static string? StandingNotice(SpriteEditorSession editor) =>|chrome"
   "private void UploadSheetIfChanged(SpriteEditorSession editor)|content"
   "private void DrawButtons(SpriteBatch batch, in SpriteEditorLayout layout, SpriteEditorSession editor, HoverTarget? hover)|chrome"
-  "private static int CurrentVariant(SpriteEditorSession editor, EditorButton slot) => slot switch|chrome"
+  # CurrentVariant переехал в EditorIcons (починка крэша кнопок: у лица кнопки один владелец,
+  # достижимый headless-тестом) — маркера в этом файле больше нет.
   "private void DrawGroupMarker(SpriteBatch batch, in SpriteEditorLayout layout, Rectangle slot, Color color)|chrome"
   "private void DrawFlyout(|chrome"
   "private void DrawCanvas(SpriteBatch batch, in SpriteEditorLayout layout, SpriteEditorSession editor, double timeSeconds)|content"

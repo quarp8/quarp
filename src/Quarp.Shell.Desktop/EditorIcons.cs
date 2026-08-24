@@ -492,6 +492,48 @@ public static class EditorIcons
     }
 
     /// <summary>
+    /// The session's remembered variant of a group slot, as the flyout index
+    /// <see cref="VariantIcon"/> expects. Lived as a private copy in the sprite renderer
+    /// until the boot-wave's crash repair: the face test must ask the very truth the
+    /// renderer draws, and a private method of a device-owning class is exactly what a
+    /// headless test can never reach.
+    /// </summary>
+    public static int CurrentVariant(SpriteEditorSession session, EditorButton slot)
+    {
+        ArgumentNullException.ThrowIfNull(session);
+        return slot switch
+        {
+            EditorButton.ToolSelect => (int)session.CurrentSelection,
+            EditorButton.ToolShape => (int)session.CurrentShape,
+            EditorButton.SizeToggle => SizeVariantOf(session.RegionCells),
+            _ => (int)session.CurrentTransform,
+        };
+    }
+
+    /// <summary>
+    /// The one answer to "what does this button wear": its text, or its icon — exactly one,
+    /// never neither. Text first: that is the contract <see cref="IconFor"/> always carried
+    /// in prose ("the renderer branches on ButtonText before ever asking here"), and the
+    /// module-split wave broke it exactly the way prose breaks — the sprite renderer kept
+    /// computing an icon for every button, and the first text-faced one (the size toggle)
+    /// took the whole window down with ArgumentOutOfRange on the editor's first frame, while
+    /// 1264 headless tests stayed green, because only code holding a GraphicsDevice ever made
+    /// the choice. This method is that choice with no device attached, and
+    /// <c>EditorButtonFaceTests</c> walks every button of every layout through it.
+    /// </summary>
+    public static (string? Text, EditorIcon? Icon) Face(EditorButton button, SpriteEditorSession session)
+    {
+        string? text = ButtonText(button, session);
+        if (text is not null)
+        {
+            return (text, null);
+        }
+        return (null, IsGroupSlot(button)
+            ? VariantIcon(button, CurrentVariant(session, button))
+            : IconFor(button));
+    }
+
+    /// <summary>
     /// The glyph of one flyout variant — also the slot's own face for that variant (the wave's
     /// card: the group button shows the CURRENT variant). Indices are the session enums' values
     /// (<see cref="ShapeVariant"/>, <see cref="TransformVariant"/>), so this is the cast the

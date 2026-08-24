@@ -17,9 +17,11 @@ namespace Dialogue;
 /// move from 128x72 to 160x90 (ADR-021) without a single line changing, otherwise the
 /// comparison would be measuring the source code instead of the screen.</para>
 ///
-/// <para>The two 16x16 portraits are painted pixel by pixel with <see cref="IConsoleApi.Sset"/>
-/// in <see cref="Init"/> from the hex-digit art below (Р16: no hand-drawn binaries), so the
-/// cartridge carries no gfx.png and the art still diffs as text.</para>
+/// <para>The two 16x16 portraits are the top two sprite rows of <c>gfx.png</c> next to this
+/// file — cells 0,1,16,17 (Mara) and 2,3,18,19 (Osk), see <see cref="PortraitSprite"/>. They
+/// used to be painted pixel by pixel in <see cref="Init"/> from hex-digit art in this file
+/// (M4 Р16); M9 moved them into the file the sprite editor can open, byte-for-byte the same
+/// sheet the code used to build.</para>
 ///
 /// <para>Text is measured in the system font's own units: a glyph cell is 4x6 px (3x5 ink
 /// plus one pixel of air), so a line of N characters is exactly 4N wide. The word wrapper
@@ -166,71 +168,6 @@ public sealed class TwoLights : Cartridge
     /// <summary>Top-left sprite of each 2x2 portrait block: cells 0,1,16,17 and 2,3,18,19.</summary>
     private static readonly int[] PortraitSprite = { 0, 2 };
 
-    // --- portrait art ------------------------------------------------------------------
-    // One character per pixel, Std.PaintPattern's canonical dialect (M4 Р28): '.' skips the
-    // pixel; every hex digit '0'-'9'/'a'-'f' writes that palette slot, '0' included -- it is a
-    // real, opaque write, not a second spelling of skip (adversary review, M4 stage 4.1 fix
-    // wave, card З3: the previous wording here only mentioned 'a'-'f', which underclaimed what
-    // the dialect actually accepts and this art actually uses, e.g. '6', '3', '4', '2', '9'
-    // below). That is a real change from this cartridge's own painter before the Std
-    // conversion, which DID treat '0' as "leave it transparent" (color 0 was never a real write
-    // there, unlike the platformer's canonical dialect where '0' is a real color): the two eye
-    // pixels in each portrait were literal '0' under that old rule, and converting them to '.'
-    // reproduces the exact same Sset sequence under Std.PaintPattern's rule instead of growing
-    // a second "'0' means skip" dialect for the library to support.
-
-    private static readonly string[] MaraArt =
-    {
-        "................",
-        "....dddddddd....",
-        "...dddddddddd...",
-        "..dddffffffddd..",
-        "..ddffffffffdd..",
-        "..ddffffffffdd..",
-        "..dff.ffff.ffd..",
-        "..dffffffffffd..",
-        "..dfffefffffd...",
-        "..dffffaaffffd..",
-        "..ddffffffffdd..",
-        "...ddffffffdd...",
-        "......ffff......",
-        "..66663ff36666..",
-        ".66666633666666.",
-        "6666666336666666",
-    };
-
-    private static readonly string[] OskArt =
-    {
-        "................",
-        "...4444444444...",
-        "..444444444444..",
-        ".44444444444444.",
-        "..2eeeeeeeeee2..",
-        "..2eeeeeeeeee2..",
-        "..2ee.eeee.ee2..",
-        "..2eeeeeeeeee2..",
-        "..2eeee99eeee2..",
-        "..22eeeeeeee22..",
-        "..2222aa222222..",
-        "...2222222222...",
-        "....22222222....",
-        ".....222222.....",
-        // Rows 14-15 sit at y=22-23, at or below the horizon (DrawSea starts at _horizonY,
-        // computed from ScreenHeight in ComputeLayout -- 29 px at 160x90, not the 20 px this
-        // comment named before the console's one resolution move, ADR-021): '4' there is
-        // ColSea, the exact slot the sea itself is filled with, so whenever Osk is undimmed (he
-        // is speaking, or
-        // Draw is in the ending, where CurrentSpeaker is Nobody and nobody is dimmed)
-        // that collar trim renders in the sea's own master color and vanishes into it —
-        // tasks/open/bug-dialogue-portrait-flicker.md, hat/body flicker. '2' (steel,
-        // already this collar's dominant color two rows up) reads against the sea in
-        // both palette states and costs nothing else in the silhouette.
-        "..222222222222..",
-        "2222222222222222",
-    };
-
-    private static readonly string[][] Portraits = { MaraArt, OskArt };
-
     // --- layout, all of it computed in Init from the console's screen size ---
     private int _boxY;
     private int _boxH;
@@ -279,7 +216,6 @@ public sealed class TwoLights : Cartridge
             _glyph[i] = new string((char)(FirstGlyph + i), 1);
         }
 
-        PaintPortraits();
         ComputeLayout();
         BuildPages();
         PlaceStars();
@@ -565,16 +501,6 @@ public sealed class TwoLights : Cartridge
         }
     }
 
-    private void PaintPortraits()
-    {
-        // Portrait p occupies sheet columns 16p..16p+15 of the top two sprite rows, which is
-        // exactly the 2x2 block that Spr(PortraitSprite[p], x, y, 2, 2) draws.
-        for (int p = 0; p < Portraits.Length; p++)
-        {
-            Q.PaintPattern(p * PortraitPx, 0, Portraits[p]);
-        }
-    }
-
     private void PlaceStars()
     {
         // Default seed 0 (API-8 §6): the sky is the same on every machine and every run, and
@@ -604,8 +530,8 @@ public sealed class TwoLights : Cartridge
     /// cousin — tasks/open/idea-palette-dark-twins.md): its literal twin is 20, which is also
     /// <see cref="MasterNight"/> — the exact master color <see cref="ApplyNightPalette"/>
     /// paints the whole sky with, every frame, regardless of who is dimmed. Osk's hood
-    /// (rows 1-3 of <see cref="OskArt"/>) sits entirely inside the sky rectangle, so a
-    /// dimmed Osk had a hood-shaped hole where the "dark twin" of his own hat color was
+    /// (the top three pixel rows of his portrait in gfx.png) sits entirely inside the sky
+    /// rectangle, so a dimmed Osk had a hood-shaped hole where the "dark twin" of his hat was
     /// pixel-identical to the sky behind it — the hat half of the flicker in
     /// tasks/open/bug-dialogue-portrait-flicker.md, the coat/collar half is in DrawBusts.
     /// 21 ("steel", still a cold master tone) has no other claim in this table.
@@ -688,8 +614,9 @@ public sealed class TwoLights : Cartridge
         DrawBust(_leftBustX, Mara, ColMara, speaker != Mara && speaker != Nobody);
         // Coat was ColSea: undimmed (Osk speaking, or nobody dimmed in the Ending) that
         // RectFill drew the sea's own slot over the sea, and the body vanished — the other
-        // half of the flicker fixed alongside the sprite rows above. ColSteel already owns
-        // most of his collar, so the coat now reads as one gray oilskin instead of two.
+        // half of the flicker, fixed together with the collar's own bottom two pixel rows in
+        // gfx.png (they were ColSea too). ColSteel already owns most of his collar, so the
+        // coat now reads as one gray oilskin instead of two.
         DrawBust(_rightBustX, Osk, ColSteel, speaker != Osk && speaker != Nobody);
     }
 

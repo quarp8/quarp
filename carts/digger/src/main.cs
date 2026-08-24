@@ -19,10 +19,14 @@ namespace Digger;
 /// constant in here — the only number this file owns about gems is how many you are allowed
 /// to miss (<see cref="GemsSpare"/>).</para>
 ///
-/// <para><b>Sprites are painted in code</b> with <see cref="Cartridge.Sset"/> (M4 Р16: no
-/// hand-drawn binaries in the demos), and the tile properties the rules ask about — solid,
-/// diggable, round, gem — live in sprite flags via <see cref="Cartridge.Fset"/>, which is
-/// where map semantics belong (MAP-FORMAT §10).</para>
+/// <para><b>Sprites live in <c>gfx.png</c></b> next to this file — the console loads the sheet
+/// before <see cref="Init"/> runs, so the index into the sheet is also the tile number a cell
+/// drawn by <see cref="Cartridge.Map"/> uses (MAP-FORMAT §10). Sprite 8 (the falling boulder)
+/// is a pixel copy of sprite 3 (the boulder at rest): they must look identical, and until M9
+/// that copy was made by an <c>Sget</c>/<c>Sset</c> loop in <see cref="Init"/>. Sprite 7 (the
+/// start marker) is blank: it is erased from the map on the spot and never drawn. The tile
+/// properties the rules ask about — solid, diggable, round, gem — live in sprite flags via
+/// <see cref="Cartridge.Fset"/>, which is where map semantics belong.</para>
 ///
 /// <para><b>Time is a grid step, not a tick.</b> Every <see cref="StepTicks"/> ticks the world
 /// advances once: the player moves, then everything unsupported falls. Between steps the
@@ -33,6 +37,9 @@ namespace Digger;
 public sealed class DiggerGame : Cartridge
 {
     // --- tiles: the legend of map.csv, and the sprite index each cell draws with ---
+    // Colour slot 0 is transparent by default (API-8 §3 Palt), and that is what rounds the
+    // boulder and the gem off against whatever is behind them — a redraw must keep their
+    // corners on slot 0, not on a dark colour that only looks like a corner.
     private const byte TileEmpty = 0;           // dug out; tile 0 is never drawn (API-8 §3)
     private const byte TileDirt = 1;
     private const byte TileWall = 2;
@@ -52,10 +59,9 @@ public sealed class DiggerGame : Cartridge
     private const int FlagGem = 3;
 
     // --- geometry ---
-    // TileSize, the glyph box and the sheet stride are properties of the sprite sheet and the
-    // system font (SPEC-8 §3, API-8 §3), not of the screen: the screen is asked for its size.
+    // TileSize and the glyph box are properties of the sprite sheet and the system font
+    // (SPEC-8 §3, API-8 §3), not of the screen: the screen is asked for its size.
     private const int TileSize = 8;
-    private const int SheetColumns = 16;        // 128px sheet / 8px sprite
     private const int GlyphW = 4;
     private const int GlyphH = 6;
     private const int HudRows = 1;
@@ -115,98 +121,6 @@ public sealed class DiggerGame : Cartridge
     // written down (both the "went down" and the "still held" reads walk this one array).
     private static readonly Button[] DirButtons = { Button.Left, Button.Right, Button.Up, Button.Down };
 
-    /// <summary>
-    /// Sprite art, one string per pixel row, one hex digit per palette slot 0-15 (SPEC-8 §2).
-    /// Kept as text because a diff of a redrawn rock should look like a redrawn rock. Index
-    /// into this array is the sprite number, so it is also the tile number — a cell drawn by
-    /// <see cref="Cartridge.Map"/> is the sprite with the same index (MAP-FORMAT §10).
-    /// Slot 0 is transparent by default (API-8 §3 <c>Palt</c>), which is what rounds off the
-    /// boulder and the gem against whatever is behind them.
-    /// </summary>
-    private static readonly string[][] SpriteArt =
-    {
-        null!,                                  // 0 — empty: never drawn, never painted
-        new[]                                   // 1 — dirt: brown with tan grit
-        {
-            "dddedddd",
-            "ddddddde",
-            "eddddddd",
-            "dddddedd",
-            "ddedddde",
-            "dddddddd",
-            "ddddeddd",
-            "dedddddd",
-        },
-        new[]                                   // 2 — wall: offset brickwork
-        {
-            "11111111",
-            "12222222",
-            "12222222",
-            "12222222",
-            "11111111",
-            "22221222",
-            "22221222",
-            "22221222",
-        },
-        new[]                                   // 3 — boulder at rest
-        {
-            "00111100",
-            "01332210",
-            "13322221",
-            "13222221",
-            "12222221",
-            "12222211",
-            "01222110",
-            "00111100",
-        },
-        new[]                                   // 4 — gem
-        {
-            "00033000",
-            "00355300",
-            "03555530",
-            "35555553",
-            "35555553",
-            "03555530",
-            "00355300",
-            "00033000",
-        },
-        new[]                                   // 5 — exit, barred
-        {
-            "11111111",
-            "1a0000a1",
-            "10a00a01",
-            "100aa001",
-            "100aa001",
-            "10a00a01",
-            "1a0000a1",
-            "11111111",
-        },
-        new[]                                   // 6 — exit, open and lit
-        {
-            "11111111",
-            "18888881",
-            "18333381",
-            "18333381",
-            "18333381",
-            "18333381",
-            "18888881",
-            "11111111",
-        },
-        null!,                                  // 7 — start marker: erased by Init, never drawn
-        null!,                                  // 8 — falling boulder: copied from 3 (see Init)
-        new[]                                   // 9 — the digger
-        {
-            "00999900",
-            "09999990",
-            "0ffffff0",
-            "0f4ff4f0",
-            "00ffff00",
-            "06666660",
-            "06666660",
-            "01100110",
-        },
-    };
-
     private enum GameState
     {
         Playing,
@@ -236,7 +150,6 @@ public sealed class DiggerGame : Cartridge
 
     public override void Init()
     {
-        PaintSprites();
         SetTileFlags();
         ScanLevel();
         SnapshotLevel();
@@ -278,39 +191,6 @@ public sealed class DiggerGame : Cartridge
     }
 
     // --- setup -------------------------------------------------------------------------
-
-    /// <summary>
-    /// Paints every sprite from <see cref="SpriteArt"/> into the sheet, then copies the resting
-    /// boulder over the falling one. The copy is the point: two tiles that must look identical
-    /// have one drawing, so a redrawn rock cannot end up half redrawn.
-    /// </summary>
-    private void PaintSprites()
-    {
-        for (int sprite = 0; sprite < SpriteArt.Length; sprite++)
-        {
-            string[] art = SpriteArt[sprite];
-            if (art is null)
-            {
-                continue;
-            }
-
-            int originX = sprite % SheetColumns * TileSize;
-            int originY = sprite / SheetColumns * TileSize;
-            Q.PaintPattern(originX, originY, art);
-        }
-
-        int fromX = TileBoulder % SheetColumns * TileSize;
-        int fromY = TileBoulder / SheetColumns * TileSize;
-        int toX = TileBoulderFalling % SheetColumns * TileSize;
-        int toY = TileBoulderFalling / SheetColumns * TileSize;
-        for (int y = 0; y < TileSize; y++)
-        {
-            for (int x = 0; x < TileSize; x++)
-            {
-                Sset(toX + x, toY + y, Sget(fromX + x, fromY + y));
-            }
-        }
-    }
 
     /// <summary>
     /// Tile properties live in sprite flags, not in an <c>if</c> chain, because that is where

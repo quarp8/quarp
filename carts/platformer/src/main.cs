@@ -9,8 +9,9 @@ namespace Platformer;
 ///
 /// <para>The tower is 24 tiles wide and fills the whole 72-row map — about seven screens of
 /// climbing at 160x90. It is drawn from <c>map.csv</c> through <c>quarp map build</c> (tools/tower.py
-/// generates the CSV); the sprite sheet is painted pixel by pixel with <see cref="Sset"/> in
-/// <see cref="Init"/>, so the cartridge carries no <c>gfx.png</c>. What each tile *does* comes
+/// generates the CSV); the sprite sheet is <c>gfx.png</c> next to this file, which the console
+/// loads before <see cref="Init"/> runs — until M9 it was painted pixel by pixel in
+/// <see cref="Init"/> from hex-digit art in this file. What each tile *does* comes
 /// from sprite flags set in <see cref="Init"/> — solid, one-way platform, deadly, gem, goal —
 /// which is the idiom MAP-FORMAT §10 names: <c>Fget(Mget(cx, cy), flag)</c>.</para>
 ///
@@ -40,7 +41,6 @@ public sealed class TowerClimb : Cartridge
 {
     // --- geometry that belongs to the console, not to the screen ---
     private const int Tile = 8;                 // SPEC-8 §3: sprites and map cells are 8x8
-    private const int SheetColumns = 16;        // the 128x128 sheet is a 16x16 grid of sprites
     private const int GlyphW = 4;               // system font advance, 4x6 (API-8 §3)
 
     // --- the player's collision box; the sprite is 8 wide and hangs 1 px past it each side ---
@@ -53,6 +53,10 @@ public sealed class TowerClimb : Cartridge
     private const int HudH = 8;
 
     // --- tiles (sprite numbers; tile 0 is "empty" and Map never draws it, MAP-FORMAT §2) ---
+    // Two things about the art in gfx.png are rules, not taste, and a redraw must keep them:
+    // SprWall's mortar lines are color 0, so the backdrop shows through the brickwork; and
+    // SprPlatform is three pixels of lit stone with nothing under it, because a one-way ledge
+    // has to *look* like something you can pass through or the rule reads as a bug.
     private const int SprWall = 1;
     private const int SprPlatform = 2;
     private const int SprSpike = 3;
@@ -154,142 +158,6 @@ public sealed class TowerClimb : Cartridge
         Cleared,
     }
 
-    // The sprite sheet, painted in Init. Eight rows of eight characters per sprite: '.' leaves
-    // the pixel at color 0 (transparent to Spr and Map), any hex digit is a palette slot.
-    private static readonly int[] ArtSprites =
-    {
-        SprWall, SprPlatform, SprSpike, SprGem, SprBanner, SprStone,
-        SprIdle, SprRunA, SprRunB, SprAir,
-    };
-
-    // One string[] per sprite in ArtSprites, same index — passed straight to Std.PaintPattern
-    // (M4 Р28), which is this exact loop-and-Sset shape lifted out to Quarp.Api (this file was
-    // its canonical source, per Std.PaintPattern's doc comment).
-    private static readonly string[][] Art =
-    {
-        // SprWall — offset brick courses; the mortar is color 0, so the backdrop shows through it
-        new[]
-        {
-            "ddd0dddd",
-            "ddd0dddd",
-            "ddd0dddd",
-            "00000000",
-            "ddddddd0",
-            "ddddddd0",
-            "ddddddd0",
-            "00000000",
-        },
-        // SprPlatform — three pixels of lit stone and nothing under it: a one-way ledge has to
-        // *look* like something you can pass through, or the rule feels like a bug
-        new[]
-        {
-            "22222222",
-            "11111111",
-            "10111101",
-            "........",
-            "........",
-            "........",
-            "........",
-            "........",
-        },
-        // SprSpike
-        new[]
-        {
-            "........",
-            ".2.2.2.2",
-            ".2.2.2.2",
-            "22222222",
-            "22222222",
-            "11111111",
-            "11111111",
-            "11111111",
-        },
-        // SprGem
-        new[]
-        {
-            "........",
-            "...66...",
-            "..6556..",
-            ".653556.",
-            ".655556.",
-            "..6556..",
-            "...66...",
-            "........",
-        },
-        // SprBanner
-        new[]
-        {
-            "..8888..",
-            ".888888.",
-            ".8a88a8.",
-            ".888888.",
-            ".888888.",
-            "..8888..",
-            "...88...",
-            "..9999..",
-        },
-        // SprStone
-        new[]
-        {
-            "22222222",
-            "11111111",
-            "11011111",
-            "11111111",
-            "11111101",
-            "11111111",
-            "11011111",
-            "11111111",
-        },
-        // SprIdle
-        new[]
-        {
-            "..dddd..",
-            "..dfff..",
-            "..d4f4..",
-            "...fff..",
-            "..aaaa..",
-            ".aaaaaa.",
-            "..4..4..",
-            "..4..4..",
-        },
-        // SprRunA
-        new[]
-        {
-            "..dddd..",
-            "..dfff..",
-            "..d4f4..",
-            "...fff..",
-            "..aaaa..",
-            ".aaaaaa.",
-            ".44..4..",
-            ".4...44.",
-        },
-        // SprRunB
-        new[]
-        {
-            "..dddd..",
-            "..dfff..",
-            "..d4f4..",
-            "...fff..",
-            "..aaaa..",
-            ".aaaaaa.",
-            "..4.44..",
-            ".44...4.",
-        },
-        // SprAir
-        new[]
-        {
-            "..dddd..",
-            "..dfff..",
-            "..d4f4..",
-            "...fff..",
-            ".aaaaaa.",
-            "..aaaa..",
-            ".4....4.",
-            "4......4",
-        },
-    };
-
     private readonly int[] _gemX = new int[MaxGems];
     private readonly int[] _gemY = new int[MaxGems];
     private int _gemTotal;
@@ -311,7 +179,6 @@ public sealed class TowerClimb : Cartridge
 
     public override void Init()
     {
-        PaintSheet();
         TagTiles();
         FindGems();
 
@@ -870,22 +737,6 @@ public sealed class TowerClimb : Cartridge
     }
 
     // --- one-time setup -----------------------------------------------------------------------
-
-    /// <summary>
-    /// Paints the sheet from <see cref="Art"/>. Generative graphics rather than a gfx.png: it
-    /// diffs, it needs no image editor, and Init is part of the simulation so the sheet is the
-    /// same on every machine (M4 Р16).
-    /// </summary>
-    private void PaintSheet()
-    {
-        for (int i = 0; i < ArtSprites.Length; i++)
-        {
-            int sprite = ArtSprites[i];
-            int originX = (sprite % SheetColumns) * Tile;
-            int originY = (sprite / SheetColumns) * Tile;
-            Q.PaintPattern(originX, originY, Art[i]);
-        }
-    }
 
     private void TagTiles()
     {

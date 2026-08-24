@@ -9,10 +9,14 @@ quarp build carts/platformer      # compile and check, no window, no tick
 quarp run   carts/platformer      # play it
 ```
 
-Made of: `map.csv` → `quarp map build` → `map.bin` for the tower; `Quarp.Api.Std.PaintPattern`
-(M4 stage 4.1, Р28) paints every sprite from the hex-digit art in `src/main.cs` — this cartridge
-was the canonical source that method was cut from; `sfx.txt` / `music.txt` → `quarp audio build`
-for five effects and a four-pattern theme. Through M4 stage 3 nothing here was shared with
+Made of: `map.csv` → `quarp map build` → `map.bin` for the tower; `gfx.png` next to this file
+for the sprite sheet, loaded by the console before `Init` and editable in Quarp's own sprite
+editor; `sfx.txt` / `music.txt` → `quarp audio build` for five effects and a four-pattern theme.
+Until M9 there was no sheet file: `Quarp.Api.Std.PaintPattern` (M4 stage 4.1, Р28) painted every
+sprite in `Init` from hex-digit art in `src/main.cs` — this cartridge was the canonical source
+that method was cut from. Wave A2 dumped the sheet off the running console after `Init`
+(`quarp gfx dump`) and deleted the code; the sheet is pixel-for-pixel the one the code built, so
+every frame and audio hash below is unchanged. Through M4 stage 3 nothing here was shared with
 another demo on purpose — copy-paste between demos was the point (Р18), so that the standard
 library could be cut from repetitions somebody actually observed rather than designed ahead of
 evidence. Stage 4.1 wave 2 is that cut: the local `PrintInt`/`IntWidth`/`Clamp`/sprite-painting

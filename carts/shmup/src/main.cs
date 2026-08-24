@@ -87,7 +87,7 @@ public sealed class ShmupGame : Cartridge
 
     private const int BestScoreSlot = 0;
 
-    // --- sprites (built with Sset in Init — M4 work order Р16, "assets from code") ---
+    // --- sprites (drawn in gfx.png next to this file, loaded by the console before Init) ---
     private const int SprPlayer = 1;
     private const int SprEnemyA = 2;                     // row 0 of every formation
     private const int SprEnemyB = 3;                     // row 1 (only 2-row waves use it)
@@ -112,53 +112,6 @@ public sealed class ShmupGame : Cartridge
 
     private static readonly string[] Digits =
         { "0", "1", "2", "3", "4", "5", "6", "7", "8", "9" };
-
-    // Row-major 8x8 pixel patterns for Std.PaintPattern (M4 Р28: sprites are code, not a PNG
-    // this cartridge doesn't own). '.' skips the pixel (the sheet's default 0, transparent under
-    // the default Palt); every other character is a hex palette slot written straight into the
-    // rows below, one fixed digit per sprite (Std.PaintPattern's canonical dialect is a color
-    // per pixel; this cartridge only ever needs one color per sprite): 'c' (12) is the ship,
-    // '8' and '9' (the same numbers) are the two enemy rows — reformatted from the original
-    // '#'-per-pixel dialect, same shapes, same colors, same Sset sequence. No ColShip/ColEnemyA/
-    // ColEnemyB constant backs these digits any more (adversary review, M4 stage 4.1 fix wave,
-    // card В1): once BuildSprites moved to Std.PaintPattern and stopped taking a color argument,
-    // nothing else in the file read them, and the only place left to spell the color is the hex
-    // digit next to the pixel it colors.
-    private static readonly string[] PlayerPattern =
-    {
-        "...cc...",
-        "...cc...",
-        "..cccc..",
-        "..cccc..",
-        ".cccccc.",
-        "cccccccc",
-        "c.cccc.c",
-        "c......c",
-    };
-
-    private static readonly string[] EnemyAPattern =
-    {
-        "..8888..",
-        ".888888.",
-        "88.88.88",
-        "88888888",
-        ".888888.",
-        "..8..8..",
-        ".8....8.",
-        "8......8",
-    };
-
-    private static readonly string[] EnemyBPattern =
-    {
-        "99999999",
-        "9.9999.9",
-        "99999999",
-        "..9999..",
-        ".999999.",
-        "99....99",
-        ".9.99.9.",
-        "..9..9..",
-    };
 
     private enum RunState { Playing, Win, GameOver }
     private enum WavePhase { Intermission, Active }
@@ -210,8 +163,6 @@ public sealed class ShmupGame : Cartridge
         _playerY = ScreenHeight - PlayerSize - PlayerBottomMargin;
         _playerMinX = 0;
         _playerMaxX = ScreenWidth - PlayerSize;
-
-        BuildSprites();
 
         // Srand is called explicitly (API-8 §6) even though the default seed is already 0 and
         // already deterministic — the point is to name the seed as this cartridge's input
@@ -675,14 +626,5 @@ public sealed class ShmupGame : Cartridge
             const string restart = "PRESS START";
             Q.PrintCentered(restart, panelY + 23, ColHud);
         }
-    }
-
-    // ================= sprites =================
-
-    private void BuildSprites()
-    {
-        Q.PaintPattern(SprPlayer % 16 * 8, SprPlayer / 16 * 8, PlayerPattern);
-        Q.PaintPattern(SprEnemyA % 16 * 8, SprEnemyA / 16 * 8, EnemyAPattern);
-        Q.PaintPattern(SprEnemyB % 16 * 8, SprEnemyB / 16 * 8, EnemyBPattern);
     }
 }

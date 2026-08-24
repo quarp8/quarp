@@ -238,6 +238,14 @@ switch (command)
         return MapBuildCommand.Invoke(args.Length > 1 ? args[1..] : Array.Empty<string>());
     }
 
+    case "gfx":
+    {
+        // `gfx` is a group like `audio` and `map`: the subcommand owns its arguments, its error
+        // text and its exit code. `dump` is the first one (M9 wave A1) — it boots a cart
+        // headless, runs Init and writes the console's sprite sheet as a gfx.png.
+        return GfxDumpCommand.Invoke(args.Length > 1 ? args[1..] : Array.Empty<string>());
+    }
+
     case "bench":
     {
         if (args.Length < 2)
@@ -295,6 +303,11 @@ switch (command)
         Console.WriteLine("  quarp map build <cart> [--check]");
         Console.WriteLine("                               compile map.csv into map.bin (docs/MAP-FORMAT.md);");
         Console.WriteLine("                               a cart without a map.csv is not an error");
+        Console.WriteLine("  quarp gfx dump <cart> [-o <file.png>] [--force]");
+        Console.WriteLine("                               run the cart's Init headless (no tick) and write the");
+        Console.WriteLine("                               console's sprite sheet as gfx.png, printing its sha256;");
+        Console.WriteLine("                               defaults to <cart>/gfx.png and never overwrites without");
+        Console.WriteLine("                               --force");
         Console.WriteLine("  quarp bench <cart> --ticks N  measure play and resimulation speed (rewind cost)");
         Console.WriteLine("  quarp pattern <file>         write the test pattern as a .bmp image");
         Console.WriteLine();

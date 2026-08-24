@@ -25,5 +25,10 @@
     <!-- FrameHash and the APU, which the silence digest is expressed in. Transitive through the
          CLI, named here for the same reason the other test projects name theirs. -->
     <ProjectReference Include="..\..\src\Quarp.Core\Quarp.Core.csproj" />
+    <!-- PngDecoder and PngEncoder: the gfx dump tests read the file the tool wrote with the
+         very decoder the console loads a cartridge's art through, which is what makes the
+         round trip a statement about the console rather than about a test helper. Transitive
+         through the CLI as well; named for the same reason as the line above. -->
+    <ProjectReference Include="..\..\src\Quarp.CartKit\Quarp.CartKit.csproj" />
   </ItemGroup>
 </Project>

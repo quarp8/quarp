@@ -213,37 +213,52 @@ public readonly struct SpriteEditorLayout
         }
         int panelWidth = button;
 
-        // The palette keeps the top-right corner (fourth review: it hugs the window's edge).
-        // Swatches want to be finger-big; only a window too narrow to give a third of itself
-        // to the column shrinks them, and the gap of one ui pixel keeps neighbouring colors
-        // from fusing into a gradient. The sixth review moved everything BELOW it, so the
-        // palette no longer dictates the column's width — the sheet does.
+        // Swatch size first: the palette's width is what the canvas has to leave room for, and
+        // finger-big swatches are the point (only a window too narrow to give a third of itself
+        // to the column shrinks them). The gap of one ui pixel keeps neighbouring colors from
+        // fusing into a gradient.
         int swatchSize = Math.Max(
             4, Math.Min(12 * ui, (width / 3 - (SwatchColumns - 1) * gap) / SwatchColumns));
         int paletteWidth = SwatchColumns * swatchSize + (SwatchColumns - 1) * gap;
-        int paletteX = width - margin - paletteWidth;
-        var swatches = new Rectangle(
-            paletteX, top, paletteWidth, SwatchRows * swatchSize + (SwatchRows - 1) * gap);
 
         // The canvas takes the largest square that is a whole multiple of the LARGEST region
         // the size list offers (EditorIcons owns that list — asking it means a future 64-px
         // region cannot silently break this). Sizing the box instead of the sprite is what
-        // makes 8, 16 and 32 px draw the identical rectangle: the column to its right is
+        // makes 8, 16 and 32 px draw the identical rectangle: everything to its right is
         // measured from the box, so pressing Tab moves no panel but the pixels inside.
+        //
+        // Room for the right side is now two things, not one (seventh review, 2026-08-24): a
+        // tool column one button wide that hugs the canvas the way the toolbar hugs it on the
+        // left, and behind it the content column that must at least hold the palette.
         int canvasX = margin + panelWidth + margin;
         int largestRegion = EditorIcons.SizeVariantCells(
             EditorIcons.GroupVariantCount(EditorButton.SizeToggle) - 1) * VirtualConsole.SpriteSize;
-        int canvasRoom = Math.Min(bottom - top, paletteX - margin - canvasX);
+        int rightSideRoom = button + margin + paletteWidth + margin;
+        int canvasRoom = Math.Min(bottom - top, width - canvasX - margin - rightSideRoom);
         int canvasBox = Math.Max(largestRegion, canvasRoom / largestRegion * largestRegion);
         int canvasScale = Math.Max(1, canvasBox / regionPixels);
         var canvas = new Rectangle(canvasX, top, regionPixels * canvasScale, regionPixels * canvasScale);
 
-        // The narrow row of the sixth review, and under it the sheet window that owns the
-        // rest of the column. The sheet is sized first because the row is aligned to it: one
-        // left edge for row, window and slider is what makes the three read as one block.
-        // Height comes before width — the strip's whole scale is what the space below the row
-        // can hold — and the width is then trimmed to whole sprite columns, so the window
-        // never shows a sliced cell and the slider's thumb reports an honest fraction.
+        // The seventh review's two columns. The right tool column starts level with the canvas
+        // and with the left toolbar — same gap from the canvas on both sides, so the drawing
+        // surface sits between two mirrored strips of buttons. The content column starts one
+        // more gap to the right and owns everything else: palette on top, the layer tabs under
+        // it, the sheet under them, all sharing one left edge.
+        int rightToolsX = canvasX + canvasBox + margin;
+        int contentX = rightToolsX + button + margin;
+        var swatches = new Rectangle(
+            contentX, top, paletteWidth, SwatchRows * swatchSize + (SwatchRows - 1) * gap);
+        buttons[placed++] = new EditorButtonPlace
+        {
+            Id = EditorButton.SizeToggle, Rect = new Rectangle(rightToolsX, top, button, button),
+        };
+
+        // Under the palette: the layer tabs, and under them the sheet window that owns the rest
+        // of the column. The sheet is sized first because the tabs are aligned to it — one left
+        // edge for tabs, window and slider is what makes the three read as one block. Height
+        // comes before width (the strip's whole scale is what the space under the tabs can
+        // hold), and the width is then trimmed to whole sprite columns, so the window never
+        // shows a sliced cell and the slider's thumb reports an honest fraction.
         int rowY = swatches.Bottom + 2 * ui;
         int sheetTop = rowY + button + 2 * ui;
         int sliderHeight = 4 * ui;
@@ -255,25 +270,21 @@ public readonly struct SpriteEditorLayout
         // in a wave about the right column.
         int sheetScale = Math.Max(1, (bottom - sheetTop - sliderHeight - gap) / SheetStrip.PixelHeight);
         int sheetCell = VirtualConsole.SpriteSize * sheetScale;
-        int columnRoom = width - margin - (canvasX + canvasBox + margin);
+        int columnRoom = width - margin - contentX;
         int sheetWidth = Math.Clamp(columnRoom / sheetCell, 1, SheetStrip.Columns) * sheetCell;
-        int sheetX = width - margin - sheetWidth;
-        var sheet = new Rectangle(sheetX, sheetTop, sheetWidth, SheetStrip.PixelHeight * sheetScale);
-        var slider = new Rectangle(sheetX, sheet.Bottom + gap, sheetWidth, sliderHeight);
+        var sheet = new Rectangle(contentX, sheetTop, sheetWidth, SheetStrip.PixelHeight * sheetScale);
+        var slider = new Rectangle(contentX, sheet.Bottom + gap, sheetWidth, sliderHeight);
 
-        // The row itself: the size toggle first, then the five layer tabs (ADR-027's "вкладки
-        // над окном листа" survives — they are still directly above the sheet, just sharing
-        // the row now). Both left-aligned with the sheet window they steer.
-        buttons[placed++] = new EditorButtonPlace
-        {
-            Id = EditorButton.SizeToggle, Rect = new Rectangle(sheetX, rowY, button, button),
-        };
+        // The five layer tabs, left-aligned with the window they steer (ADR-027's "вкладки над
+        // окном листа" survives every review — they are still directly above the sheet). The
+        // size toggle used to open this row; the seventh review moved it into the tool column,
+        // where it stands next to the canvas it resizes.
         for (int i = 0; i < 5; i++)
         {
             buttons[placed++] = new EditorButtonPlace
             {
                 Id = EditorButton.LayerTab1 + i,
-                Rect = new Rectangle(sheetX + (i + 1) * (button + gap), rowY, button, button),
+                Rect = new Rectangle(contentX + i * (button + gap), rowY, button, button),
             };
         }
 

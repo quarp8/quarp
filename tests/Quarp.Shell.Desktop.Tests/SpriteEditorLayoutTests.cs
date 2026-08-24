@@ -172,47 +172,59 @@ public class SpriteEditorLayoutTests
     }
 
     /// <summary>
-    /// The right column after the SIXTH review, which is this wave's whole subject. Four
-    /// facts, each one of the owner's four points: the palette still owns the top-right
-    /// corner; the size toggle and all five layer tabs share ONE row under it, in that order,
-    /// all at the same Y (before this wave the toggle sat in a band beside the palette and
-    /// the tabs were a row of their own); the sheet window is strictly wider than the palette
-    /// it used to copy and reaches from that row down to its slider; and the slider ends the
-    /// column, with no reserved emptiness left under it — the space below the slider is now
-    /// less than one button tall, where it used to be about a third of the column.
+    /// The right side after the SEVENTH review (2026-08-24). The owner's sketch: the size
+    /// toggle rises to the top and hugs the canvas from the right at the same distance the
+    /// toolbar keeps on the left, so the drawing surface sits between two mirrored strips of
+    /// buttons; the palette follows one equal gap further right; and everything under it — the
+    /// layer tabs, the sheet window, the slider — shifts to that same left edge, leaving the
+    /// tool column free down the whole height. That last shift is what closes the air pocket
+    /// the sixth review left beside the palette.
+    ///
+    /// <para>Negative control: put the toggle back into the tabs row (its sixth-review home)
+    /// and the mirrored-gap assertions go red; leave the palette anchored to the window's right
+    /// edge and the shared-left-edge ones do.</para>
     /// </summary>
     [Fact]
-    public void TheRightColumnFollowsTheSixthReview()
+    public void TheRightSideFollowsTheSeventhReview()
     {
         var layout = Default();
         Rectangle firstTab = layout.ButtonRect(EditorButton.LayerTab1);
         Rectangle lastTab = layout.ButtonRect(EditorButton.LayerTab5);
         Rectangle toggle = layout.ButtonRect(EditorButton.SizeToggle);
+        Rectangle firstTool = layout.ButtonRect(EditorButton.ToolSelect);
 
-        Assert.Equal(1280 - layout.Margin, layout.Swatches.Right);      // the palette hugs the edge
-        Assert.True(layout.Swatches.X >= layout.Canvas.Right);
-        // Point 2: ONE row — toggle first, then tabs 1..5, every one of them on the same line.
+        // The toggle is a right-hand tool column: level with the canvas and the left toolbar,
+        // and the same gap from the canvas that the toolbar keeps on its side.
+        Assert.Equal(layout.Canvas.Y, toggle.Y);
+        Assert.Equal(firstTool.Y, toggle.Y);
+        Assert.Equal(layout.Canvas.X - firstTool.Right, toggle.X - layout.Canvas.Right);
+        Assert.Equal(layout.ButtonSize, toggle.Width);
+
+        // The palette starts one equal gap right of that column — not anchored to the window.
+        Assert.Equal(toggle.Right + layout.Margin, layout.Swatches.X);
+        Assert.Equal(layout.Canvas.Y, layout.Swatches.Y);
+
+        // Palette, tabs, sheet and slider share one left edge, and the tool column stays clear
+        // of all of them for the whole height.
+        Assert.Equal(layout.Swatches.X, firstTab.X);
+        Assert.Equal(layout.Swatches.X, layout.Sheet.X);
+        Assert.Equal(layout.Swatches.X, layout.SheetSlider.X);
         Assert.All(
-            new[] { firstTab, lastTab, layout.ButtonRect(EditorButton.LayerTab3) },
-            tab => Assert.Equal(toggle.Y, tab.Y));
-        Assert.True(toggle.Right <= firstTab.X && firstTab.X < lastTab.X);
-        Assert.True(layout.Swatches.Bottom <= toggle.Y);                // the row is under the palette
-        Assert.True(toggle.Bottom <= layout.Sheet.Y);                   // and above the sheet window
-        Assert.Equal(layout.Sheet.X, toggle.X);                         // row and window share a left edge
-        // Point 3: the window is wider than the palette that used to dictate its width, and
-        // taller than the pre-2k four-row window — the strip's full height at a whole scale.
+            new[] { layout.Swatches, firstTab, lastTab, layout.Sheet, layout.SheetSlider },
+            area => Assert.True(area.X >= toggle.Right + layout.Margin, $"{area} overlaps the tool column"));
+
+        // The tabs are still one row directly above the sheet, in order, under the palette.
+        Assert.Equal(firstTab.Y, lastTab.Y);
+        Assert.True(firstTab.X < lastTab.X);
+        Assert.True(layout.Swatches.Bottom <= firstTab.Y);
+        Assert.True(firstTab.Bottom <= layout.Sheet.Y);
+
+        // The sheet still owns the rest of the column: wider than the palette, the strip's full
+        // height at a whole scale, reaching the window's right edge within one cell.
         Assert.True(layout.Sheet.Width > layout.Swatches.Width);
         Assert.Equal(SheetStrip.PixelHeight * layout.SheetScale, layout.Sheet.Height);
-        Assert.True(layout.Sheet.Height > 4 * VirtualConsole.SpriteSize * layout.Ui);
-        // Point 4: no air right of the canvas below the palette — the window starts within a
-        // cell of the canvas's own margin and ends flush with the palette at the window edge.
-        Assert.Equal(1280 - layout.Margin, layout.Sheet.Right);
-        Assert.True(layout.Sheet.X >= layout.Canvas.Right + layout.Margin);
         Assert.True(
-            layout.Sheet.X - layout.Canvas.Right
-                < layout.Margin + VirtualConsole.SpriteSize * layout.SheetScale);
-        // The slider directly under the sheet window, same width, and it ends the column.
-        Assert.Equal(layout.Sheet.X, layout.SheetSlider.X);
+            1280 - layout.Margin - layout.Sheet.Right < VirtualConsole.SpriteSize * layout.SheetScale);
         Assert.Equal(layout.Sheet.Width, layout.SheetSlider.Width);
         Assert.True(layout.Sheet.Bottom <= layout.SheetSlider.Y);
         Assert.True(layout.SheetSlider.Bottom < layout.PromptY);

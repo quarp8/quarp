@@ -69,9 +69,14 @@ public class SheetScrollTests
     }
 
     /// <summary>
-    /// The default window's own numbers, which are the sixth review's answer: 16 whole sprite
-    /// columns by 8 rows = 128 of the 256 sprites visible at once (it was 12 x 4 = 48), no
-    /// sliced cell at either edge, and a slider with exactly half the strip still to reach.
+    /// The default window's own numbers. The sixth review took the strip from 12 x 4 = 48
+    /// sprites to 16 x 8 = 128; the seventh gave a button-wide tool column back to the canvas's
+    /// right side, and the sheet paid for it in width: 14 x 8 = 112 sprites at once. Still no
+    /// sliced cell at either edge, and the slider still has strip left to reach.
+    ///
+    /// <para>Negative control: drop the whole-cell trim in the layout and the width assertion
+    /// goes red; give the tool column zero width and the count climbs back to 16, which is how
+    /// this test says out loud what that column costs.</para>
     /// </summary>
     [Fact]
     public void DefaultWindowPinsALiveSliderAndUsefulColumnCount()
@@ -81,7 +86,7 @@ public class SheetScrollTests
 
         Assert.Equal(SheetStrip.PixelWidth - layout.SheetVisiblePixels, layout.SheetMaxScroll);
         Assert.True(layout.SheetMaxScroll > 0);
-        Assert.Equal(16, completeColumns);                              // 16 x 8 = 128 sprites, no partial column
+        Assert.Equal(14, completeColumns);                              // 14 x 8 = 112 sprites, no partial column
         Assert.Equal(completeColumns * VirtualConsole.SpriteSize * layout.SheetScale, layout.Sheet.Width);
         Assert.Equal(SheetStrip.PixelHeight * layout.SheetScale, layout.Sheet.Height);
         Assert.True(layout.SheetThumb(0).Width < layout.SheetSlider.Width);
@@ -157,7 +162,7 @@ public class SheetScrollTests
     /// <summary>
     /// A window wide enough to show the whole strip — the case wave 2k created and the session
     /// audit caught the renderer still denying ("the strip overflows at every window size the
-    /// shell is used at"). With 32 columns instead of 64 that stopped being true: at 1920x720
+    /// shell is used at"). With 32 columns instead of 64 that stopped being true: at 2560x720
     /// the strip fits, the scroll ceiling is zero, the thumb honestly fills the track and a
     /// drag moves nothing. The branch was live and untested.
     ///
@@ -168,11 +173,11 @@ public class SheetScrollTests
     [Fact]
     public void AWindowWideEnoughForTheWholeStripHasADeadButHonestSlider()
     {
-        var layout = SpriteEditorLayout.Compute(1920, 720, regionCells: 1);
+        var layout = SpriteEditorLayout.Compute(2560, 720, regionCells: 1);
 
         Assert.True(
             layout.SheetVisiblePixels >= SheetStrip.PixelWidth,
-            $"1920x720 should show the whole {SheetStrip.PixelWidth}px strip, shows {layout.SheetVisiblePixels}");
+            $"2560x720 should show the whole {SheetStrip.PixelWidth}px strip, shows {layout.SheetVisiblePixels}");
         Assert.Equal(0, layout.SheetMaxScroll);
         Assert.Equal(layout.SheetSlider.Width, layout.SheetThumb(0).Width);
 

@@ -479,8 +479,9 @@ public sealed class SpriteEditorRenderer : IDisposable
     /// The sheet window's horizontal scroll slider (wave 2i): the track in the strip tone,
     /// the thumb from the very <see cref="SpriteEditorLayout.SheetThumb"/> the drag inverts.
     /// Until wave 2k the strip (64 columns) always overflowed the window and the thumb was
-    /// always live. It is 32 columns now, so a wide-enough window — 1920x720 and up, measured,
-    /// not guessed — shows the whole strip and the thumb honestly fills the track, with drags
+    /// always live. It is 32 columns now, so a wide-enough window — 2560x720 and up after the
+    /// seventh review's tool column, measured and not guessed — shows the whole strip and the
+    /// thumb honestly fills the track, with drags
     /// as no-ops; <c>SheetScrollTests</c> pins that case. It brightens under the pointer and
     /// while dragging, like every hovered control.
     /// </summary>

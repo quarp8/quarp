@@ -479,6 +479,23 @@ public sealed class QuarpGame : Game
                 editor.Paint(editor.CursorX, editor.CursorY);   // held pencil + arrows = a dragged stroke
             }
         }
+        // Shift+arrows: the keyboard half of clicking a cell in the sheet strip. It steps in
+        // strip space (SheetStrip.Columns x SheetStrip.Rows) through SheetStrip, the one owner
+        // of that mapping — so a re-cut strip moves both paths at once — and so the
+        // key path and the click path aim at the same cell by construction, and then scrolls
+        // just enough to keep the newly edited sprite on screen — a selection the author cannot
+        // see is the same bug as no selection at all.
+        if (commands.EditorSheetDx != 0 || commands.EditorSheetDy != 0)
+        {
+            SheetStrip.SpriteToStripCell(editor.SpriteIndex, out int column, out int row);
+            column = Math.Clamp(column + commands.EditorSheetDx, 0, SheetStrip.Columns - 1);
+            row = Math.Clamp(row + commands.EditorSheetDy, 0, SheetStrip.Rows - 1);
+            if (SheetStrip.TryStripCellToSheetCell(column, row, out int sheetX, out int sheetY))
+            {
+                editor.SelectRegionCell(sheetX, sheetY);
+                ScrollSheetTo(layout, column);
+            }
+        }
         if (commands.EditorPaintPressed)
         {
             BeginCanvasGesture(editor, editor.CursorX, editor.CursorY);
@@ -660,6 +677,27 @@ public sealed class QuarpGame : Game
     /// clicks, the shape and the select open preview gestures (a select press over the mask
     /// is the grab — the session decides), the pencil opens a stroke.
     /// </summary>
+    /// <summary>
+    /// Scrolls the strip by the least amount that puts the given strip column fully inside the
+    /// sheet window. Both edges are handled, and the clamp lives in <see cref="SheetScroll"/>
+    /// as it does for every other writer of the offset — no path may scroll past the sheet.
+    /// </summary>
+    private void ScrollSheetTo(in SpriteEditorLayout layout, int column)
+    {
+        int size = VirtualConsole.SpriteSize;
+        int left = column * size;
+        int right = left + size;
+        int visible = layout.SheetVisiblePixels;
+        if (left < _sheetScroll.Offset)
+        {
+            _sheetScroll.ScrollBy(layout, left - _sheetScroll.Offset);
+        }
+        else if (right > _sheetScroll.Offset + visible)
+        {
+            _sheetScroll.ScrollBy(layout, right - (_sheetScroll.Offset + visible));
+        }
+    }
+
     private static void BeginCanvasGesture(SpriteEditorSession editor, int localX, int localY)
     {
         switch (editor.Tool)

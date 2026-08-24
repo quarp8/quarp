@@ -147,6 +147,20 @@ public readonly struct ShellCommands
 
     /// <summary>Editor: PageDown — one layer down, clamped at the base.</summary>
     public bool EditorLayerDown { get; init; }
+
+    /// <summary>
+    /// Editor: Shift+Left/Right — step the edited sprite along the sheet strip, -1, 0 or +1.
+    /// The keyboard half of clicking a cell in the strip; without it the most-used action of
+    /// the editor had no key at all, which the input-parity law (M9 stage 2.5) forbids.
+    /// Movement is in <b>strip</b> cells, not canonical sheet cells, because the strip is what
+    /// the author sees: right runs across <see cref="SheetStrip.Columns"/>, the way the eye
+    /// reads it. <see cref="SheetStrip"/> owns that shape — the wave-2k re-cut moved these
+    /// two fields' range without touching a line here.
+    /// </summary>
+    public int EditorSheetDx { get; init; }
+
+    /// <summary>Editor: Shift+Up/Down — the same step across the strip's <see cref="SheetStrip.Rows"/> rows.</summary>
+    public int EditorSheetDy { get; init; }
 }
 
 /// <summary>
@@ -162,6 +176,7 @@ public sealed class ShellCommandReader
     public ShellCommands Read(KeyboardState keyboard)
     {
         bool ctrl = keyboard.IsKeyDown(Keys.LeftControl) || keyboard.IsKeyDown(Keys.RightControl);
+        bool shift = keyboard.IsKeyDown(Keys.LeftShift) || keyboard.IsKeyDown(Keys.RightShift);
         // The keyboard pencil's held state is computed against each frame's own Ctrl: pressing
         // Ctrl mid-hold turns "down" into "released" (the chord takes the key), and both edges
         // below fall out of comparing the two frames' truths rather than raw key states.
@@ -180,10 +195,20 @@ public sealed class ShellCommandReader
             ToStart = Pressed(keyboard, Keys.Home),
             SaveReplay = Pressed(keyboard, Keys.F5),
             PlayReplay = Pressed(keyboard, Keys.F8),
-            MenuUp = Pressed(keyboard, Keys.Up),
-            MenuDown = Pressed(keyboard, Keys.Down),
-            MenuLeft = Pressed(keyboard, Keys.Left),
-            MenuRight = Pressed(keyboard, Keys.Right),
+            // Shift takes the arrows for the sheet strip, the way it takes them for a
+            // selection in any editor: bare arrows steer the canvas cursor, Shift+arrows step
+            // the edited sprite. Both edges are read from the same frame's Shift, so pressing
+            // Shift mid-hold moves the sprite instead of half-moving both.
+            MenuUp = !shift && Pressed(keyboard, Keys.Up),
+            MenuDown = !shift && Pressed(keyboard, Keys.Down),
+            MenuLeft = !shift && Pressed(keyboard, Keys.Left),
+            MenuRight = !shift && Pressed(keyboard, Keys.Right),
+            EditorSheetDx = shift
+                ? (Pressed(keyboard, Keys.Right) ? 1 : 0) - (Pressed(keyboard, Keys.Left) ? 1 : 0)
+                : 0,
+            EditorSheetDy = shift
+                ? (Pressed(keyboard, Keys.Down) ? 1 : 0) - (Pressed(keyboard, Keys.Up) ? 1 : 0)
+                : 0,
             MenuConfirm = (!ctrl && Pressed(keyboard, Keys.Z)) || Pressed(keyboard, Keys.Enter),
             MenuEditor = !ctrl && Pressed(keyboard, Keys.X),
             EditorUndo = ctrl && Pressed(keyboard, Keys.Z),

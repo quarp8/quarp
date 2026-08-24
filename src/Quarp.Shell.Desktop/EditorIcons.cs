@@ -508,7 +508,7 @@ public static class EditorIcons
         EditorButton.SoundTab => "SOUNDS - IN A LATER PORTION",
         EditorButton.MusicTab => "MUSIC - IN A LATER PORTION",
         EditorButton.ToolSelect => "SELECT  1 CYCLES   DRAG MARKS, GRAB INSIDE MOVES, ESC DROPS",
-        EditorButton.ToolPencil => "PENCIL  2   ARROWS MOVE, Z/SPACE DRAW, X PICK",
+        EditorButton.ToolPencil => "PENCIL  2   ARROWS MOVE, Z/SPACE DRAW, X PICK, SHIFT+ARROWS SPRITE",
         EditorButton.ToolFill => "FILL  3   Z/SPACE FILLS AT THE CURSOR",
         EditorButton.ToolStamp => "STAMP  4   CLICK/Z PRINTS THE LAST SELECTION",
         EditorButton.ToolShape => "SHAPES  5 CYCLES   DRAG DRAWS, CTRL FILLS, HOLD/RCLICK VARIANTS",
@@ -547,7 +547,7 @@ public static class EditorIcons
     /// is where its wheel and [ ] key paths get announced (the input-parity law's
     /// discoverability half).
     /// </summary>
-    public const string SliderTooltip = "SHEET SCROLL   DRAG, WHEEL OR [ ]";
+    public const string SliderTooltip = "SHEET   SHIFT+ARROWS PICK   DRAG, WHEEL OR [ ] SCROLL";
 
     /// <summary>Toolbar digit → its slot, top-to-bottom (1 select … 6 transform); null off the toolbar.</summary>
     public static EditorButton? ButtonForDigit(int digit) => digit switch

@@ -7,16 +7,16 @@ namespace Quarp.Shell.Desktop.Tests;
 
 /// <summary>
 /// The editor screen's geometry contract under the owner's verdict layout (M9 stage 2.5,
-/// fourth review applied): whole-integer scales, the dictated strip order (exit left;
+/// sixth review applied): whole-integer scales, the dictated strip order (exit left;
 /// music-sounds-tilemaps-sprites-code from the right corner leftwards; the six-slot toolbar
-/// column with no action row; the right column at the window's edge — palette on top, layer
-/// tabs, the palette-wide sheet window, its scroll slider; the size toggle in the band left
-/// of the column; the full-width tab and status bands), no overlapping panels at the shell's
-/// real window sizes, and — the part that actually bites — hit tests that agree with the
-/// rectangles, because <see cref="SpriteEditorLayout"/> is the single owner both the
-/// renderer draws from and the mouse routing asks. A drift between "where the button is"
-/// and "what a click on it means" is exactly the bug class this file exists to make
-/// impossible.
+/// column with no action row; the right column at the window's edge — palette on top, then
+/// ONE narrow row holding the size toggle and the five layer tabs, then the sheet window
+/// owning every remaining pixel of the column down to its slider; the full-width tab and
+/// status bands), no overlapping panels at the shell's real window sizes, and — the part
+/// that actually bites — hit tests that agree with the rectangles, because
+/// <see cref="SpriteEditorLayout"/> is the single owner both the renderer draws from and the
+/// mouse routing asks. A drift between "where the button is" and "what a click on it means"
+/// is exactly the bug class this file exists to make impossible.
 /// </summary>
 public class SpriteEditorLayoutTests
 {
@@ -41,9 +41,10 @@ public class SpriteEditorLayoutTests
         // a fractional scale could not produce these sizes.
         Assert.Equal(layout.RegionPixels * layout.CanvasScale, layout.Canvas.Width);
         Assert.Equal(layout.Canvas.Width, layout.Canvas.Height);        // the region is square, so is its view
-        // The fifth-review view is exactly four sprite rows high and 64 columns wide. It
-        // shares integer UI scale so pixel art stays crisp and the slider always has work.
+        // The sheet window shows the strip's whole height and a whole number of its columns:
+        // a fractional scale or an untrimmed width would leave a sliced cell at an edge.
         Assert.Equal(SheetStrip.PixelHeight * layout.SheetScale, layout.Sheet.Height);
+        Assert.Equal(0, layout.Sheet.Width % (VirtualConsole.SpriteSize * layout.SheetScale));
         Assert.True(layout.SheetVisiblePixels >= 1 && layout.SheetVisiblePixels < SheetStrip.PixelWidth);
         // Icon buttons are 8-px masks at scale Ui plus symmetric padding — whole by construction.
         Assert.Equal((EditorIcons.IconPixels + 4) * layout.Ui, layout.ButtonSize);
@@ -171,12 +172,17 @@ public class SpriteEditorLayoutTests
     }
 
     /// <summary>
-    /// The right column after the fifth review: palette and tabs retain their positions, but
-    /// the sheet window is now a four-row strip. The freed space below stays empty for future
-    /// blocks, and the live slider remains directly under the strip.
+    /// The right column after the SIXTH review, which is this wave's whole subject. Four
+    /// facts, each one of the owner's four points: the palette still owns the top-right
+    /// corner; the size toggle and all five layer tabs share ONE row under it, in that order,
+    /// all at the same Y (before this wave the toggle sat in a band beside the palette and
+    /// the tabs were a row of their own); the sheet window is strictly wider than the palette
+    /// it used to copy and reaches from that row down to its slider; and the slider ends the
+    /// column, with no reserved emptiness left under it — the space below the slider is now
+    /// less than one button tall, where it used to be about a third of the column.
     /// </summary>
     [Fact]
-    public void TheRightColumnFollowsTheFifthReview()
+    public void TheRightColumnFollowsTheSixthReview()
     {
         var layout = Default();
         Rectangle firstTab = layout.ButtonRect(EditorButton.LayerTab1);
@@ -185,22 +191,70 @@ public class SpriteEditorLayoutTests
 
         Assert.Equal(1280 - layout.Margin, layout.Swatches.Right);      // the palette hugs the edge
         Assert.True(layout.Swatches.X >= layout.Canvas.Right);
-        Assert.Equal(layout.Swatches.X, layout.Sheet.X);                // the column shares one left edge
-        Assert.Equal(layout.Swatches.Width, layout.Sheet.Width);        // sheet window = palette width
-        Assert.Equal(4 * VirtualConsole.SpriteSize * layout.SheetScale, layout.Sheet.Height);
-        // Tabs above the sheet window, inside the column, in order 1..5 left to right.
-        Assert.Equal(layout.Sheet.X, firstTab.X);
-        Assert.True(firstTab.X < lastTab.X);
-        Assert.True(layout.Swatches.Bottom <= firstTab.Y);
-        Assert.True(firstTab.Bottom <= layout.Sheet.Y);
-        // The slider directly under the sheet window, same width.
+        // Point 2: ONE row — toggle first, then tabs 1..5, every one of them on the same line.
+        Assert.All(
+            new[] { firstTab, lastTab, layout.ButtonRect(EditorButton.LayerTab3) },
+            tab => Assert.Equal(toggle.Y, tab.Y));
+        Assert.True(toggle.Right <= firstTab.X && firstTab.X < lastTab.X);
+        Assert.True(layout.Swatches.Bottom <= toggle.Y);                // the row is under the palette
+        Assert.True(toggle.Bottom <= layout.Sheet.Y);                   // and above the sheet window
+        Assert.Equal(layout.Sheet.X, toggle.X);                         // row and window share a left edge
+        // Point 3: the window is wider than the palette that used to dictate its width, and
+        // taller than the pre-2k four-row window — the strip's full height at a whole scale.
+        Assert.True(layout.Sheet.Width > layout.Swatches.Width);
+        Assert.Equal(SheetStrip.PixelHeight * layout.SheetScale, layout.Sheet.Height);
+        Assert.True(layout.Sheet.Height > 4 * VirtualConsole.SpriteSize * layout.Ui);
+        // Point 4: no air right of the canvas below the palette — the window starts within a
+        // cell of the canvas's own margin and ends flush with the palette at the window edge.
+        Assert.Equal(1280 - layout.Margin, layout.Sheet.Right);
+        Assert.True(layout.Sheet.X >= layout.Canvas.Right + layout.Margin);
+        Assert.True(
+            layout.Sheet.X - layout.Canvas.Right
+                < layout.Margin + VirtualConsole.SpriteSize * layout.SheetScale);
+        // The slider directly under the sheet window, same width, and it ends the column.
         Assert.Equal(layout.Sheet.X, layout.SheetSlider.X);
         Assert.Equal(layout.Sheet.Width, layout.SheetSlider.Width);
         Assert.True(layout.Sheet.Bottom <= layout.SheetSlider.Y);
-        Assert.True(layout.SheetSlider.Bottom < layout.PromptY);         // freed space is genuinely free
-        // The toggle in the band: right of the canvas, left of the column.
-        Assert.True(toggle.X >= layout.Canvas.Right);
-        Assert.True(toggle.Right <= layout.Swatches.X);
+        Assert.True(layout.SheetSlider.Bottom < layout.PromptY);
+        Assert.True(layout.PromptY - layout.SheetSlider.Bottom < layout.ButtonSize);
+    }
+
+    /// <summary>
+    /// The sixth review's other geometric law, which the eye only notices when it breaks:
+    /// pressing Tab must not move the furniture. The canvas box is a whole multiple of the
+    /// largest region, so 8, 16 and 32 px all fill exactly the same square, and everything
+    /// measured from it — the narrow row, the sheet window, the slider — stays put.
+    ///
+    /// <para>The window sizes are a Theory on purpose: at 1280x720 the free height happens to
+    /// be a multiple of 32 and the pre-2k formula (largest square per region, no rounding)
+    /// agreed by luck. At 320x180 it does not — an 8-px region would take 72 px where a 32-px
+    /// one takes 64 — so dropping the rounding from <c>canvasBox</c> turns exactly that case
+    /// red, which is this test's negative control.</para>
+    /// </summary>
+    [Theory]
+    [InlineData(320, 180)]
+    [InlineData(640, 360)]
+    [InlineData(1280, 720)]
+    [InlineData(1920, 1080)]
+    [InlineData(2560, 1440)]
+    public void TabbingTheRegionSizeMovesNoPanel(int width, int height)
+    {
+        var eight = SpriteEditorLayout.Compute(width, height, regionCells: 1);
+        var sixteen = SpriteEditorLayout.Compute(width, height, regionCells: 2);
+        var thirtyTwo = SpriteEditorLayout.Compute(width, height, regionCells: 4);
+
+        foreach (SpriteEditorLayout other in new[] { sixteen, thirtyTwo })
+        {
+            Assert.Equal(eight.Canvas, other.Canvas);
+            Assert.Equal(eight.Sheet, other.Sheet);
+            Assert.Equal(eight.SheetSlider, other.SheetSlider);
+            Assert.Equal(eight.Swatches, other.Swatches);
+            Assert.Equal(
+                eight.ButtonRect(EditorButton.SizeToggle), other.ButtonRect(EditorButton.SizeToggle));
+        }
+        // The premise: the three do differ where they must — one region pixel is a different
+        // number of window pixels each time, which is the only thing Tab is allowed to change.
+        Assert.True(eight.CanvasScale > sixteen.CanvasScale && sixteen.CanvasScale > thirtyTwo.CanvasScale);
     }
 
     /// <summary>
@@ -330,18 +384,28 @@ public class SpriteEditorLayoutTests
         Assert.Equal(sprite, cellY * 16 + cellX);
     }
 
+    /// <summary>
+    /// A region straddling a lane boundary is still highlighted as the two pieces it looks
+    /// like on the strip. The boundary moved with the strip's shape (it is between sheet rows
+    /// 7 and 8 now, not 3 and 4), so this pins sprite 126: its top row sits at the bottom of
+    /// lane 0 and its bottom row reappears at the top of lane 1, sixteen columns right.
+    /// </summary>
     [Fact]
-    public void SixteenPixelRegionAtSprite62SplitsAcrossTwoStripLanes()
+    public void SixteenPixelRegionAtSprite126SplitsAcrossTwoStripLanes()
     {
         var layout = Default();
         int cell = layout.SheetScale * VirtualConsole.SpriteSize;
+        int lane = SheetStrip.LaneColumns;
 
         IReadOnlyList<Rectangle> pieces = layout.SheetRegionHighlights(
-            sheetCellX: 14, sheetCellY: 3, regionCells: 2, scroll: 0);
+            sheetCellX: 14, sheetCellY: SheetStrip.Rows - 1, regionCells: 2, scroll: 0);
 
         Assert.Equal(2, pieces.Count);
-        Assert.Equal(new Rectangle(layout.Sheet.X + 14 * cell, layout.Sheet.Y + 3 * cell, 2 * cell, cell), pieces[0]);
-        Assert.Equal(new Rectangle(layout.Sheet.X + 30 * cell, layout.Sheet.Y, 2 * cell, cell), pieces[1]);
+        Assert.Equal(
+            new Rectangle(
+                layout.Sheet.X + 14 * cell, layout.Sheet.Y + (SheetStrip.Rows - 1) * cell, 2 * cell, cell),
+            pieces[0]);
+        Assert.Equal(new Rectangle(layout.Sheet.X + (lane + 14) * cell, layout.Sheet.Y, 2 * cell, cell), pieces[1]);
     }
 
     [Fact]
@@ -359,26 +423,39 @@ public class SpriteEditorLayoutTests
 
     /// <summary>
     /// The scrolled hit test agrees with the scrolled picture: the same window point names a
-    /// cell shifted by exactly the scroll offset — and the slack right of the drawn sheet
-    /// (the palette-wide window is wider than the x2 sheet at the default size) is nobody's.
+    /// cell shifted by exactly the scroll offset. The second half replaces the old
+    /// "refuses the slack" check, which had become a dead branch: the sixth review's window
+    /// is trimmed to whole sprite columns, so there IS no slack any more, and the live way to
+    /// say that is the opposite claim — the last pixel inside the window is a real cell, at
+    /// rest AND scrolled to the end, where it must be the strip's very last column.
     /// </summary>
     [Fact]
-    public void SheetHitTestFollowsTheScrollAndRefusesTheSlack()
+    public void SheetHitTestFollowsTheScrollAndTheWindowIsWholeCellsToItsEdge()
     {
         var layout = Default();
         int cell = layout.SheetScale * VirtualConsole.SpriteSize;
+        int visibleColumns = layout.SheetVisiblePixels / VirtualConsole.SpriteSize;
 
         Assert.True(layout.TrySheetCell(
             layout.Sheet.X + cell / 2, layout.Sheet.Y + cell / 2, 2 * VirtualConsole.SpriteSize,
             out int cellX, out _));
         Assert.Equal(2, cellX);     // two sprite columns scrolled off → the first visible cell is column 2
 
-        // A point inside the window but right of the sheet's drawn edge hits nothing.
-        int drawnRight = layout.Sheet.X + VirtualConsole.SheetWidth * layout.SheetScale;
-        if (drawnRight < layout.Sheet.Right)
-        {
-            Assert.False(layout.TrySheetCell(drawnRight + 1, layout.Sheet.Y + cell / 2, 0, out _, out _));
-        }
+        // The last pixel inside the window belongs to the last visible column, not to a gap.
+        Assert.True(layout.TrySheetCell(
+            layout.Sheet.Right - 1, layout.Sheet.Bottom - 1, 0, out int lastX, out int lastY));
+        Assert.True(SheetStrip.TryStripCellToSheetCell(
+            visibleColumns - 1, SheetStrip.Rows - 1, out int expectedX, out int expectedY));
+        Assert.Equal((expectedX, expectedY), (lastX, lastY));
+
+        // Scrolled to the end, that same pixel is the strip's very last cell — sprite 255.
+        Assert.True(layout.TrySheetCell(
+            layout.Sheet.Right - 1, layout.Sheet.Bottom - 1, layout.SheetMaxScroll,
+            out int endX, out int endY));
+        Assert.Equal(VirtualConsole.SpriteCount - 1, endY * SpriteEditorSession.GridCells + endX);
+
+        // One pixel further right is outside the window and belongs to nobody.
+        Assert.False(layout.TrySheetCell(layout.Sheet.Right, layout.Sheet.Y + cell / 2, 0, out _, out _));
     }
 
     [Fact]

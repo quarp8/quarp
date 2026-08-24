@@ -1,27 +1,48 @@
+using Quarp.Core;
+
 namespace Quarp.Shell.Desktop;
 
 /// <summary>
 /// The one owner of the PICO-8 sheet-strip mapping. The session keeps the canonical 16x16
-/// sheet; only this view lays its four 16x4 pages side by side. Keeping both directions here
-/// prevents rendering and hit-testing from acquiring subtly different page arithmetic.
+/// sheet; only this view lays its pages side by side into a wide, short strip. Keeping both
+/// directions here prevents rendering and hit-testing from acquiring subtly different page
+/// arithmetic.
+///
+/// <para><b>The strip's shape is one number: <see cref="Rows"/>.</b> The fifth review asked
+/// for four rows (64x4, PICO-8's four pages end to end); the sixth review (2026-08-24) gave
+/// the window the freed half of the right column and rejected that shape by name — "лист
+/// показывает четыре ряда ... где мог бы показать больше". A 16:1 strip in a 2:1 window can
+/// only fill it by blowing cells up until FEWER sprites fit, the opposite of the order, so
+/// the same 256 sprites are re-cut as two 16x8 lanes (pages 0-1 stacked, then 2-3): 128
+/// sprites on screen instead of 48, and the strip still overflows, so the slider the owner
+/// kept stays real. Everything downstream reads these constants — nothing hard-codes 4 or
+/// 64 — so a seventh review's band is one edit here.</para>
 /// </summary>
 public static class SheetStrip
 {
-    public const int Rows = 4;
-    public const int Columns = 64;
-    public const int PixelWidth = Columns * Quarp.Core.VirtualConsole.SpriteSize;
-    public const int PixelHeight = Rows * Quarp.Core.VirtualConsole.SpriteSize;
+    /// <summary>Sprite rows the strip is tall — the sixth review's band, two PICO-8 pages stacked.</summary>
+    public const int Rows = 8;
 
-    /// <summary>Canonical sprite number to its cell in the 64x4 presentation strip.</summary>
+    /// <summary>Sprite cells across one lane: the canonical sheet's own width, never re-cut.</summary>
+    public const int LaneColumns = VirtualConsole.SheetColumns;
+
+    /// <summary>How many lanes stand side by side to hold all <see cref="VirtualConsole.SpriteCount"/> sprites.</summary>
+    public const int Lanes = LaneColumns / Rows;
+
+    public const int Columns = LaneColumns * Lanes;
+    public const int PixelWidth = Columns * VirtualConsole.SpriteSize;
+    public const int PixelHeight = Rows * VirtualConsole.SpriteSize;
+
+    /// <summary>Canonical sprite number to its cell in the presentation strip.</summary>
     public static void SpriteToStripCell(int sprite, out int column, out int row)
     {
         ArgumentOutOfRangeException.ThrowIfNegative(sprite);
-        ArgumentOutOfRangeException.ThrowIfGreaterThanOrEqual(sprite, 256);
+        ArgumentOutOfRangeException.ThrowIfGreaterThanOrEqual(sprite, VirtualConsole.SpriteCount);
 
-        int sheetRow = sprite >> 4;
-        int lane = sheetRow >> 2;
-        column = 16 * lane + (sprite & 15);
-        row = sheetRow & 3;
+        int sheetRow = sprite / LaneColumns;
+        int lane = sheetRow / Rows;
+        column = LaneColumns * lane + sprite % LaneColumns;
+        row = sheetRow % Rows;
     }
 
     /// <summary>Strip cell back to the canonical sheet cell consumed by the session.</summary>
@@ -34,9 +55,9 @@ public static class SheetStrip
             return false;
         }
 
-        int lane = column >> 4;
-        sheetX = column & 15;
-        sheetY = 4 * lane + row;
+        int lane = column / LaneColumns;
+        sheetX = column % LaneColumns;
+        sheetY = Rows * lane + row;
         return true;
     }
 }

@@ -6,9 +6,18 @@ using Xunit;
 namespace Quarp.Shell.Desktop.Tests;
 
 /// <summary>
-/// The wave 2i strip contract: one reversible PICO-8 page mapping and one clamped horizontal
-/// scroll state. These tests pin the premises as well as the answers, because a resting
-/// slider would make the interaction assertions pass without exercising their reason to exist.
+/// The strip contract: one reversible PICO-8 page mapping and one clamped horizontal scroll
+/// state. These tests pin the premises as well as the answers, because a resting slider would
+/// make the interaction assertions pass without exercising their reason to exist.
+///
+/// <para><b>Re-pinned in wave 2k</b>, deliberately: the owner's sixth review gave the sheet
+/// window the whole freed half of the right column and rejected the four-row strip by name
+/// ("лист показывает четыре ряда ... где мог бы показать больше"), so the strip is now
+/// <see cref="SheetStrip.Rows"/> = 8 tall and <see cref="SheetStrip.Columns"/> = 32 wide —
+/// the same 256 sprites, the same page arithmetic, re-cut as two 16x8 lanes instead of four
+/// 16x4 ones. What these tests pin is unchanged in KIND (round-trip, page order, bounds,
+/// live slider); only the numbers moved, and they are all derived from SheetStrip's own
+/// constants except the ones that state the shape itself, which is the point of stating it.</para>
 /// </summary>
 public class SheetScrollTests
 {
@@ -27,16 +36,22 @@ public class SheetScrollTests
         }
     }
 
+    /// <summary>
+    /// The lane band, cell by cell: PICO-8 pages 0 and 1 stack inside the first lane (sprite
+    /// 63 is its bottom-right of row 3, sprite 64 starts row 4 back at column 0), and the
+    /// second lane lies end to end beside it starting at column 16 with sprite 128. A strip
+    /// re-cut back to four rows makes rows 4-7 impossible and turns every row-4+ case red.
+    /// </summary>
     [Theory]
     [InlineData(0, 0, 0)]
-    [InlineData(63, 15, 3)]
-    [InlineData(64, 16, 0)]
-    [InlineData(127, 31, 3)]
-    [InlineData(128, 32, 0)]
-    [InlineData(191, 47, 3)]
-    [InlineData(192, 48, 0)]
-    [InlineData(255, 63, 3)]
-    public void PicoPagesAreLaidEndToEnd(int sprite, int expectedColumn, int expectedRow)
+    [InlineData(63, 15, 3)]         // page 0's last sprite: bottom-right of the lane's top half
+    [InlineData(64, 0, 4)]          // page 1 stacks UNDER page 0 inside the same lane
+    [InlineData(127, 15, 7)]        // lane 0 ends here — 128 sprites in one screenful
+    [InlineData(128, 16, 0)]        // lane 1 starts end to end beside lane 0
+    [InlineData(191, 31, 3)]
+    [InlineData(192, 16, 4)]
+    [InlineData(255, 31, 7)]
+    public void PicoPagesStackInPairsAndTheLanesLieEndToEnd(int sprite, int expectedColumn, int expectedRow)
     {
         SheetStrip.SpriteToStripCell(sprite, out int column, out int row);
 
@@ -45,14 +60,19 @@ public class SheetScrollTests
 
     [Theory]
     [InlineData(-1, 0)]
-    [InlineData(64, 0)]
+    [InlineData(SheetStrip.Columns, 0)]
     [InlineData(0, -1)]
-    [InlineData(0, 4)]
+    [InlineData(0, SheetStrip.Rows)]
     public void InverseMappingRejectsCellsOutsideTheStrip(int column, int row)
     {
         Assert.False(SheetStrip.TryStripCellToSheetCell(column, row, out _, out _));
     }
 
+    /// <summary>
+    /// The default window's own numbers, which are the sixth review's answer: 16 whole sprite
+    /// columns by 8 rows = 128 of the 256 sprites visible at once (it was 12 x 4 = 48), no
+    /// sliced cell at either edge, and a slider with exactly half the strip still to reach.
+    /// </summary>
     [Fact]
     public void DefaultWindowPinsALiveSliderAndUsefulColumnCount()
     {
@@ -61,8 +81,8 @@ public class SheetScrollTests
 
         Assert.Equal(SheetStrip.PixelWidth - layout.SheetVisiblePixels, layout.SheetMaxScroll);
         Assert.True(layout.SheetMaxScroll > 0);
-        Assert.Equal(12, completeColumns);                              // chosen default: 12 whole + part of 13th
-        Assert.InRange(completeColumns, 12, 16);
+        Assert.Equal(16, completeColumns);                              // 16 x 8 = 128 sprites, no partial column
+        Assert.Equal(completeColumns * VirtualConsole.SpriteSize * layout.SheetScale, layout.Sheet.Width);
         Assert.Equal(SheetStrip.PixelHeight * layout.SheetScale, layout.Sheet.Height);
         Assert.True(layout.SheetThumb(0).Width < layout.SheetSlider.Width);
     }

@@ -179,6 +179,13 @@ public class EditorKeysAndStatusLayoutTests
 
     // ---- the layout at every region size ----
 
+    /// <summary>
+    /// Every region size, every panel: whole-integer zoom, everything inside the window, and
+    /// no two areas overlapping — checked pairwise over the named panels AND the narrow row's
+    /// buttons, because wave 2k moved the size toggle and the layer tabs into a row whose
+    /// left edge is measured from the canvas box. A canvas that grew with the region (the
+    /// pre-2k formula) would push that row into the palette at 32 px and turn this red.
+    /// </summary>
     [Theory]
     [InlineData(1)]
     [InlineData(2)]
@@ -191,9 +198,21 @@ public class EditorKeysAndStatusLayoutTests
         Assert.True(layout.CanvasScale >= 1);
         Assert.Equal(regionCells * VirtualConsole.SpriteSize, layout.RegionPixels);
         Assert.Equal(layout.RegionPixels * layout.CanvasScale, layout.Canvas.Width);   // whole-integer zoom
-        Assert.True(window.Contains(layout.Canvas));
-        Assert.False(layout.Canvas.Intersects(layout.Sheet));
-        Assert.False(layout.Canvas.Intersects(layout.Swatches));
+        var areas = new List<Rectangle>
+        {
+            layout.Canvas, layout.Swatches, layout.Sheet, layout.SheetSlider,
+        };
+        areas.AddRange(layout.Buttons.Select(place => place.Rect));
+        for (int i = 0; i < areas.Count; i++)
+        {
+            Assert.True(window.Contains(areas[i]), $"{areas[i]} left the window at region {regionCells}");
+            for (int j = i + 1; j < areas.Count; j++)
+            {
+                Assert.False(
+                    areas[i].Intersects(areas[j]),
+                    $"{areas[i]} overlaps {areas[j]} at region {regionCells}");
+            }
+        }
     }
 
     /// <summary>

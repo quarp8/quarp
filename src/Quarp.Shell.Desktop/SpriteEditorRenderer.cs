@@ -5,13 +5,14 @@ using Quarp.Core;
 namespace Quarp.Shell.Desktop;
 
 /// <summary>
-/// Draws the sprite editor screen in the owner's verdict shape (M9 stage 2.5, fourth review
+/// Draws the sprite editor screen in the owner's verdict shape (M9 stage 2.5, sixth review
 /// applied): the icon-only tab strip and the status bar as tinted full-width bands, the left
 /// toolbar column with its group slots (corner-marked, flyout on demand), the zoomed canvas
 /// with the keyboard cursor, the shape preview, the selection as marching ants (plus the
 /// holes and floating fragment during a move) and the stamp ghost — all session-state
-/// overlays, never sheet pixels — the right column (palette at the window's edge, the five
-/// layer tabs, the sheet window with its scroll slider), the size toggle's number face, the
+/// overlays, never sheet pixels — the right column (palette at the window's edge, the sixth
+/// review's one narrow row of size toggle plus layer tabs, and under it the sheet window
+/// owning the rest of the column, with its scroll slider), the size toggle's number face, the
 /// status buttons (save/undo/redo/clear), the reserved prompt line and the hover tooltips.
 /// Host UI like <see cref="LibraryRenderer"/> — window-native resolution,
 /// <see cref="Palette.Master32"/> colors, the system font and the icon strip — and just as
@@ -430,13 +431,14 @@ public sealed class SpriteEditorRenderer : IDisposable
     {
         DrawFrame(batch, layout.Sheet, layout.Ui, Dim);
         int visibleRight = scroll + layout.SheetVisiblePixels;
-        for (int lane = 0; lane < 4; lane++)
+        for (int lane = 0; lane < SheetStrip.Lanes; lane++)
         {
             // Mapping the lane's first sprite through the shared owner gives both the strip
-            // destination and canonical texture row. Drawing a 16x4 block instead of 64
-            // individual cells keeps the presentation transform cheap without duplicating
-            // its page arithmetic here.
-            int firstSprite = lane * 64;
+            // destination and canonical texture row. Drawing one lane-block instead of every
+            // individual cell keeps the presentation transform cheap without duplicating its
+            // page arithmetic here — and it is why the sixth review's taller strip needed no
+            // new drawing code, only SheetStrip's own Rows.
+            int firstSprite = lane * SheetStrip.Rows * SheetStrip.LaneColumns;
             SheetStrip.SpriteToStripCell(firstSprite, out int stripColumn, out _);
             int laneStart = stripColumn * VirtualConsole.SpriteSize;
             int laneEnd = laneStart + VirtualConsole.SheetWidth;
@@ -476,8 +478,10 @@ public sealed class SpriteEditorRenderer : IDisposable
     /// <summary>
     /// The sheet window's horizontal scroll slider (wave 2i): the track in the strip tone,
     /// the thumb from the very <see cref="SpriteEditorLayout.SheetThumb"/> the drag inverts.
-    /// The 64-column strip always overflows its palette-wide window, so the thumb is always
-    /// live; it brightens under the pointer and while dragging, like every hovered control.
+    /// The strip still overflows even the sixth review's much wider window at every window
+    /// size the shell is used at, so the thumb stays live (a window wide enough to show all
+    /// of it would get an honest full-track thumb); it brightens under the pointer and while
+    /// dragging, like every hovered control.
     /// </summary>
     private void DrawSlider(SpriteBatch batch, in SpriteEditorLayout layout, SheetScroll scroll, HoverTarget? hover)
     {

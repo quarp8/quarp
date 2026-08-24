@@ -160,6 +160,8 @@ LAYERS=(
   "EditorMouse.cs|4"           # кадр мыши редактора (+EditorMouseReader)
   "CartSession.cs|4"           # хозяин запущенного картриджа: тики, реплеи, save.dat
   "ShellModeMachine.cs|4"      # переходы между режимами и жизнь сессии
+  "SpriteEditorInput.cs|4"     # роутер ввода экрана спрайтов (+EditorShell)
+  "MapEditorInput.cs|4"        # роутер ввода экрана карты
   "QuarpGame.cs|4"             # игровой цикл окна
   "Program.cs|4"               # точка входа
 )

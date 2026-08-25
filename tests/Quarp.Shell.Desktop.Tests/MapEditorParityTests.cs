@@ -399,6 +399,8 @@ public class MapEditorParityTests : IDisposable
             [EditorButton.CodeTab] = "ALT+",
             // Live since the sound-editor screen wave; same key, same reason as the code tab.
             [EditorButton.SoundTab] = "ALT+",
+            // Live since the music-editor screen wave; same key, same reason again.
+            [EditorButton.MusicTab] = "ALT+",
             // The four tools carry their digits (TIC-80's own numbering); the map's keyboard
             // pencil is bare Z since wave 3d, because Space became the pan modifier there.
             [EditorButton.ToolPencil] = "Z DRAWS",

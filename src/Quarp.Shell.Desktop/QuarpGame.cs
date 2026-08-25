@@ -100,6 +100,21 @@ public sealed class QuarpGame : Game
     /// <summary>Which <see cref="SfxEditorView.PlayEpoch"/> <see cref="_sfxApu"/> was started for; a newer one restarts the slot.</summary>
     private int _sfxEpoch;
 
+    /// <summary>
+    /// The music editor's voice: a bare <see cref="Apu"/> loaded with <b>both</b> edited banks —
+    /// the song and the sounds it names — alive only while a song is being auditioned. The same
+    /// class the cartridge speaks through and the same one <see cref="BootJingle"/> and the sfx
+    /// audition already borrow; there is no second synthesizer in this shell. See
+    /// <see cref="UpdateMusicPreview"/> for the whole of the arrangement.
+    /// </summary>
+    private Apu? _musicApu;
+
+    /// <summary>Banks real time into the song's 60 Hz ticks — a fourth accumulator, because a fourth clock owner would be a bug.</summary>
+    private readonly TickAccumulator _musicTicks = new();
+
+    /// <summary>Which <see cref="MusicEditorView.PlayEpoch"/> <see cref="_musicApu"/> was started for; a newer one restarts the song.</summary>
+    private int _musicEpoch;
+
     /// <summary>Characters from <c>Window.TextInput</c> since the last frame; consumed by the name field only.</summary>
     private readonly List<char> _typedChars = new();
 
@@ -329,6 +344,22 @@ public sealed class QuarpGame : Game
                 // router on purpose — a router that owned a speaker could not run in a headless
                 // test, which is the property wave 3c bought and this wave keeps.
                 UpdateSfxPreview(gameTime);
+                break;
+            case ShellMode.MusicEditor:
+                // The fifth screen off the window's coordinate system: same two conversions its
+                // four siblings get, through the same single owner.
+                MusicEditorInput.Update(
+                    ConsoleEditorContext(),
+                    commands,
+                    mouse.ToConsole(_shellScreen.Placement(
+                        GraphicsDevice.PresentationParameters.BackBufferWidth,
+                        GraphicsDevice.PresentationParameters.BackBufferHeight)),
+                    gameTime.ElapsedGameTime.TotalSeconds);
+                // The second editor frame with a second half, for the reason the sound screen's
+                // has one: the router decided whether the song should sound, and this drives the
+                // chip that makes it so. Kept out of the router on purpose — a router that owned a
+                // speaker could not run in a headless test.
+                UpdateMusicPreview(gameTime);
                 break;
             case ShellMode.Menu:
                 UpdateMenu(commands, keyboard, mouse, gameTime);
@@ -723,6 +754,92 @@ public sealed class QuarpGame : Game
     }
 
     /// <summary>
+    /// The music editor's audition, and the answer to "who synthesizes it": the <b>same</b>
+    /// <see cref="Apu"/> a cartridge runs on, rendered at the same 60 Hz the accumulator gives a
+    /// game, into the same <see cref="AudioOutput"/>. The arrangement is
+    /// <see cref="UpdateSfxPreview"/>'s, one tab over, and it exists for the reason that one does:
+    /// the shell may not grow a second synthesizer, so when it needs a sound of its own it borrows
+    /// the console's chip instead of imitating it.
+    ///
+    /// <para><b>Two banks, not one, and that is the whole difference from the sound screen.</b> A
+    /// pattern of <c>music.bin</c> holds <em>references</em> to SFX slots — there is not one note
+    /// in the file (AUDIO-FORMAT §4) — so a preview loaded with the song alone would run the
+    /// sequencer in silence. The effects bank comes from
+    /// <see cref="ShellModeMachine.EnsureSfxBank"/>, i.e. from the very session the SOUND tab
+    /// edits, so what the author hears is the sounds as they stand right now, saved or not. A bank
+    /// that will not load leaves the sequencer running and silent rather than taking the screen
+    /// down: the message has already been put on the library line by the machine.</para>
+    ///
+    /// <para><b>What mute and solo do here, and what they do not.</b> The payload handed to the
+    /// chip is <see cref="MusicEditorView.AudiblePayload"/> — a <b>copy</b> of the session's bytes
+    /// with the inaudible channels silenced. The cartridge's own 320 bytes are never touched by a
+    /// listening decision, which is the promise <see cref="MusicEditorView"/> makes and this is
+    /// the one place that could have broken it.</para>
+    ///
+    /// <para>No sound card, no audition, and nothing else changes: the view is told the song is
+    /// not sounding, the play button goes dark and the playhead disappears — the honest answer
+    /// rather than a button that pretends. A stop flag, running off pattern 63, leaving the tab or
+    /// pressing Space again all end it through the one door,
+    /// <see cref="MusicEditorView.ReportPlaying"/>.</para>
+    /// </summary>
+    private void UpdateMusicPreview(GameTime gameTime)
+    {
+        if (_modes.MusicEditor is not MusicEditorSession session
+            || _modes.MusicView is not MusicEditorView view)
+        {
+            return;
+        }
+        if (_audio is not AudioOutput audio || !audio.IsAvailable)
+        {
+            view.ReportPlaying(false, MusicEditorView.NoPattern);
+            return;
+        }
+        if (!view.PlayWanted)
+        {
+            StopMusicPreview(audio, view);
+            return;
+        }
+        if (_musicApu is null || _musicEpoch != view.PlayEpoch)
+        {
+            _musicApu = new Apu();
+            if (_modes.EnsureSfxBank() is SfxEditorSession sfx)
+            {
+                _musicApu.LoadSfxPayload(sfx.Payload);
+            }
+            _musicApu.LoadMusicPayload(view.AudiblePayload(session));
+            _musicApu.PlayMusic(view.PlayFrom);
+            _musicEpoch = view.PlayEpoch;
+            _musicTicks.Reset();
+        }
+        int ticks = _musicTicks.Advance(gameTime.ElapsedGameTime.Ticks, TimeSpeed.At(TimeSpeed.NormalIndex));
+        for (int i = 0; i < ticks; i++)
+        {
+            _musicApu.RenderTick();
+            audio.Submit(_musicApu.Block);
+        }
+        audio.EndFrame();
+        if (!_musicApu.IsMusicPlaying)
+        {
+            StopMusicPreview(audio, view);      // a stop flag or the end of the song: the button goes dark by itself
+        }
+        else
+        {
+            view.ReportPlaying(true, _musicApu.CurrentPattern);
+        }
+    }
+
+    /// <summary>Drops the song's chip and the tail it left on the device — the sfx audition's stop, song-sized.</summary>
+    private void StopMusicPreview(AudioOutput audio, MusicEditorView view)
+    {
+        if (_musicApu is not null)
+        {
+            audio.Drain();
+            _musicApu = null;
+        }
+        view.ReportPlaying(false, MusicEditorView.NoPattern);
+    }
+
+    /// <summary>
     /// The whole of what the editor input routers (wave 3c) are allowed to see of this window:
     /// the shell state they steer, plus the back buffer as two numbers. Built per call because
     /// a resize changes the size mid-session — and built here, in the one class that owns a
@@ -762,6 +879,7 @@ public sealed class QuarpGame : Game
             case ShellMode.MapEditor:
             case ShellMode.CodeEditor:
             case ShellMode.SfxEditor:
+            case ShellMode.MusicEditor:
                 // Every screen on one road since wave R5: all are drawn into the shell's own
                 // console and presented by the same presenter the cartridge's frame goes
                 // through. The draw clock feeds the sprite screen's marching ants and the code
@@ -863,6 +981,12 @@ public sealed class QuarpGame : Game
         {
             SfxEditorRenderer.Draw(
                 _shellScreen, _modes.SfxEditor!, _modes.SfxView!,
+                _hover.Target, _hover.TooltipVisible);
+        }
+        else if (_modes.Mode == ShellMode.MusicEditor)
+        {
+            MusicEditorRenderer.Draw(
+                _shellScreen, _modes.MusicEditor!, _modes.MusicView!,
                 _hover.Target, _hover.TooltipVisible);
         }
         else

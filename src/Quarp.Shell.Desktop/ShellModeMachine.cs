@@ -135,6 +135,17 @@ public sealed class ShellModeMachine
     /// <summary>The sound screen's slot, cursor, pen, playback request and exit prompt; non-null exactly while <see cref="SfxEditor"/> is.</summary>
     public SfxEditorView? SfxView { get; private set; }
 
+    /// <summary>
+    /// The open song of the same cart's <c>music.bin</c>, created lazily by the first visit to
+    /// the MUSIC tab and then kept until the whole editor closes — so flipping tabs never costs an
+    /// unsaved pattern. Null until that first visit: a cart whose song is never opened must not
+    /// get a session (and therefore cannot get a <c>music.bin</c>) it never asked for.
+    /// </summary>
+    public MusicEditorSession? MusicEditor { get; private set; }
+
+    /// <summary>The music screen's window, mute table, playback request and exit prompt; non-null exactly while <see cref="MusicEditor"/> is.</summary>
+    public MusicEditorView? MusicView { get; private set; }
+
     /// <summary>The folder both editor sessions belong to — remembered because a session does not carry its own path.</summary>
     private string? _editorFolder;
 
@@ -200,6 +211,12 @@ public sealed class ShellModeMachine
                 if (SfxView!.RequestClose(SfxEditor!))
                 {
                     CloseAfterSfxResolved();
+                }
+                break;
+            case ShellMode.MusicEditor:
+                if (MusicView!.RequestClose(MusicEditor!))
+                {
+                    CloseAfterMusicResolved();
                 }
                 break;
             default:
@@ -405,7 +422,7 @@ public sealed class ShellModeMachine
     public void SwitchEditorTab(ShellMode target)
     {
         if (Mode is not (ShellMode.Editor or ShellMode.MapEditor or ShellMode.CodeEditor
-            or ShellMode.SfxEditor))
+            or ShellMode.SfxEditor or ShellMode.MusicEditor))
         {
             return;
         }
@@ -453,21 +470,29 @@ public sealed class ShellModeMachine
             Mode = ShellMode.CodeEditor;
             return;
         }
-        if (target != ShellMode.SfxEditor)
+        if (target == ShellMode.SfxEditor)
+        {
+            if (EnsureSfxBank() is not null)
+            {
+                Mode = ShellMode.SfxEditor;
+            }
+            return;
+        }
+        if (target != ShellMode.MusicEditor)
         {
             return;
         }
-        if (SfxEditor is null)
+        if (MusicEditor is null)
         {
             try
             {
-                // The fourth lazy birth, same rule as the other three: a corrupt sfx.bin — wrong
-                // magic, wrong length, a step past the slot's end that is not the zero word —
-                // reports the way a failed launch does and leaves the tab the author is standing
-                // on exactly where it was. A cart with no sfx.bin at all opens silently, because
-                // an absent bank is 64 empty slots and not an error (AUDIO-FORMAT §1).
-                SfxEditor = new SfxEditorSession(_editorFolder!);
-                SfxView = new SfxEditorView();
+                // The fifth and last lazy birth, same rule as the other four: a corrupt music.bin
+                // — wrong magic, wrong length, a reserved bit somebody set — reports the way a
+                // failed launch does and leaves the tab the author is standing on exactly where it
+                // was. A cart with no music.bin at all opens silently, because an absent bank is
+                // 64 empty patterns and not an error (AUDIO-FORMAT §1).
+                MusicEditor = new MusicEditorSession(_editorFolder!);
+                MusicView = new MusicEditorView();
             }
             catch (Exception e) when (e is CartLoadException or IOException or UnauthorizedAccessException)
             {
@@ -475,10 +500,52 @@ public sealed class ShellModeMachine
                 return;
             }
         }
-        Mode = ShellMode.SfxEditor;
+        Mode = ShellMode.MusicEditor;
     }
 
-    /// <summary>The keyboard half of the tab strip: Home flips between the two GRAPHICS faces. The code and sound screens are reached by Alt+Left/Right, which is the ring that can hold four stops.</summary>
+    /// <summary>
+    /// The open <c>sfx.bin</c>, born on demand — the fourth lazy birth, lifted out of
+    /// <see cref="SwitchEditorTab"/> because it has a <b>second</b> caller now. A corrupt bank
+    /// (wrong magic, wrong length, a step past the slot's end that is not the zero word) reports
+    /// the way a failed launch does and answers null; a cart with no <c>sfx.bin</c> at all opens
+    /// silently, because an absent bank is 64 empty slots and not an error (AUDIO-FORMAT §1).
+    ///
+    /// <para><b>Why the music screen's preview calls this.</b> A song is 64 patterns of
+    /// <em>references</em> to SFX slots — there is not one note in <c>music.bin</c> — so a preview
+    /// that loaded only the song would run the sequencer in silence. The two banks together are
+    /// what makes a sound, and the one owner of the cart's <c>sfx.bin</c> while the editor is open
+    /// is <see cref="SfxEditorSession"/>. So the audition asks for that owner rather than opening
+    /// the file a second time: what the author hears is the sounds <em>as currently edited</em>,
+    /// unsaved changes and all, which is the same promise the sound screen's own audition makes.
+    /// Being born here costs nothing on disk — a clean session writes no file (that is
+    /// <see cref="SfxEditorSession.Save"/>'s contract) and a clean bank raises no exit
+    /// question.</para>
+    /// </summary>
+    /// <returns>The open effects bank, or null when it could not be read.</returns>
+    public SfxEditorSession? EnsureSfxBank()
+    {
+        if (SfxEditor is not null)
+        {
+            return SfxEditor;
+        }
+        if (_editorFolder is null)
+        {
+            return null;        // no cartridge is open: nothing to read a bank out of
+        }
+        try
+        {
+            SfxEditor = new SfxEditorSession(_editorFolder);
+            SfxView = new SfxEditorView();
+        }
+        catch (Exception e) when (e is CartLoadException or IOException or UnauthorizedAccessException)
+        {
+            LibraryMessage = $"{Editor!.CartName}: {FirstLine(e.Message)}";
+            return null;
+        }
+        return SfxEditor;
+    }
+
+    /// <summary>The keyboard half of the tab strip: Home flips between the two GRAPHICS faces. The code, sound and music screens are reached by Alt+Left/Right, which is the ring that holds all five stops.</summary>
     public void ToggleEditorTab() =>
         SwitchEditorTab(Mode == ShellMode.MapEditor ? ShellMode.Editor : ShellMode.MapEditor);
 
@@ -486,13 +553,13 @@ public sealed class ShellModeMachine
     /// Alt+Left / Alt+Right: one step along the live tab strip, wrapping. The list is
     /// <see cref="EditorIcons.LiveEditorTabs"/> — the view layer's own order, left to right, so
     /// the key walks the tabs in the order the eye reads them. Wrapping rather than stopping,
-    /// because with three stops a strip that stops at the ends costs four presses to cross and a
+    /// because with five stops a strip that stops at the ends costs eight presses to cross and a
     /// wrapping one costs one; the ends of a <em>ring</em> are not ends.
     /// </summary>
     public void CycleEditorTab(int direction)
     {
         if (Mode is not (ShellMode.Editor or ShellMode.MapEditor or ShellMode.CodeEditor
-            or ShellMode.SfxEditor))
+            or ShellMode.SfxEditor or ShellMode.MusicEditor))
         {
             return;
         }
@@ -612,6 +679,31 @@ public sealed class ShellModeMachine
         CloseAfterSfxResolved();
     }
 
+    /// <summary>Z on the music screen's exit prompt — the song half of <see cref="SaveEditorAndClose"/>, same failure rule: a write that did not land keeps the editor and the author's patterns alive with the error in the footer.</summary>
+    public void SaveMusicAndClose()
+    {
+        if (Mode != ShellMode.MusicEditor || MusicView is not { ExitPromptShown: true })
+        {
+            return;
+        }
+        if (MusicEditor!.Save())
+        {
+            MusicView.CloseExitPrompt();
+            CloseAfterMusicResolved();
+        }
+    }
+
+    /// <summary>X on the music screen's exit prompt: leave the patterns unsaved — <c>music.bin</c> stays byte-for-byte untouched, and a cart that never had one still does not.</summary>
+    public void DiscardMusicAndClose()
+    {
+        if (Mode != ShellMode.MusicEditor || MusicView is not { ExitPromptShown: true })
+        {
+            return;
+        }
+        MusicView.CloseExitPrompt();
+        CloseAfterMusicResolved();
+    }
+
     /// <summary>The sheet's half of the exit is settled — now every other open bank's.</summary>
     private void CloseAfterSheetResolved() => CloseUnlessAnotherBankIsDirty(ShellMode.Editor);
 
@@ -623,6 +715,9 @@ public sealed class ShellModeMachine
 
     /// <summary>The sound bank's half is settled.</summary>
     private void CloseAfterSfxResolved() => CloseUnlessAnotherBankIsDirty(ShellMode.SfxEditor);
+
+    /// <summary>The song's half is settled.</summary>
+    private void CloseAfterMusicResolved() => CloseUnlessAnotherBankIsDirty(ShellMode.MusicEditor);
 
     /// <summary>
     /// One bank of the open cartridge has just been answered for; if any <em>other</em> open
@@ -674,6 +769,15 @@ public sealed class ShellModeMachine
             }
             return;
         }
+        if (resolved != ShellMode.MusicEditor && MusicEditor is { IsDirty: true } music)
+        {
+            Mode = ShellMode.MusicEditor;
+            if (!MusicView!.ExitPromptShown)
+            {
+                MusicView.RequestClose(music);
+            }
+            return;
+        }
         CloseEditor();
     }
 
@@ -692,6 +796,8 @@ public sealed class ShellModeMachine
         CodeView = null;
         SfxEditor = null;
         SfxView = null;
+        MusicEditor = null;
+        MusicView = null;
         _editorFolder = null;
         Mode = ShellMode.Library;
         Library.Rescan();

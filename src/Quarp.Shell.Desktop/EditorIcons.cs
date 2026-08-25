@@ -537,12 +537,18 @@ public static class EditorIcons
     /// <see cref="PressToolDigit"/> consults it — so waking a button is one edit here, never a
     /// drift between what looks dead and what is dead.
     ///
-    /// <para><b>The CODE tab left this list</b> in the code-editor screen wave and <b>the SOUND
-    /// tab in the sound-editor screen wave</b>: both editors landed, so both icons are live and
-    /// <see cref="TabTarget"/> routes them. Music alone remains honestly dead — it has no
-    /// editor, and a button with nothing behind it must look and act dead until it has.</para>
+    /// <para><b>The list is now empty, and that is the whole of what the music-editor wave
+    /// means.</b> The CODE tab left it in the code-editor screen wave, the SOUND tab in the
+    /// sound-editor screen wave, and the MUSIC tab in this one — the fifth and last editor
+    /// landed, so there is no button left in this shell that is drawn but dead. The method stays
+    /// where it is and keeps its callers: it is still the one owner of the answer, the two frame
+    /// painters still ask it which face to dim, the four routers still refuse a stub before any
+    /// verb, and <see cref="PressToolDigit"/> still consults it. An empty list is a fact about
+    /// today, not a reason to delete the mechanism — the day a screen is sketched before it is
+    /// wired, one name goes back in here and the dimming, the refusal and the honest "when"
+    /// tooltip all come back with it.</para>
     /// </summary>
-    public static bool IsStub(EditorButton button) => button is EditorButton.MusicTab;
+    public static bool IsStub(EditorButton button) => false;
 
     /// <summary>
     /// The live editor tab a click asks the shell to open, or null for every button that is
@@ -559,6 +565,7 @@ public static class EditorIcons
         EditorButton.TilemapTab => ShellMode.MapEditor,
         EditorButton.CodeTab => ShellMode.CodeEditor,
         EditorButton.SoundTab => ShellMode.SfxEditor,
+        EditorButton.MusicTab => ShellMode.MusicEditor,
         _ => null,
     };
 
@@ -571,6 +578,7 @@ public static class EditorIcons
     public static IReadOnlyList<ShellMode> LiveEditorTabs { get; } = new[]
     {
         ShellMode.CodeEditor, ShellMode.Editor, ShellMode.MapEditor, ShellMode.SfxEditor,
+        ShellMode.MusicEditor,
     };
 
     /// <summary>
@@ -630,6 +638,23 @@ public static class EditorIcons
     /// this enum, exactly as the palette swatches and the sheet slider are on the sprite screen.
     /// </summary>
     public static bool BelongsToSfxEditor(EditorButton button) => button is
+        EditorButton.ExitTab or EditorButton.CodeTab or EditorButton.SpritesTab
+        or EditorButton.TilemapTab or EditorButton.SoundTab or EditorButton.MusicTab
+        or EditorButton.ToolPlay
+        or EditorButton.Save or EditorButton.Undo or EditorButton.Redo;
+
+    /// <summary>
+    /// The <b>music</b> editor's own button list: the shared chrome (six tabs, exit, save, undo,
+    /// redo) and the one tool this screen has a model verb for — play/stop. Everything the music
+    /// screen has nothing to do with (every drawing tool, the grid, the eraser, the layer tabs,
+    /// the size toggle, clear, find, go-to) stays off it, because a placed button with nothing
+    /// behind it is the defect class the button contract test closed in wave 2g. The screen's
+    /// other controls — the pattern grid, the three section markers of a row, the four mute and
+    /// four solo toggles, the whole-song overview — are rectangles of
+    /// <see cref="MusicEditorLayout"/> rather than members of this enum, exactly as the palette
+    /// swatches are on the sprite screen and the three grids on the sound screen.
+    /// </summary>
+    public static bool BelongsToMusicEditor(EditorButton button) => button is
         EditorButton.ExitTab or EditorButton.CodeTab or EditorButton.SpritesTab
         or EditorButton.TilemapTab or EditorButton.SoundTab or EditorButton.MusicTab
         or EditorButton.ToolPlay
@@ -825,7 +850,7 @@ public static class EditorIcons
         EditorButton.SpritesTab => "SPRITES  HOME SWITCHES   ALT+LEFT/RIGHT WALK THE TABS",
         EditorButton.TilemapTab => "MAPS  HOME SWITCHES   ALT+LEFT/RIGHT WALK THE TABS",
         EditorButton.SoundTab => "SOUNDS  ALT+LEFT/RIGHT WALK THE TABS",
-        EditorButton.MusicTab => "MUSIC - IN A LATER PORTION",
+        EditorButton.MusicTab => "MUSIC  ALT+LEFT/RIGHT WALK THE TABS",
         EditorButton.ToolSelect => "SELECT  1 CYCLES   DRAG MARKS, GRAB INSIDE MOVES, ESC DROPS",
         EditorButton.ToolPencil => "PENCIL  2   ARROWS MOVE, Z/SPACE DRAW, X PICK, SHIFT+ARROWS SPRITE",
         EditorButton.ToolFill => "FILL  3   Z/SPACE FILLS AT THE CURSOR",
@@ -944,6 +969,62 @@ public static class EditorIcons
         _ => Tooltip(button),
     };
 
+    /// <summary>
+    /// The <b>music</b> editor's tooltip for a button whose meaning differs on that screen,
+    /// falling through to <see cref="Tooltip(EditorButton)"/> for everything shared — the exact
+    /// shape of <see cref="MapTooltip"/>, <see cref="CodeTooltip"/> and <see cref="SfxTooltip"/>,
+    /// and for the same reason: five screens, one tooltip file, so "SAVE  CTRL+S" exists once and
+    /// cannot drift.
+    ///
+    /// <para>Two buttons say something different here. The MUSIC tab names the screen it is
+    /// already on and carries the keys that belong to no button of this screen; the play button
+    /// says <em>where</em> playback starts, which is the one thing that differs from the sound
+    /// screen's transport — there it plays the open slot, here it plays the song from the
+    /// cursor's pattern.</para>
+    /// </summary>
+    public static string MusicTooltip(EditorButton button) => button switch
+    {
+        EditorButton.MusicTab =>
+            "MUSIC - ACTIVE   ARROWS MOVE, 0-9 SET A SLOT, DEL RESTS, PGUP/PGDN PAGE",
+        EditorButton.ToolPlay => "PLAY / STOP SONG FROM THE CURSOR  SPACE",
+        _ => Tooltip(button),
+    };
+
+    /// <summary>The grid's label — the keys that write a cell, which is what this screen is for.</summary>
+    public const string MusicSongTooltip =
+        "PATTERNS   0-9 SET A SLOT, DEL RESTS, WHEEL STEPS ONE, SHIFT+ARROWS MARK";
+
+    /// <summary>The section markers' label — the three flags and the three keys that reach them.</summary>
+    public const string MusicFlagsTooltip =
+        "SECTION   ` LOOP START, TAB LOOP END, X STOP   OR CLICK A MARKER";
+
+    /// <summary>
+    /// The channel header's label. It says outright that neither toggle touches the cartridge,
+    /// because a control that looks like an edit and is not has to say so where it is.
+    /// </summary>
+    public const string MusicChannelsTooltip =
+        "MUTE/SOLO   SHIFT+1-4 MUTE, SHIFT+5-8 SOLO   LISTENING ONLY, SAVES NOTHING";
+
+    /// <summary>The whole-song overview's label — every pattern at once, and the scroll control.</summary>
+    public const string MusicOverviewTooltip =
+        "WHOLE SONG   CLICK TO JUMP, WHEEL SCROLLS, PGUP/PGDN PAGE";
+
+    /// <summary>
+    /// The label of one buttonless control of the music screen — the single lookup its renderer
+    /// hangs a tooltip on, so every key this screen owns is discoverable from the pointer and the
+    /// input-parity sweep has one place to check. <see cref="MusicRegion.None"/> never reaches
+    /// here: the hover tracker is fed null instead.
+    /// </summary>
+    public static string MusicRegionTooltip(MusicRegion region) => region switch
+    {
+        MusicRegion.Song => MusicSongTooltip,
+        MusicRegion.Flags => MusicFlagsTooltip,
+        MusicRegion.Channels => MusicChannelsTooltip,
+        MusicRegion.Overview => MusicOverviewTooltip,
+        _ => throw new ArgumentOutOfRangeException(
+            nameof(region), region, "MusicRegion.None is not a control and has no label."),
+    };
+
     /// <summary>The slot selector's label — the one control that chooses which of the 64 sounds is on screen.</summary>
     public const string SfxSlotTooltip = "SLOT   PGUP/PGDN WALK THE BANK";
 
@@ -1033,6 +1114,47 @@ public static class EditorIcons
                 return false;
             default:
                 return false;                       // the music stub: nothing to do here
+        }
+    }
+
+    /// <summary>
+    /// A click on a live, non-tab icon-button of the <b>music</b> editor — the fifth twin of
+    /// <see cref="ClickButton"/>, <see cref="ClickMapButton"/>, <see cref="ClickCodeButton"/> and
+    /// <see cref="ClickSfxButton"/>, headless for the same reason: the routing table has to exist
+    /// where no graphics device is required, so a contract test can click every placed button and
+    /// catch the "placed but never wired" defect on arrival. Returns true when the click means
+    /// "leave the editor" (the exit tab), which is <see cref="ShellModeMachine"/>'s verb and not
+    /// the session's. Tab clicks never come here: <see cref="TabTarget"/> answers them first.
+    ///
+    /// <para><b>Two owners of state, one router.</b> The window, the mute and solo tables and the
+    /// request to play are what the author is <em>looking at and listening to</em>, not what
+    /// <c>music.bin</c> holds, so they live in <see cref="MusicEditorView"/>; the bank's own three
+    /// verbs live in the session. This table takes both halves, and nothing else decides what a
+    /// music button means.</para>
+    /// </summary>
+    public static bool ClickMusicButton(
+        MusicEditorSession session, MusicEditorView view, EditorButton button)
+    {
+        ArgumentNullException.ThrowIfNull(session);
+        ArgumentNullException.ThrowIfNull(view);
+        switch (button)
+        {
+            case EditorButton.ExitTab:
+                return true;                        // clean → back; dirty → the prompt — MusicEditorView judges
+            case EditorButton.ToolPlay:
+                view.TogglePlay(session);           // Space is its key; the wiring drives the APU
+                return false;
+            case EditorButton.Save:
+                session.Save();                     // the modified/saved icon IS this button — click = Ctrl+S
+                return false;
+            case EditorButton.Undo:
+                session.Undo();
+                return false;
+            case EditorButton.Redo:
+                session.Redo();
+                return false;
+            default:
+                return false;                       // the music tab: already the mode on screen
         }
     }
 

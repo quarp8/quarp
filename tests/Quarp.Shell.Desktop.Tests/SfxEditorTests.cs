@@ -932,8 +932,9 @@ public class SfxEditorTests : IDisposable
             "LATER PORTION", EditorIcons.Tooltip(EditorButton.SoundTab), StringComparison.Ordinal);
         Assert.Contains("ALT+", EditorIcons.Tooltip(EditorButton.SoundTab), StringComparison.Ordinal);
         Assert.Contains(ShellMode.SfxEditor, EditorIcons.LiveEditorTabs);
-        // Music is the last one left, and it must still look and act dead.
-        Assert.True(EditorIcons.IsStub(EditorButton.MusicTab));
+        // Music was the last one left when this test was written; the music-editor wave woke
+        // it, so the stub list is empty and this line now says so.
+        Assert.False(EditorIcons.IsStub(EditorButton.MusicTab));
 
         // ...and the click really arrives, from the screen the author is most likely on.
         Harness harness = OpenSoundEditor(out _);

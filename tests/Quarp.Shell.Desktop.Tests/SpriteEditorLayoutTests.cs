@@ -316,13 +316,15 @@ public class SpriteEditorLayoutTests
     }
 
     /// <summary>
-    /// Pins the stub list: only the music tab stays dead — it has no editor, and a button with
-    /// nothing behind it must look and act dead until it has one.
+    /// Pins the stub list, which is now <b>empty</b>: the music-editor wave took the last name
+    /// off it, so there is no button in this shell that is drawn but dead. The test stays and the
+    /// mechanism stays with it — the day a screen is sketched before it is wired, one name goes
+    /// back into <see cref="EditorIcons.IsStub"/> and this array is where it is declared.
     /// </summary>
     [Fact]
     public void ExactlyTheVerdictsButtonsAreStubs()
     {
-        var stubs = new[] { EditorButton.MusicTab };
+        var stubs = Array.Empty<EditorButton>();
         foreach (EditorButton button in AllButtons)
         {
             Assert.Equal(stubs.Contains(button), EditorIcons.IsStub(button));

@@ -210,10 +210,14 @@ public class EditorChromeTests
     /// button's face is, in precedence order. The interesting cases are the precedences — a
     /// stub tab stays dim on the very screen it names, and a dirty save wins over everything.
     ///
-    /// <para>Break recipe: move the <c>IsStub</c> arm of
-    /// <see cref="EditorChromeRenderer.ButtonInk"/> below the <c>Active</c> arm and the
-    /// stub-tab assertion goes red — that reordering is exactly how a dead button starts
-    /// looking alive.</para>
+    /// <para><b>The stub arm has nothing to demonstrate it on any more</b>, and that is a
+    /// fact worth pinning rather than deleting: the music-editor wave emptied
+    /// <see cref="EditorIcons.IsStub"/>, so every button of every screen is live and the arm
+    /// is unreachable today. What this test asserts about it is therefore the premise: the
+    /// list is empty, and the tab that was last on it now paints bright when active like
+    /// every other tab. Put a name back into that list and the arm becomes observable again,
+    /// together with the break recipe it used to carry (move it below <c>Active</c> and a
+    /// dead button starts looking alive).</para>
     /// </summary>
     [Fact]
     public void ButtonInkFollowsStateInPrecedenceOrder()
@@ -233,10 +237,11 @@ public class EditorChromeTests
         Assert.Equal(
             EditorChromeRenderer.Bright,
             EditorChromeRenderer.ButtonInk(EditorButton.TilemapTab, idle with { Active = true }));
-        // A stub is dim even when the screen calls it active — dead must look dead.
-        Assert.True(EditorIcons.IsStub(EditorButton.MusicTab));
+        // No stub is left to be dim: the music tab, the last one on the list, is live now
+        // and paints bright when its screen calls it active.
+        Assert.False(EditorIcons.IsStub(EditorButton.MusicTab));
         Assert.Equal(
-            EditorChromeRenderer.Dim,
+            EditorChromeRenderer.Bright,
             EditorChromeRenderer.ButtonInk(EditorButton.MusicTab, idle with { Active = true }));
         // Hovering changes the frame, never the face.
         Assert.Equal(

@@ -203,7 +203,7 @@ public class CodeEditorScreenGoldenTests : IDisposable
             Assert.InRange(pixel, (byte)0, (byte)15);
         }
 
-        Assert.Equal("e2f93f9e52505e38", FrameHash.Of(screen.Framebuffer));
+        Assert.Equal("a4aefe53c86b3dc9", FrameHash.Of(screen.Framebuffer));
     }
 
     /// <summary>
@@ -269,7 +269,7 @@ public class CodeEditorScreenGoldenTests : IDisposable
         // ...and the message line is empty, because nothing has anything to say yet.
         Assert.Equal((byte)0, console.Pget(1, 79));
 
-        Assert.Equal("5554d7948b66f654", FrameHash.Of(screen.Framebuffer));
+        Assert.Equal("c6c93941482fc395", FrameHash.Of(screen.Framebuffer));
     }
 
     /// <summary>
@@ -308,7 +308,7 @@ public class CodeEditorScreenGoldenTests : IDisposable
         Assert.Equal((byte)3, console.Pget(12, 11));
         Assert.Equal((byte)3, console.Pget(12, 16));
 
-        Assert.Equal("e645bdb3084cf646", FrameHash.Of(screen.Framebuffer));
+        Assert.Equal("a5976d3b12f27343", FrameHash.Of(screen.Framebuffer));
     }
 
     /// <summary>

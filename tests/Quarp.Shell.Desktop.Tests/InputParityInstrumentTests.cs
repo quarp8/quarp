@@ -552,6 +552,9 @@ public class InputParityInstrumentTests : IDisposable
             // Live since the sound-editor screen wave, and reachable the same way: the tab strip
             // is a ring walked by Alt+Left/Right, so that is the key its tooltip must name.
             [EditorButton.SoundTab] = "ALT+",
+            // Live since the music-editor screen wave — the fifth and last stop of the ring,
+            // and the reason this sweep no longer skips anything: the stub list is empty.
+            [EditorButton.MusicTab] = "ALT+",
         };
 
         foreach (EditorButtonPlace place in SpriteEditorLayout.Compute(ConsoleWidth, ConsoleHeight, regionCells: 1).Buttons)

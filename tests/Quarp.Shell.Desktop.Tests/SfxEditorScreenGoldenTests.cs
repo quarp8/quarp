@@ -169,7 +169,7 @@ public class SfxEditorScreenGoldenTests : IDisposable
             Assert.InRange(pixel, (byte)0, (byte)15);
         }
 
-        Assert.Equal("1e6dc7818c1fa32e", FrameHash.Of(screen.Framebuffer));
+        Assert.Equal("b8c78584d4e7387f", FrameHash.Of(screen.Framebuffer));
     }
 
     /// <summary>
@@ -223,7 +223,7 @@ public class SfxEditorScreenGoldenTests : IDisposable
         // Still no standing notice — this bank is writable.
         Assert.Equal((byte)0, console.Pget(1, 79));
 
-        Assert.Equal("8d1eb42f45e31031", FrameHash.Of(screen.Framebuffer));
+        Assert.Equal("52c6287e53c8cef8", FrameHash.Of(screen.Framebuffer));
     }
 
     /// <summary>
@@ -259,7 +259,7 @@ public class SfxEditorScreenGoldenTests : IDisposable
         // still on screen, which is the whole reason the prompt lives on one reserved line.
         Assert.Equal((byte)6, console.Pget(64, 33));
 
-        Assert.Equal("292bffca0ed78d1f", FrameHash.Of(screen.Framebuffer));
+        Assert.Equal("edeada55e2807126", FrameHash.Of(screen.Framebuffer));
     }
 
     /// <summary>

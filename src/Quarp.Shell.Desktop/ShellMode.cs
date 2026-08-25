@@ -50,4 +50,16 @@ public enum ShellMode
     /// face keeps its value.
     /// </summary>
     SfxEditor,
+
+    /// <summary>
+    /// The fifth and last face of the open cartridge: the 64 patterns of <c>music.bin</c>, behind
+    /// the MUSIC tab. A mode of its own for the reason the four before it are — the window draws
+    /// a different screen and routes different input for it, and <c>QuarpGame</c>'s update and
+    /// draw switches are where that difference has to be visible. Like
+    /// <see cref="SfxEditor"/> its update has a second half, the preview APU, which is wiring and
+    /// not a screen; unlike it, that preview needs <em>two</em> banks — the song and the sounds it
+    /// names — which is why <see cref="ShellModeMachine.EnsureSfxBank"/> exists. Appended after
+    /// <see cref="SfxEditor"/> so every earlier face keeps its value.
+    /// </summary>
+    MusicEditor,
 }

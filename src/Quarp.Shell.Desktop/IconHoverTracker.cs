@@ -52,6 +52,30 @@ public enum SfxRegion
 /// hangs on that comparison; each factory fills every field so targets of different kinds
 /// can never collide by accident.
 /// </summary>
+/// <summary>
+/// The buttonless controls of the <b>music</b> screen — its twin of <see cref="SfxRegion"/>, and
+/// it exists for the same reason: those controls need a hover label of their own, and a screen's
+/// keys are announced on the thing they act on. Four, where the sound screen has nine, because
+/// this screen is one grid and its three attendants.
+/// </summary>
+public enum MusicRegion
+{
+    /// <summary>Not on any of this screen's buttonless controls.</summary>
+    None,
+
+    /// <summary>The tracker grid: 64 patterns x 4 channels, ten rows of it at a time.</summary>
+    Song,
+
+    /// <summary>The three section markers of a pattern — loop start, loop end, stop.</summary>
+    Flags,
+
+    /// <summary>The channel header, where mute and solo live.</summary>
+    Channels,
+
+    /// <summary>The whole-song overview down the right edge — every pattern at once, and the scroll control.</summary>
+    Overview,
+}
+
 public readonly record struct HoverTarget
 {
     /// <summary>The hovered icon-button, or null when the target is a swatch, a flyout variant or the slider.</summary>
@@ -75,24 +99,31 @@ public readonly record struct HoverTarget
     /// <summary>Which buttonless region of the SOUND screen is hovered, or <see cref="SfxRegion.None"/>.</summary>
     public SfxRegion Sfx { get; init; }
 
+    /// <summary>Which buttonless control of the music screen is under the pointer; <see cref="MusicRegion.None"/> for everything else.</summary>
+    public MusicRegion Music { get; init; }
+
     public static HoverTarget OfButton(EditorButton button) =>
-        new() { Button = button, Swatch = -1, FlyoutSlot = null, FlyoutVariant = -1, Slider = false, Flag = -1, Sfx = SfxRegion.None };
+        new() { Button = button, Swatch = -1, FlyoutSlot = null, FlyoutVariant = -1, Slider = false, Flag = -1, Sfx = SfxRegion.None, Music = MusicRegion.None };
 
     public static HoverTarget OfSwatch(int swatch) =>
-        new() { Button = null, Swatch = swatch, FlyoutSlot = null, FlyoutVariant = -1, Slider = false, Flag = -1, Sfx = SfxRegion.None };
+        new() { Button = null, Swatch = swatch, FlyoutSlot = null, FlyoutVariant = -1, Slider = false, Flag = -1, Sfx = SfxRegion.None, Music = MusicRegion.None };
 
     public static HoverTarget OfFlyoutVariant(EditorButton slot, int variant) =>
-        new() { Button = null, Swatch = -1, FlyoutSlot = slot, FlyoutVariant = variant, Slider = false, Flag = -1, Sfx = SfxRegion.None };
+        new() { Button = null, Swatch = -1, FlyoutSlot = slot, FlyoutVariant = variant, Slider = false, Flag = -1, Sfx = SfxRegion.None, Music = MusicRegion.None };
 
     public static HoverTarget OfSlider() =>
-        new() { Button = null, Swatch = -1, FlyoutSlot = null, FlyoutVariant = -1, Slider = true, Flag = -1, Sfx = SfxRegion.None };
+        new() { Button = null, Swatch = -1, FlyoutSlot = null, FlyoutVariant = -1, Slider = true, Flag = -1, Sfx = SfxRegion.None, Music = MusicRegion.None };
 
     /// <summary>The sound screen's buttonless controls; every other field is filled so kinds cannot collide.</summary>
     public static HoverTarget OfSfxRegion(SfxRegion region) =>
-        new() { Button = null, Swatch = -1, FlyoutSlot = null, FlyoutVariant = -1, Slider = false, Flag = -1, Sfx = region };
+        new() { Button = null, Swatch = -1, FlyoutSlot = null, FlyoutVariant = -1, Slider = false, Flag = -1, Sfx = region, Music = MusicRegion.None };
+
+    /// <summary>A buttonless control of the music screen is under the pointer.</summary>
+    public static HoverTarget OfMusicRegion(MusicRegion region) =>
+        new() { Button = null, Swatch = -1, FlyoutSlot = null, FlyoutVariant = -1, Slider = false, Flag = -1, Sfx = SfxRegion.None, Music = region };
 
     public static HoverTarget OfFlag(int bit) =>
-        new() { Button = null, Swatch = -1, FlyoutSlot = null, FlyoutVariant = -1, Slider = false, Flag = bit, Sfx = SfxRegion.None };
+        new() { Button = null, Swatch = -1, FlyoutSlot = null, FlyoutVariant = -1, Slider = false, Flag = bit, Sfx = SfxRegion.None, Music = MusicRegion.None };
 }
 
 /// <summary>

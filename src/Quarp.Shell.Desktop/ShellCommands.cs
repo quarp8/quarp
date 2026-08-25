@@ -368,6 +368,35 @@ public readonly struct ShellCommands
     /// key.</para>
     /// </summary>
     public int SfxPianoKey { get; init; }
+
+    // ---- the music editor's own key ----
+
+    /// <summary>
+    /// Music editor: which <b>decimal digit</b> was struck this frame, as a <b>1-based</b> value
+    /// (1 means '0', 10 means '9'), 0 for none — the shape <see cref="EditorToolDigit"/>,
+    /// <see cref="EditorFlagDigit"/> and <see cref="SfxPianoKey"/> already use, so a
+    /// default-constructed frame means "nothing was typed" rather than "the digit zero".
+    ///
+    /// <para><b>Why a decimal digit and not a hex one.</b> A channel of <c>music.bin</c> names an
+    /// SFX slot 0-63, and every other screen in this shell prints a slot in decimal —
+    /// <c>SFX 07</c> on the sound screen, <c>#003</c> on the sprite screen. TIC-80's tracker takes
+    /// its SFX numbers as two hex digits; copying that here would make the same slot read
+    /// <c>3F</c> on one tab and <c>63</c> on the next, which is a second numbering of one fact.
+    /// So two digits it is, and <see cref="MusicEditorView.TypeDigit"/> owns what a pair
+    /// means.</para>
+    ///
+    /// <para><b>Why one field for ten keys, and why the digits appear twice.</b> "One field per
+    /// physical press" is a rule about <em>facts</em>, not about key codes: which digit was typed
+    /// is one fact. Six of the ten — 1 to 6 — also reach <see cref="EditorToolDigit"/>, and five
+    /// of them also reach <see cref="SfxPianoKey"/>. That is the same shape those two fields
+    /// already carry, resolved the same way and in the same place: <b>the gate belongs where the
+    /// meaning differs</b>. The music screen's router reads this field and ignores the toolbar
+    /// digits; every other screen reads those and never looks here.</para>
+    ///
+    /// <para>Ctrl- and Shift-guarded, so Ctrl+Z stays undo and Shift+1..8 stay the mute and solo
+    /// rows — the standing rule that a chord must not double as its bare key.</para>
+    /// </summary>
+    public int MusicSlotDigit { get; init; }
 }
 
 /// <summary>
@@ -495,6 +524,9 @@ public sealed class ShellCommandReader
             // their keys; see the field's own comment for why the five digits and the five
             // letters it shares with other fields are gated in the router and not here.
             SfxPianoKey = ctrl || shift ? 0 : PianoKey(keyboard),
+            // The music editor's digits, guarded on both modifiers for the same reason the piano
+            // is: Ctrl+Z stays undo and Shift+1..8 stay that screen's mute and solo rows.
+            MusicSlotDigit = ctrl || shift ? 0 : SlotDigit(keyboard),
         };
         _previous = keyboard;
         return commands;
@@ -545,6 +577,25 @@ public sealed class ShellCommandReader
         for (int i = 0; i < PianoRows.Length; i++)
         {
             if (Pressed(keyboard, PianoRows[i]))
+            {
+                return i + 1;
+            }
+        }
+        return 0;
+    }
+
+    /// <summary>
+    /// First freshly struck decimal digit as a 1-based value, 0 for none — the same
+    /// one-key-per-frame rule the toolbar digits, the flag digits and the piano follow. The top
+    /// row only: <c>Keys.D0</c>..<c>Keys.D9</c>, because the numeric keypad is not on every
+    /// keyboard this console runs on and a second source for one fact is what this file exists to
+    /// prevent.
+    /// </summary>
+    private int SlotDigit(KeyboardState keyboard)
+    {
+        for (int i = 0; i < 10; i++)
+        {
+            if (Pressed(keyboard, Keys.D0 + i))
             {
                 return i + 1;
             }

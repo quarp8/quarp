@@ -166,7 +166,7 @@ public class MapEditorScreenGoldenTests : IDisposable
             Assert.InRange(pixel, (byte)0, (byte)15);
         }
 
-        Assert.Equal("946b249650ae1f1e", FrameHash.Of(screen.Framebuffer));
+        Assert.Equal("09f675e0a6018eef", FrameHash.Of(screen.Framebuffer));
     }
 
     /// <summary>
@@ -202,7 +202,7 @@ public class MapEditorScreenGoldenTests : IDisposable
         Assert.Equal((byte)3, console.Pget(145, 85));
         Assert.Equal((byte)0, console.Pget(2, 79));
 
-        Assert.Equal("2bcfb8a6a5ab4a97", FrameHash.Of(screen.Framebuffer));
+        Assert.Equal("e17172c86fa54436", FrameHash.Of(screen.Framebuffer));
     }
 
     /// <summary>
@@ -246,7 +246,7 @@ public class MapEditorScreenGoldenTests : IDisposable
         // an overlay, not a screen.
         Assert.Equal((byte)3, console.Pget(24, 11));
 
-        Assert.Equal("1bd6e547533896ab", FrameHash.Of(screen.Framebuffer));
+        Assert.Equal("7bf5950a6b0dee2a", FrameHash.Of(screen.Framebuffer));
     }
 
     /// <summary>
@@ -284,7 +284,7 @@ public class MapEditorScreenGoldenTests : IDisposable
         // The whole-map switch reads as on.
         Assert.Equal((byte)3, console.Pget(11, 42));
 
-        Assert.Equal("adc60f3b2d93dced", FrameHash.Of(screen.Framebuffer));
+        Assert.Equal("f5655081856eee58", FrameHash.Of(screen.Framebuffer));
     }
 
     /// <summary>
@@ -319,7 +319,7 @@ public class MapEditorScreenGoldenTests : IDisposable
         // screen, which is the whole reason the prompt lives on one reserved line.
         Assert.Equal((byte)8, console.Pget(25, 12));
 
-        Assert.Equal("b01e09aa69735bbd", FrameHash.Of(screen.Framebuffer));
+        Assert.Equal("0ab90c2860f76ba4", FrameHash.Of(screen.Framebuffer));
     }
 
     /// <summary>

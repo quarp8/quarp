@@ -1,3 +1,4 @@
+using System.Linq;
 using Quarp.Core;
 using Quarp.Shell.Desktop;
 using Xunit;
@@ -133,7 +134,7 @@ public class SpriteEditorScreenGoldenTests : IDisposable
             Assert.InRange(pixel, (byte)0, (byte)15);
         }
 
-        Assert.Equal("2689fcee28fe852c", FrameHash.Of(screen.Framebuffer));
+        Assert.Equal("2afc6f21dc819db1", FrameHash.Of(screen.Framebuffer));
     }
 
     /// <summary>
@@ -175,7 +176,7 @@ public class SpriteEditorScreenGoldenTests : IDisposable
         // The notice is unchanged — sprite 000 is still the map's empty tile, drawn on or not.
         Assert.Equal((byte)8, console.Pget(2, 79));
 
-        Assert.Equal("a01533d648aec7c7", FrameHash.Of(screen.Framebuffer));
+        Assert.Equal("62d9aec6f33cd512", FrameHash.Of(screen.Framebuffer));
     }
 
     /// <summary>
@@ -221,7 +222,7 @@ public class SpriteEditorScreenGoldenTests : IDisposable
         // on screen, which is the whole reason the prompt lives on one reserved line.
         Assert.Equal((byte)8, console.Pget(21, 12));
 
-        Assert.Equal("86cf5ad485c1c895", FrameHash.Of(screen.Framebuffer));
+        Assert.Equal("2688306247f13a38", FrameHash.Of(screen.Framebuffer));
     }
 
     /// <summary>
@@ -316,5 +317,25 @@ public class SpriteEditorScreenGoldenTests : IDisposable
                 Assert.Equal(quiet.Console.Pget(x, y), screen.Console.Pget(x, y));
             }
         }
+    }
+
+    /// <summary>
+    /// <b>The fourteen hashes on this screen and its three siblings were re-pinned on
+    /// 2026-08-25, and the cause is written here so nobody has to guess later.</b> The music
+    /// editor's wave emptied <c>EditorIcons.IsStub</c> — the MUSIC tab stopped being a dead
+    /// button, and with it the SOUND tab's neighbour in the strip stopped being painted dim.
+    /// Every screen carries that strip, so every screen's frame changed by the same handful of
+    /// pixels, and not one of them changed anywhere else: every <c>Pget</c> probe in these files
+    /// passed through the re-pin untouched, and the music screen's own goldens — computed
+    /// against the new stub list from the start — passed on their first run.
+    ///
+    /// <para>The rule this obeys is the project's oldest: a hash may be re-pinned, never
+    /// silently. What follows is the pin of the cause itself, so that the next time a tab's ink
+    /// changes it is a named test that says so and not fourteen anonymous hashes.</para>
+    /// </summary>
+    [Fact]
+    public void NoTabInTheStripIsPaintedAsADeadButtonAnyMore()
+    {
+        Assert.Empty(Enum.GetValues<EditorButton>().Where(EditorIcons.IsStub));
     }
 }

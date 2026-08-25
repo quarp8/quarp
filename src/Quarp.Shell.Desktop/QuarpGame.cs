@@ -18,15 +18,19 @@ namespace Quarp.Shell.Desktop;
 /// developer's F5 loop, which neither the menu nor the library interrupts. Mode policy lives in
 /// <see cref="ShellModeMachine"/>, editor policy in <see cref="SpriteEditorSession"/>; this
 /// class owns only what needs a graphics device, plus the routing of raw input to whichever
-/// mode is on screen. The mouse (new in M9 stage 2) is polled every frame but <b>acted on
-/// only in the editor</b> — the library stays keyboard-driven by decision; polling always
-/// keeps the reader's previous-state true across mode switches, so a button held into the
-/// editor produces no phantom press.
+/// mode is on screen. The mouse (new in M9 stage 2) is polled every frame; the editors act on
+/// it, and since wave R1 so does the library, which now has a console grid to point at.
+/// Polling always keeps the reader's previous-state true across mode switches, so a button held
+/// into another screen produces no phantom press.
 ///
-/// <para><b>Two resolutions, on purpose.</b> A running cart is presented as the core's
-/// indexed framebuffer scaled by whole integers (ARCHITECTURE §5). The library and the stub
-/// are host UI and draw at the window's native resolution via <see cref="LibraryRenderer"/> —
-/// still on the master palette and the system font, so the console keeps its face.</para>
+/// <para><b>One resolution, since wave R1.</b> The owner's law of 2026-08-25 — "the console
+/// is the same for everyone and in everything" — ended the second machine this class used to
+/// run. A running cart is presented as the core's indexed framebuffer scaled by whole integers
+/// (ARCHITECTURE §5); the library is now drawn <em>into a framebuffer of its own</em>
+/// (<see cref="ShellScreen"/>) with the same core calls a cartridge uses, and both go to the
+/// window through the one <see cref="ConsolePresenter"/>. The four remaining editor screens
+/// and the boot menu still paint at the window's native resolution and are scheduled to
+/// follow; while they do, this class is the one place where the two roads are both visible.</para>
 ///
 /// <para><b>Time (M2).</b> MonoGame's <c>IsFixedTimeStep</c> is off and replaced by
 /// <see cref="TickAccumulator"/>: real time is banked, whole ticks come out, at most five
@@ -47,8 +51,6 @@ namespace Quarp.Shell.Desktop;
 /// </summary>
 public sealed class QuarpGame : Game
 {
-    private readonly Color[] _colorBuffer;
-    private readonly Color[] _palette;
     private readonly TickAccumulator _accumulator = new();
     private readonly ShellCommandReader _commands = new();
     private readonly EditorMouseReader _mouse = new();
@@ -58,13 +60,22 @@ public sealed class QuarpGame : Game
     private readonly ConsoleProfile _profile;
     private readonly ShellModeMachine _modes;
 
+    /// <summary>
+    /// The shell's own console — a second <see cref="VirtualConsole"/> of the same profile,
+    /// which the library screen (and, as they follow, the editors) is drawn into. Built here,
+    /// in the constructor, because it needs no graphics device: it is virtual hardware, not a
+    /// texture. Its framebuffer is a different object from the running cart's, so a tool screen
+    /// drawn over a paused game cannot touch the frame that game left behind.
+    /// </summary>
+    private readonly ShellScreen _shellScreen;
+
     private SpriteBatch _spriteBatch = null!;
-    private Texture2D _screenTexture = null!;
+    private ConsolePresenter _presenter = null!;
     private ShellOverlay _overlay = null!;
-    private LibraryRenderer _hostUi = null!;
     private SpriteEditorRenderer _editorUi = null!;
     private MapEditorRenderer _mapUi = null!;
     private CodeEditorRenderer _codeUi = null!;
+    private SfxEditorRenderer _sfxUi = null!;
     private MainMenuRenderer _menuUi = null!;
     private AudioOutput? _audio;
 
@@ -76,6 +87,21 @@ public sealed class QuarpGame : Game
 
     /// <summary>Banks real time into the jingle's 60 Hz ticks — the game's accumulator discipline, menu-sized.</summary>
     private readonly TickAccumulator _menuTicks = new();
+
+    /// <summary>
+    /// The sound editor's voice: a bare <see cref="Apu"/> loaded with the edited bank, alive
+    /// only while a slot is being auditioned. The <b>same class the cartridge speaks through</b>
+    /// and the same one <see cref="BootJingle"/> already borrows — there is no second
+    /// synthesizer in this shell, and the audition therefore cannot sound different from the
+    /// game. See <see cref="UpdateSfxPreview"/> for the whole of the arrangement.
+    /// </summary>
+    private Apu? _sfxApu;
+
+    /// <summary>Banks real time into the audition's 60 Hz ticks — a third accumulator, because a third clock owner would be a bug.</summary>
+    private readonly TickAccumulator _sfxTicks = new();
+
+    /// <summary>Which <see cref="SfxEditorView.PlayEpoch"/> <see cref="_sfxApu"/> was started for; a newer one restarts the slot.</summary>
+    private int _sfxEpoch;
 
     /// <summary>Characters from <c>Window.TextInput</c> since the last frame; consumed by the name field only.</summary>
     private readonly List<char> _typedChars = new();
@@ -117,12 +143,9 @@ public sealed class QuarpGame : Game
             DrainAudio,
             directSession);
 
-        _colorBuffer = new Color[_profile.Width * _profile.Height];
-        _palette = new Color[Palette.MasterCount];
-        for (int i = 0; i < Palette.MasterCount; i++)
-        {
-            _palette[i] = PaletteColors.Opaque(i);
-        }
+        // The shell's drawing surface. Palette unpacking and the frame's placement moved with
+        // it into ConsolePresenter, which now owns both for the cart's frame and for this one.
+        _shellScreen = new ShellScreen(_profile);
 
         // x8 of 160x90 is 1280x720 exactly: a whole-pixel scale that is also a standard display
         // mode, so the window fills a 720p screen with nothing left over and needs no letterbox.
@@ -204,12 +227,12 @@ public sealed class QuarpGame : Game
     protected override void LoadContent()
     {
         _spriteBatch = new SpriteBatch(GraphicsDevice);
-        _screenTexture = new Texture2D(GraphicsDevice, _profile.Width, _profile.Height);
+        _presenter = new ConsolePresenter(GraphicsDevice, _profile);
         _overlay = new ShellOverlay(GraphicsDevice, _profile.Width, _profile.Height);
-        _hostUi = new LibraryRenderer(GraphicsDevice);
         _editorUi = new SpriteEditorRenderer(GraphicsDevice);
         _mapUi = new MapEditorRenderer(GraphicsDevice);
         _codeUi = new CodeEditorRenderer(GraphicsDevice);
+        _sfxUi = new SfxEditorRenderer(GraphicsDevice);
         _menuUi = new MainMenuRenderer(GraphicsDevice);
 
         // The two window events the boot screens live on. Characters buffer here and are
@@ -250,7 +273,7 @@ public sealed class QuarpGame : Game
                 UpdateGame(commands, keyboard, gameTime);
                 break;
             case ShellMode.Library:
-                UpdateLibrary(commands);
+                UpdateLibrary(commands, mouse);
                 break;
             case ShellMode.Editor:
                 SpriteEditorInput.Update(EditorContext(), commands, mouse, gameTime.ElapsedGameTime.TotalSeconds);
@@ -266,6 +289,14 @@ public sealed class QuarpGame : Game
                 // the previous frame — in order, once. See CodeEditorInput's type comment.
                 CodeEditorInput.Update(
                     EditorContext(), commands, mouse, _typedChars, gameTime.ElapsedGameTime.TotalSeconds);
+                break;
+            case ShellMode.SfxEditor:
+                SfxEditorInput.Update(EditorContext(), commands, mouse, gameTime.ElapsedGameTime.TotalSeconds);
+                // The one editor frame with a second half: the router decided whether the slot
+                // should sound, and this drives the chip that makes it so. Kept out of the
+                // router on purpose — a router that owned a speaker could not run in a headless
+                // test, which is the property wave 3c bought and this wave keeps.
+                UpdateSfxPreview(gameTime);
                 break;
             case ShellMode.Menu:
                 UpdateMenu(commands, keyboard, mouse, gameTime);
@@ -338,8 +369,15 @@ public sealed class QuarpGame : Game
         _audio?.EndFrame();
     }
 
-    /// <summary>One frame of the library: selection, launch, opening the sprite editor, or leaving for the menu.</summary>
-    private void UpdateLibrary(in ShellCommands commands)
+    /// <summary>
+    /// One frame of the library: selection, launch, opening the sprite editor, or leaving for
+    /// the menu — by key, and since wave R1 by pointer too. The library was keyboard-only for
+    /// as long as it was host UI; now that it is drawn on the console there is a grid to point
+    /// at, and the pointer reaches it the one legal way — through
+    /// <see cref="ShellScreen.Placement"/>, which is the single owner of window-to-console
+    /// coordinates. This method does no scale arithmetic of its own, and neither may any other.
+    /// </summary>
+    private void UpdateLibrary(in ShellCommands commands, in EditorMouse mouse)
     {
         if (ConsumeDroppedFile())
         {
@@ -364,6 +402,45 @@ public sealed class QuarpGame : Game
             return;
         }
         if (commands.MenuConfirm && _modes.LaunchSelected() is not null)
+        {
+            OnSessionStarted();
+        }
+        else if (mouse.LeftPressed)
+        {
+            ClickLibrary(mouse);
+        }
+    }
+
+    /// <summary>
+    /// A click on the list. Two-step on purpose, the way a desktop list behaves: the first
+    /// press moves the bar, a press on the row that already has the bar launches it. A single
+    /// press that both selected and launched would make a misplaced click start a cartridge,
+    /// and this screen's rows are seven console pixels tall.
+    ///
+    /// <para>The selection is moved through <see cref="CartLibrary.MoveSelection"/> rather
+    /// than by assigning an index: that method owns the clamping rule, and a second way to set
+    /// the bar would be a second place for it to go out of range.</para>
+    /// </summary>
+    private void ClickLibrary(in EditorMouse mouse)
+    {
+        FramePlacement placement = _shellScreen.Placement(
+            GraphicsDevice.PresentationParameters.BackBufferWidth,
+            GraphicsDevice.PresentationParameters.BackBufferHeight);
+        if (!placement.TryToCanvas(mouse.X, mouse.Y, out int consoleX, out int consoleY))
+        {
+            return;     // The letterbox. Not a click on the nearest row — see FramePlacement.
+        }
+        LibraryLayout layout = LibraryRenderer.LayoutFor(_shellScreen, _modes.Library, _modes.LibraryMessage);
+        if (layout.HitRow(consoleX, consoleY) is not int index)
+        {
+            return;
+        }
+        if (index != _modes.Library.SelectedIndex)
+        {
+            _modes.Library.MoveSelection(index - _modes.Library.SelectedIndex);
+            return;
+        }
+        if (_modes.LaunchSelected() is not null)
         {
             OnSessionStarted();
         }
@@ -538,6 +615,82 @@ public sealed class QuarpGame : Game
     }
 
     /// <summary>
+    /// The sound editor's audition, and the answer to "who synthesizes it": the <b>same</b>
+    /// <see cref="Apu"/> a cartridge runs on, fed the session's own payload and rendered at the
+    /// same 60 Hz the accumulator gives a game, into the same <see cref="AudioOutput"/>. The
+    /// arrangement is <see cref="PlayBootJingle"/>'s, one screen over, and it exists for the
+    /// reason that one does: the shell may not grow a second synthesizer, so when it needs a
+    /// sound of its own it borrows the console's chip instead of imitating it.
+    ///
+    /// <para><b>Why a bare APU rather than the cartridge's.</b> There is no cartridge here —
+    /// <see cref="ShellModeMachine.Session"/> is null in every editor mode, and starting one to
+    /// hear a beep would run somebody's game. A bare <see cref="Apu"/> is the same class, the
+    /// same integer arithmetic and the same 800 samples a tick; what it is missing is a
+    /// <c>VirtualConsole</c> around it, which an audition does not need.</para>
+    ///
+    /// <para><b>What the author hears is what the cartridge will play</b>, because
+    /// <see cref="Apu.LoadSfxPayload"/> takes the very bytes <see cref="SfxEditorSession.Save"/>
+    /// writes — not a copy the editor keeps in another shape. The payload is reloaded on every
+    /// fresh ask, so an edit made between two presses of Space is heard on the second.</para>
+    ///
+    /// <para>No sound card, no audition, and nothing else changes: the view is told the slot is
+    /// not sounding and the play button goes dark, which is the honest answer rather than a
+    /// button that pretends. Leaving the tab, changing the slot, or the slot running out of
+    /// steps all end it through the one door — <see cref="SfxEditorView.ReportPlaying"/>.</para>
+    /// </summary>
+    private void UpdateSfxPreview(GameTime gameTime)
+    {
+        if (_modes.SfxEditor is not SfxEditorSession session || _modes.SfxView is not SfxEditorView view)
+        {
+            return;
+        }
+        if (_audio is not AudioOutput audio || !audio.IsAvailable)
+        {
+            view.ReportPlaying(false);
+            return;
+        }
+        if (!view.PlayWanted)
+        {
+            StopSfxPreview(audio, view);
+            return;
+        }
+        if (_sfxApu is null || _sfxEpoch != view.PlayEpoch)
+        {
+            _sfxApu = new Apu();
+            _sfxApu.LoadSfxPayload(session.Payload);
+            _sfxApu.PlaySfx(view.SelectedSlot, 0);
+            _sfxEpoch = view.PlayEpoch;
+            _sfxTicks.Reset();
+        }
+        int ticks = _sfxTicks.Advance(gameTime.ElapsedGameTime.Ticks, TimeSpeed.At(TimeSpeed.NormalIndex));
+        for (int i = 0; i < ticks; i++)
+        {
+            _sfxApu.RenderTick();
+            audio.Submit(_sfxApu.Block);
+        }
+        audio.EndFrame();
+        if (!_sfxApu.IsChannelBusy(0))
+        {
+            StopSfxPreview(audio, view);        // a one-shot slot ended: the button goes dark by itself
+        }
+        else
+        {
+            view.ReportPlaying(true);
+        }
+    }
+
+    /// <summary>Drops the audition's chip and the tail it left on the device — the game-to-library drain, slot-sized.</summary>
+    private void StopSfxPreview(AudioOutput audio, SfxEditorView view)
+    {
+        if (_sfxApu is not null)
+        {
+            audio.Drain();
+            _sfxApu = null;
+        }
+        view.ReportPlaying(false);
+    }
+
+    /// <summary>
     /// The whole of what the editor input routers (wave 3c) are allowed to see of this window:
     /// the shell state they steer, plus the back buffer as two numbers. Built per call because
     /// a resize changes the size mid-session — and built here, in the one class that owns a
@@ -561,12 +714,7 @@ public sealed class QuarpGame : Game
                 RenderFrame();
                 break;
             case ShellMode.Library:
-                _hostUi.DrawLibrary(
-                    _spriteBatch,
-                    GraphicsDevice.PresentationParameters.BackBufferWidth,
-                    GraphicsDevice.PresentationParameters.BackBufferHeight,
-                    _modes.Library,
-                    _modes.LibraryMessage);
+                RenderShellScreen();
                 break;
             case ShellMode.Editor:
                 // The draw clock feeds the marching ants' phase — host chrome animating in
@@ -606,6 +754,16 @@ public sealed class QuarpGame : Game
                     _hover.TooltipVisible,
                     gameTime.TotalGameTime.TotalSeconds);
                 break;
+            case ShellMode.SfxEditor:
+                _sfxUi.Draw(
+                    _spriteBatch,
+                    GraphicsDevice.PresentationParameters.BackBufferWidth,
+                    GraphicsDevice.PresentationParameters.BackBufferHeight,
+                    _modes.SfxEditor!,
+                    _modes.SfxView!,
+                    _hover.Target,
+                    _hover.TooltipVisible);
+                break;
             case ShellMode.Menu:
                 _menuUi.Draw(
                     _spriteBatch,
@@ -640,33 +798,46 @@ public sealed class QuarpGame : Game
 
     private void RenderFrame()
     {
-        if (_modes.Session is not CartSession session || _spriteBatch is null || _screenTexture is null)
+        if (_modes.Session is not CartSession session || _spriteBatch is null || _presenter is null)
         {
             return;     // No cart on screen, or called before LoadContent (a crash during the very first reload).
         }
         _overlay.Show(session.Status, session.StatusPercent);
 
-        Framebuffer framebuffer = session.Framebuffer;
-        byte[] pixels = framebuffer.Pixels;
-        for (int i = 0; i < pixels.Length; i++)
-        {
-            _colorBuffer[i] = _palette[pixels[i]];
-        }
-        _screenTexture.SetData(_colorBuffer);
-
-        int windowWidth = GraphicsDevice.PresentationParameters.BackBufferWidth;
-        int windowHeight = GraphicsDevice.PresentationParameters.BackBufferHeight;
-        int scale = Math.Max(1, Math.Min(windowWidth / framebuffer.Width, windowHeight / framebuffer.Height));
-        int destWidth = framebuffer.Width * scale;
-        int destHeight = framebuffer.Height * scale;
-        var dest = new Rectangle((windowWidth - destWidth) / 2, (windowHeight - destHeight) / 2, destWidth, destHeight);
-
-        GraphicsDevice.Clear(Color.Black);
+        _presenter.ClearLetterbox();
         _spriteBatch.Begin(samplerState: SamplerState.PointClamp);
-        _spriteBatch.Draw(_screenTexture, dest, Color.White);
+        Rectangle dest = _presenter.Draw(
+            _spriteBatch,
+            session.Framebuffer,
+            GraphicsDevice.PresentationParameters.BackBufferWidth,
+            GraphicsDevice.PresentationParameters.BackBufferHeight);
         // The overlay goes over the same rectangle, so its pixels line up with console
         // pixels — and it is a texture of its own, so the framebuffer stays untouched.
         _overlay.Draw(_spriteBatch, dest);
+        _spriteBatch.End();
+    }
+
+    /// <summary>
+    /// One frame of a tool screen: draw it into the shell's console, then hand that framebuffer
+    /// to the same presenter the cartridge's frame goes through. The whole of what "the editor
+    /// runs on the same virtual hardware" means at this layer — the only difference between
+    /// this method and <see cref="RenderFrame"/> is which framebuffer is presented and whether
+    /// the pause indicator has anything to say.
+    /// </summary>
+    private void RenderShellScreen()
+    {
+        if (_spriteBatch is null || _presenter is null)
+        {
+            return;
+        }
+        LibraryRenderer.Draw(_shellScreen, _modes.Library, _modes.LibraryMessage);
+        _presenter.ClearLetterbox();
+        _spriteBatch.Begin(samplerState: SamplerState.PointClamp);
+        _presenter.Draw(
+            _spriteBatch,
+            _shellScreen.Framebuffer,
+            GraphicsDevice.PresentationParameters.BackBufferWidth,
+            GraphicsDevice.PresentationParameters.BackBufferHeight);
         _spriteBatch.End();
     }
 
@@ -706,11 +877,12 @@ public sealed class QuarpGame : Game
         {
             _modes.Session?.Dispose();
             _overlay?.Dispose();
-            _hostUi?.Dispose();
+            _presenter?.Dispose();
             _editorUi?.Dispose();
             _mapUi?.Dispose();
             _codeUi?.Dispose();
             _menuUi?.Dispose();
+            _sfxUi?.Dispose();
             _audio?.Dispose();
         }
         base.Dispose(disposing);

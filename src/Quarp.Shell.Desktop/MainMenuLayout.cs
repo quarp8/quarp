@@ -44,14 +44,23 @@ public readonly struct MainMenuLayout
 
     public int OriginY { get; init; }
 
+    /// <summary>
+    /// Where the canvas lands in the window. Wave R1 moved the arithmetic itself out to
+    /// <see cref="FramePlacement"/> and left this a lookup: the same three lines used to exist
+    /// here and again in <c>QuarpGame.RenderFrame</c>, and once a console-drawn screen needed
+    /// the <em>inverse</em> for its mouse, two copies of "where the picture is" became one copy
+    /// too many. Nothing about this screen changed — the numbers are the same numbers, computed
+    /// once instead of twice.
+    /// </summary>
     public static MainMenuLayout Compute(int windowWidth, int windowHeight)
     {
-        int scale = Math.Max(1, Math.Min(windowWidth / CanvasWidth, windowHeight / CanvasHeight));
+        FramePlacement placement =
+            FramePlacement.Compute(windowWidth, windowHeight, CanvasWidth, CanvasHeight);
         return new MainMenuLayout
         {
-            Scale = scale,
-            OriginX = (windowWidth - CanvasWidth * scale) / 2,
-            OriginY = (windowHeight - CanvasHeight * scale) / 2,
+            Scale = placement.Scale,
+            OriginX = placement.OriginX,
+            OriginY = placement.OriginY,
         };
     }
 

@@ -39,4 +39,15 @@ public enum ShellMode
     /// Appended after <see cref="Menu"/> so every earlier face keeps its value.
     /// </summary>
     CodeEditor,
+
+    /// <summary>
+    /// The fourth face of the open cartridge: the 64 effect slots of <c>sfx.bin</c>, behind the
+    /// SOUND tab (M9, the sound-editor screen wave). A mode of its own for the reason the map
+    /// and the code screens are — the window draws a different screen and routes different input
+    /// for it, and <c>QuarpGame</c>'s update and draw switches are where that difference has to
+    /// be visible. It is also the first face whose update has a second half: the preview APU,
+    /// which is wiring and not a screen. Appended after <see cref="CodeEditor"/> so every earlier
+    /// face keeps its value.
+    /// </summary>
+    SfxEditor,
 }

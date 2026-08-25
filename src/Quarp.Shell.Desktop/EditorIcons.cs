@@ -88,6 +88,14 @@ public enum EditorButton
     /// button; the key is Ctrl+L, PICO-8's). Code-only for the same reason.
     /// </summary>
     ToolGoTo,
+
+    /// <summary>
+    /// The sound editor's only tool button: play or stop the slot on screen (TIC-80's
+    /// <c>Space</c>, LIKO-12's <c>playRect</c>, PICO-8's "SPACE to play/stop" — all three
+    /// consoles put this in the same place). Sound-only: nothing on the other three screens has
+    /// a voice to start.
+    /// </summary>
+    ToolPlay,
 }
 
 /// <summary>
@@ -125,6 +133,8 @@ public enum EditorIcon
     Grid,
     Find,
     GoTo,
+    Play,
+    Stop,
 }
 
 /// <summary>
@@ -445,6 +455,28 @@ public static class EditorIcons
             0b11111000,
             0b00000000,
         },
+        new byte[] // Play: the transport triangle every console puts on this button
+        {
+            0b01000000,
+            0b01100000,
+            0b01111000,
+            0b01111110,
+            0b01111110,
+            0b01111000,
+            0b01100000,
+            0b01000000,
+        },
+        new byte[] // Stop: the filled square — the play button's other face while the slot sounds
+        {
+            0b00000000,
+            0b01111110,
+            0b01111110,
+            0b01111110,
+            0b01111110,
+            0b01111110,
+            0b01111110,
+            0b00000000,
+        },
     };
 
     /// <summary>How many glyphs exist — the atlas sizes its strip from this.</summary>
@@ -461,12 +493,12 @@ public static class EditorIcons
     /// <see cref="PressToolDigit"/> consults it — so waking a button is one edit here, never a
     /// drift between what looks dead and what is dead.
     ///
-    /// <para><b>The CODE tab left this list</b> in the code-editor screen wave: its editor
-    /// landed, so the icon is live and <see cref="TabTarget"/> routes it. Sounds and music
-    /// remain honestly dead.</para>
+    /// <para><b>The CODE tab left this list</b> in the code-editor screen wave and <b>the SOUND
+    /// tab in the sound-editor screen wave</b>: both editors landed, so both icons are live and
+    /// <see cref="TabTarget"/> routes them. Music alone remains honestly dead — it has no
+    /// editor, and a button with nothing behind it must look and act dead until it has.</para>
     /// </summary>
-    public static bool IsStub(EditorButton button) => button is
-        EditorButton.SoundTab or EditorButton.MusicTab;
+    public static bool IsStub(EditorButton button) => button is EditorButton.MusicTab;
 
     /// <summary>
     /// The live editor tab a click asks the shell to open, or null for every button that is
@@ -482,6 +514,7 @@ public static class EditorIcons
         EditorButton.SpritesTab => ShellMode.Editor,
         EditorButton.TilemapTab => ShellMode.MapEditor,
         EditorButton.CodeTab => ShellMode.CodeEditor,
+        EditorButton.SoundTab => ShellMode.SfxEditor,
         _ => null,
     };
 
@@ -493,7 +526,7 @@ public static class EditorIcons
     /// </summary>
     public static IReadOnlyList<ShellMode> LiveEditorTabs { get; } = new[]
     {
-        ShellMode.CodeEditor, ShellMode.Editor, ShellMode.MapEditor,
+        ShellMode.CodeEditor, ShellMode.Editor, ShellMode.MapEditor, ShellMode.SfxEditor,
     };
 
     /// <summary>
@@ -504,7 +537,7 @@ public static class EditorIcons
     /// </summary>
     public static bool BelongsToSpriteEditor(EditorButton button) => button is not (
         EditorButton.ToolEraser or EditorButton.ToolHand or EditorButton.GridToggle
-        or EditorButton.ToolFind or EditorButton.ToolGoTo);
+        or EditorButton.ToolFind or EditorButton.ToolGoTo or EditorButton.ToolPlay);
 
     /// <summary>
     /// The map editor's own button list: the shared chrome (tabs, exit, save, undo, redo), the
@@ -538,6 +571,22 @@ public static class EditorIcons
         EditorButton.ExitTab or EditorButton.CodeTab or EditorButton.SpritesTab
         or EditorButton.TilemapTab or EditorButton.SoundTab or EditorButton.MusicTab
         or EditorButton.ToolFind or EditorButton.ToolGoTo
+        or EditorButton.Save or EditorButton.Undo or EditorButton.Redo;
+
+    /// <summary>
+    /// The <b>sound</b> editor's own button list: the shared chrome (six tabs, exit, save, undo,
+    /// redo) and the one tool this screen has a model verb for — play/stop. Everything the sound
+    /// screen has nothing to do with (every drawing tool, the grid, the eraser, the layer tabs,
+    /// the size toggle, clear, find, go-to) stays off it, because a placed button with nothing
+    /// behind it is the defect class the button contract test closed in wave 2g. The screen's
+    /// other controls — the slot selector, the three grids, the wave and effect rows, the three
+    /// stepper fields — are rectangles of <see cref="SfxEditorLayout"/> rather than members of
+    /// this enum, exactly as the palette swatches and the sheet slider are on the sprite screen.
+    /// </summary>
+    public static bool BelongsToSfxEditor(EditorButton button) => button is
+        EditorButton.ExitTab or EditorButton.CodeTab or EditorButton.SpritesTab
+        or EditorButton.TilemapTab or EditorButton.SoundTab or EditorButton.MusicTab
+        or EditorButton.ToolPlay
         or EditorButton.Save or EditorButton.Undo or EditorButton.Redo;
 
     /// <summary>
@@ -708,6 +757,9 @@ public static class EditorIcons
         EditorButton.GridToggle => EditorIcon.Grid,
         EditorButton.ToolFind => EditorIcon.Find,
         EditorButton.ToolGoTo => EditorIcon.GoTo,
+        // The clean face; the sound renderer swaps in EditorIcon.Stop while the slot sounds,
+        // exactly as it swaps Save's two faces — one identity, two faces, one owner of the pick.
+        EditorButton.ToolPlay => EditorIcon.Play,
         // The text-faced buttons (size toggle, layer tabs) have no glyph on purpose — the
         // renderer branches on ButtonText before ever asking here, so reaching this is a bug.
         _ => throw new ArgumentOutOfRangeException(nameof(button), button, "a text-faced button has no icon (ButtonText owns its face)."),
@@ -724,7 +776,7 @@ public static class EditorIcons
         EditorButton.CodeTab => "CODE  ALT+LEFT/RIGHT WALK THE TABS",
         EditorButton.SpritesTab => "SPRITES  HOME SWITCHES   ALT+LEFT/RIGHT WALK THE TABS",
         EditorButton.TilemapTab => "MAPS  HOME SWITCHES   ALT+LEFT/RIGHT WALK THE TABS",
-        EditorButton.SoundTab => "SOUNDS - IN A LATER PORTION",
+        EditorButton.SoundTab => "SOUNDS  ALT+LEFT/RIGHT WALK THE TABS",
         EditorButton.MusicTab => "MUSIC - IN A LATER PORTION",
         EditorButton.ToolSelect => "SELECT  1 CYCLES   DRAG MARKS, GRAB INSIDE MOVES, ESC DROPS",
         EditorButton.ToolPencil => "PENCIL  2   ARROWS MOVE, Z/SPACE DRAW, X PICK, SHIFT+ARROWS SPRITE",
@@ -744,6 +796,9 @@ public static class EditorIcons
         // their meaning does not differ between screens, only one screen places them.
         EditorButton.ToolFind => "FIND  CTRL+F   ENTER OR CTRL+G WALKS, ESC CLOSES",
         EditorButton.ToolGoTo => "GO TO LINE  CTRL+L   TYPE A NUMBER, ENTER JUMPS",
+        // The sound-only button lives in THIS table for the reason the map's three and the
+        // code's two do: its meaning does not differ between screens, only one screen places it.
+        EditorButton.ToolPlay => "PLAY / STOP SLOT  SPACE",
         EditorButton.Save => "SAVE  CTRL+S",
         EditorButton.Undo => "UNDO  CTRL+Z",
         EditorButton.SizeToggle => "SPRITE SIZE  TAB CYCLES, CLICK LISTS 8/16/32",
@@ -815,6 +870,117 @@ public static class EditorIcons
             "CODE - ACTIVE   ARROWS/HOME/END/PGUP/PGDN MOVE, SHIFT SELECTS, CTRL+ARROWS BY WORD",
         _ => Tooltip(button),
     };
+
+    /// <summary>
+    /// The <b>sound</b> editor's tooltip for a button whose meaning differs on that screen,
+    /// falling through to <see cref="Tooltip(EditorButton)"/> for everything shared — the exact
+    /// shape of <see cref="MapTooltip"/> and <see cref="CodeTooltip"/>, and for the same reason:
+    /// four screens, one tooltip file, so "SAVE  CTRL+S" exists once and cannot drift.
+    ///
+    /// <para>This screen has more controls without buttons than any other — the slot selector,
+    /// three grids, two rows of cells and three stepper fields — so its own tab carries the keys
+    /// that belong to no button, which is where the parity sweep looks for them. Their labels
+    /// live below as <see cref="SfxSlotTooltip"/>, <see cref="SfxPitchTooltip"/> and their
+    /// neighbours, the way <see cref="SliderTooltip"/> does for the sheet slider.</para>
+    /// </summary>
+    public static string SfxTooltip(EditorButton button) => button switch
+    {
+        EditorButton.SoundTab =>
+            "SOUNDS - ACTIVE   ARROWS WALK STEPS, PGUP/PGDN WALK SLOTS, DEL ERASES A STEP",
+        _ => Tooltip(button),
+    };
+
+    /// <summary>The slot selector's label — the one control that chooses which of the 64 sounds is on screen.</summary>
+    public const string SfxSlotTooltip = "SLOT   PGUP/PGDN WALK THE BANK";
+
+    /// <summary>
+    /// The pitch grid's label. It names the piano rows outright, because a de-facto standard
+    /// nobody is told about is not a standard (REFERENCES-EDITORS §8 item 17).
+    /// </summary>
+    public const string SfxPitchTooltip =
+        "NOTES   ZSXDCVGBHNJM AND Q2W3ER5T6Y7UI PLAY, [ ] CHANGE OCTAVE";
+
+    /// <summary>The loop row's label — the four states and the two keys that reach them.</summary>
+    public const string SfxLoopTooltip =
+        "LOOP   ` OR CLICK SETS START, TAB OR RCLICK SETS END, AGAIN CLEARS";
+
+    /// <summary>The volume grid's label; the bottom row is the rest, which is also what Del writes.</summary>
+    public const string SfxVolumeTooltip = "VOLUME   UP/DOWN   BOTTOM ROW IS A REST, LIKE DEL";
+
+    /// <summary>The wave row's label.</summary>
+    public const string SfxWaveTooltip = "WAVE   , AND . CYCLE";
+
+    /// <summary>The effect row's label.</summary>
+    public const string SfxEffectTooltip = "EFFECT   F CYCLES";
+
+    /// <summary>The three stepper fields' labels, so each one names its keyboard twin where it is shown.</summary>
+    public static string SfxFieldTooltip(SfxField field) => field switch
+    {
+        SfxField.Speed => "SPEED - TICKS PER STEP   SHIFT+LEFT/RIGHT",
+        SfxField.Length => "LENGTH - STEPS PLAYED   SHIFT+UP/DOWN",
+        _ => "OCTAVE   [ AND ]",
+    };
+
+    /// <summary>
+    /// The label of one buttonless control of the sound screen — the single lookup its renderer
+    /// hangs a tooltip on, so every key this screen owns is discoverable from the pointer and
+    /// the input-parity sweep has one place to check. <see cref="SfxRegion.None"/> never reaches
+    /// here: the hover tracker is fed null instead.
+    /// </summary>
+    public static string SfxRegionTooltip(SfxRegion region) => region switch
+    {
+        SfxRegion.Slots => SfxSlotTooltip,
+        SfxRegion.Pitch => SfxPitchTooltip,
+        SfxRegion.Loop => SfxLoopTooltip,
+        SfxRegion.Volume => SfxVolumeTooltip,
+        SfxRegion.Waves => SfxWaveTooltip,
+        SfxRegion.Effects => SfxEffectTooltip,
+        SfxRegion.Speed => SfxFieldTooltip(SfxField.Speed),
+        SfxRegion.Length => SfxFieldTooltip(SfxField.Length),
+        SfxRegion.Octave => SfxFieldTooltip(SfxField.Octave),
+        _ => throw new ArgumentOutOfRangeException(
+            nameof(region), region, "SfxRegion.None is not a control and has no label."),
+    };
+
+    /// <summary>
+    /// A click on a live, non-tab icon-button of the <b>sound</b> editor — the fourth twin of
+    /// <see cref="ClickButton"/>, <see cref="ClickMapButton"/> and <see cref="ClickCodeButton"/>,
+    /// headless for the same reason: the routing table has to exist where no graphics device is
+    /// required, so a contract test can click every placed button and catch the "placed but
+    /// never wired" defect on arrival. Returns true when the click means "leave the editor" (the
+    /// exit tab), which is <see cref="ShellModeMachine"/>'s verb and not the session's. Tab
+    /// clicks never come here: <see cref="TabTarget"/> answers them first.
+    ///
+    /// <para><b>Two owners of state, one router.</b> The slot on screen, the cursor, the pen and
+    /// the request to play are what the author is <em>looking at</em>, not what <c>sfx.bin</c>
+    /// holds, so they live in <see cref="SfxEditorView"/>; the bank's own three verbs live in the
+    /// session. This table takes both halves, and nothing else decides what a sound button
+    /// means.</para>
+    /// </summary>
+    public static bool ClickSfxButton(SfxEditorSession session, SfxEditorView view, EditorButton button)
+    {
+        ArgumentNullException.ThrowIfNull(session);
+        ArgumentNullException.ThrowIfNull(view);
+        switch (button)
+        {
+            case EditorButton.ExitTab:
+                return true;                        // clean → back; dirty → the prompt — SfxEditorView judges
+            case EditorButton.ToolPlay:
+                view.TogglePlay();                  // Space is its key; the wiring drives the APU
+                return false;
+            case EditorButton.Save:
+                session.Save();                     // the modified/saved icon IS this button — click = Ctrl+S
+                return false;
+            case EditorButton.Undo:
+                session.Undo();
+                return false;
+            case EditorButton.Redo:
+                session.Redo();
+                return false;
+            default:
+                return false;                       // the music stub: nothing to do here
+        }
+    }
 
     /// <summary>Swatch tooltip: the keyboard color mechanism, discoverable where the colors are.</summary>
     public static string SwatchTooltip(int color) => $"COLOR {color}   , PREV   . NEXT";

@@ -1,6 +1,47 @@
 namespace Quarp.Shell.Desktop;
 
 /// <summary>
+/// The <b>sound</b> screen's controls that are not buttons, as one name each — the slot
+/// selector, the three grids, the two rows of cells and the three stepper fields. It exists for
+/// the reason <see cref="HoverTarget.Slider"/> and <see cref="HoverTarget.Flag"/> exist one
+/// screen over: a control with no button has nowhere to hang its hotkey, and
+/// REFERENCES-EDITORS §8 item 15 makes a dense 160x90 UI learnable through exactly these labels.
+/// One field instead of nine, because "which region is under the pointer" is one fact.
+/// </summary>
+public enum SfxRegion
+{
+    /// <summary>The pointer is over none of them.</summary>
+    None,
+
+    /// <summary>The 64-slot selector.</summary>
+    Slots,
+
+    /// <summary>The pitch grid — where the piano rows write.</summary>
+    Pitch,
+
+    /// <summary>The loop marker row.</summary>
+    Loop,
+
+    /// <summary>The volume grid.</summary>
+    Volume,
+
+    /// <summary>The six waveform cells.</summary>
+    Waves,
+
+    /// <summary>The seven effect cells.</summary>
+    Effects,
+
+    /// <summary>The speed field and its two steppers.</summary>
+    Speed,
+
+    /// <summary>The length field.</summary>
+    Length,
+
+    /// <summary>The octave field.</summary>
+    Octave,
+}
+
+/// <summary>
 /// What the mouse is hovering in the sprite editor: an icon-button, a palette swatch, a
 /// variant button inside an open group flyout (since wave 2e — the 3-second tooltip contract
 /// extends to variants by the order), the sheet scroll slider (wave 2h — the slider has
@@ -31,20 +72,27 @@ public readonly record struct HoverTarget
     /// <summary>The hovered flag toggle 0-7, or -1 otherwise.</summary>
     public int Flag { get; init; }
 
+    /// <summary>Which buttonless region of the SOUND screen is hovered, or <see cref="SfxRegion.None"/>.</summary>
+    public SfxRegion Sfx { get; init; }
+
     public static HoverTarget OfButton(EditorButton button) =>
-        new() { Button = button, Swatch = -1, FlyoutSlot = null, FlyoutVariant = -1, Slider = false, Flag = -1 };
+        new() { Button = button, Swatch = -1, FlyoutSlot = null, FlyoutVariant = -1, Slider = false, Flag = -1, Sfx = SfxRegion.None };
 
     public static HoverTarget OfSwatch(int swatch) =>
-        new() { Button = null, Swatch = swatch, FlyoutSlot = null, FlyoutVariant = -1, Slider = false, Flag = -1 };
+        new() { Button = null, Swatch = swatch, FlyoutSlot = null, FlyoutVariant = -1, Slider = false, Flag = -1, Sfx = SfxRegion.None };
 
     public static HoverTarget OfFlyoutVariant(EditorButton slot, int variant) =>
-        new() { Button = null, Swatch = -1, FlyoutSlot = slot, FlyoutVariant = variant, Slider = false, Flag = -1 };
+        new() { Button = null, Swatch = -1, FlyoutSlot = slot, FlyoutVariant = variant, Slider = false, Flag = -1, Sfx = SfxRegion.None };
 
     public static HoverTarget OfSlider() =>
-        new() { Button = null, Swatch = -1, FlyoutSlot = null, FlyoutVariant = -1, Slider = true, Flag = -1 };
+        new() { Button = null, Swatch = -1, FlyoutSlot = null, FlyoutVariant = -1, Slider = true, Flag = -1, Sfx = SfxRegion.None };
+
+    /// <summary>The sound screen's buttonless controls; every other field is filled so kinds cannot collide.</summary>
+    public static HoverTarget OfSfxRegion(SfxRegion region) =>
+        new() { Button = null, Swatch = -1, FlyoutSlot = null, FlyoutVariant = -1, Slider = false, Flag = -1, Sfx = region };
 
     public static HoverTarget OfFlag(int bit) =>
-        new() { Button = null, Swatch = -1, FlyoutSlot = null, FlyoutVariant = -1, Slider = false, Flag = bit };
+        new() { Button = null, Swatch = -1, FlyoutSlot = null, FlyoutVariant = -1, Slider = false, Flag = bit, Sfx = SfxRegion.None };
 }
 
 /// <summary>

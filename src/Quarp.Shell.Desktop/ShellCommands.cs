@@ -321,6 +321,38 @@ public readonly struct ShellCommands
     /// only reference that has both.
     /// </summary>
     public bool CodeGoToLine { get; init; }
+
+    // ---- the sound editor's own key ----
+
+    /// <summary>
+    /// Sound editor: which <b>piano</b> key was struck this frame, as a <b>1-based</b> index
+    /// into the two standard rows, 0 for none — the shape <see cref="EditorToolDigit"/> and
+    /// <see cref="EditorFlagDigit"/> already use, so a default-constructed frame means "nothing
+    /// was struck" rather than "the lowest C". Keys 1-12 are the lower row <c>zsxdcvgbhnjm</c>
+    /// in the current octave; 13-25 are the upper row <c>q2w3er5t6y7ui</c> an octave above it,
+    /// thirteen keys ending on the C that closes the octave. Those two strings are TIC-80's and PICO-8's
+    /// letter for letter (REFERENCES-EDITORS §8 item 17 calls them a de-facto standard and
+    /// forbids drifting), and <see cref="SfxEditorView.NoteOfPianoKey"/> turns the index into a
+    /// semitone.
+    ///
+    /// <para><b>Why one field for twenty-five keys, and why the digits appear twice.</b> "One
+    /// field per physical press" is a rule about <em>facts</em>, not about key codes: which
+    /// piano key was struck is one fact, and fifteen new letter fields would be fifteen owners
+    /// of it. Five of the twenty-five keys — 2, 3, 5, 6, 7 — also reach
+    /// <see cref="EditorToolDigit"/>, and Z, X, B, V and R also reach <see cref="MenuConfirm"/>,
+    /// <see cref="MenuEditor"/>, <see cref="EditorToolToggle"/>, <see cref="EditorFlipV"/> and
+    /// <see cref="EditorRotate"/>. That is the same shape <see cref="EditorSheetDx"/> and
+    /// <see cref="MenuLeft"/> have carried since wave 2h, and it is resolved the same way and in
+    /// the same place: <b>the gate belongs where the meaning differs</b>. The sound screen's
+    /// router reads this field and ignores those six; every other screen reads those six and
+    /// never looks here. Putting the gate in this reader instead would take Shift+Down away from
+    /// the library all over again.</para>
+    ///
+    /// <para>Ctrl- and Shift-guarded, so Ctrl+Z stays undo, Ctrl+V stays paste and Shift+arrows
+    /// stay the field steppers — the standing rule that a chord must not double as its bare
+    /// key.</para>
+    /// </summary>
+    public int SfxPianoKey { get; init; }
 }
 
 /// <summary>
@@ -443,6 +475,10 @@ public sealed class ShellCommandReader
             CodeFind = ctrl && Pressed(keyboard, Keys.F),
             CodeFindNext = ctrl && Pressed(keyboard, Keys.G),
             CodeGoToLine = ctrl && Pressed(keyboard, Keys.L),
+            // The sound editor's piano. Guarded on both modifiers so the chords above keep
+            // their keys; see the field's own comment for why the five digits and the five
+            // letters it shares with other fields are gated in the router and not here.
+            SfxPianoKey = ctrl || shift ? 0 : PianoKey(keyboard),
         };
         _previous = keyboard;
         return commands;
@@ -467,6 +503,32 @@ public sealed class ShellCommandReader
         for (int i = 0; i < SpriteEditorSession.FlagBits; i++)
         {
             if (Pressed(keyboard, Keys.D1 + i))
+            {
+                return i + 1;
+            }
+        }
+        return 0;
+    }
+
+    /// <summary>
+    /// The two piano rows, in semitone order, exactly as TIC-80 and PICO-8 spell them:
+    /// <c>z s x d c v g b h n j m</c> is C to B of the current octave, and
+    /// <c>q 2 w 3 e r 5 t 6 y 7 u i</c> is C to C an octave above. The array IS the layout —
+    /// one owner, so the letters cannot be right in the reader and wrong in a tooltip.
+    /// </summary>
+    private static readonly Keys[] PianoRows =
+    {
+        Keys.Z, Keys.S, Keys.X, Keys.D, Keys.C, Keys.V, Keys.G, Keys.B, Keys.H, Keys.N, Keys.J, Keys.M,
+        Keys.Q, Keys.D2, Keys.W, Keys.D3, Keys.E, Keys.R, Keys.D5, Keys.T, Keys.D6, Keys.Y, Keys.D7,
+        Keys.U, Keys.I,
+    };
+
+    /// <summary>First freshly struck piano key as a 1-based index, 0 for none — the same one-key-per-frame rule the toolbar and flag digits follow.</summary>
+    private int PianoKey(KeyboardState keyboard)
+    {
+        for (int i = 0; i < PianoRows.Length; i++)
+        {
+            if (Pressed(keyboard, PianoRows[i]))
             {
                 return i + 1;
             }

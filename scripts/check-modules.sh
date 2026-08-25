@@ -125,9 +125,13 @@ LAYERS=(
   "SpriteEditorSession.cs|1"   # модель листа спрайтов, undo, запись в картридж
   "MapEditorSession.cs|1"      # модель карты и флагов
   "CodeEditorSession.cs|1"     # модель текста src/main.cs: курсор, выделение, undo, поиск (+CodeMove, CodePosition)
+  "SfxEditorSession.cs|1"      # модель банка sfx.bin: 64 слота, шаги, петли, undo
+  "MusicEditorSession.cs|1"    # модель банка music.bin: 64 паттерна x 4 канала, флаги, undo (+IMusicClipboard, MusicMemoryClipboard)
   "CartLibrary.cs|1"           # какие картриджи есть на диске (+CartLibraryEntry)
   "ShellMode.cs|1"             # словарь режимов: четыре имени, ноль зависимостей
-  "PixelFontMetrics.cs|1"      # арифметика метрик текста, без устройства
+  "PixelFontMetrics.cs|1"      # арифметика метрик текста, без устройства (хостовый путь)
+  "FramePlacement.cs|1"        # масштаб и центрирование кадра И обратный перевод окно->консоль
+  "ShellScreen.cs|1"           # консоль оболочки: свой VirtualConsole профиля 8, без устройства
   "PaletteColors.cs|1"         # Master32 -> Color, три сдвига, один владелец
   "TimeSpeed.cs|1"             # ступень лестницы скоростей, точная дробь
   "TickAccumulator.cs|1"       # фиксированный шаг: копит время, отдаёт тики
@@ -144,6 +148,8 @@ LAYERS=(
   "MapEditorView.cs|2"         # камера/курсор карты (+MapEditorTileStep, MapEditorPaint)
   "CodeEditorLayout.cs|2"      # раскладка экрана кода: текст, номера строк, скроллбар
   "CodeEditorView.cs|2"        # прокрутка и строки поиска/перехода (+ITextClipboard, InMemoryTextClipboard)
+  "SfxEditorLayout.cs|2"       # раскладка экрана звука: три сетки, селектор слотов, панель (+SfxField)
+  "SfxEditorView.cs|2"         # слот/курсор/перо/октава и запрос проигрывания
   "SheetScroll.cs|2"           # страничная раскладка листа и слайдер (+SheetStrip)
   "EditorSheetStep.cs|2"       # один шаг выбора спрайта с клавиатуры
   "EditorIcons.cs|2"           # таблица кнопок/иконок/подсказок (+EditorButton, EditorIcon)
@@ -151,6 +157,14 @@ LAYERS=(
   "ToolbarFlyout.cs|2"         # состояние флаута группового слота
   "SelectionOutline.cs|2"      # геометрия бегущих муравьёв (+AntDash)
   "MainMenuLayout.cs|2"        # раскладка экрана главного меню
+  "ConsoleIcons.cs|2"          # маски EditorIcons на консоли: Pset по маске, без текстуры
+  "LibraryLayout.cs|2"         # раскладка библиотеки в пикселях консоли (160x90)
+  # LibraryRenderer переехал сюда из «рендера» в волне R1. Причина ровно та, по которой слой
+  # назначается файлу, а не типу: слой 3 — это «владеет ресурсом устройства», а этот файл
+  # больше не владеет ничем — он рисует в кадровый буфер оболочки вызовами ядра
+  # (Cls/RectFill/Print) и конструируется в headless-тесте. Проверяемая примета слоя 2
+  # выполняется буквально: LibraryScreenGoldenTests строит его без GraphicsDevice.
+  "LibraryRenderer.cs|2"       # пиксели экрана библиотеки — в консоли, не в окне
 
   # --- 3 «рендер»: владеет ресурсом устройства ---
   "PixelFontAtlas.cs|3"        # текстурная полоса глифов
@@ -159,7 +173,8 @@ LAYERS=(
   "SpriteEditorRenderer.cs|3"  # пиксели экрана спрайтов
   "MapEditorRenderer.cs|3"     # пиксели экрана карты
   "CodeEditorRenderer.cs|3"    # пиксели экрана кода
-  "LibraryRenderer.cs|3"       # пиксели экрана библиотеки
+  "SfxEditorRenderer.cs|3"     # пиксели экрана звука
+  "ConsolePresenter.cs|3"      # единственная дорога кадра: буфер -> текстура -> окно
   "ShellOverlay.cs|3"          # текстовый слой поверх кадра
   "MainMenuRenderer.cs|3"      # пиксели главного меню
   "AudioOutput.cs|3"           # OpenAL-устройство
@@ -173,6 +188,7 @@ LAYERS=(
   "SpriteEditorInput.cs|4"     # роутер ввода экрана спрайтов (+EditorShell)
   "MapEditorInput.cs|4"        # роутер ввода экрана карты
   "CodeEditorInput.cs|4"       # роутер ввода экрана кода (клавиши + поток символов)
+  "SfxEditorInput.cs|4"        # роутер ввода экрана звука (пиано-ряды, сетки, поля)
   "QuarpGame.cs|4"             # игровой цикл окна
   "Program.cs|4"               # точка входа
 )

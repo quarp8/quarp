@@ -541,6 +541,9 @@ public class InputParityInstrumentTests : IDisposable
             // code editor it is the start of the line — so the tab strip's own key is
             // Alt+Left/Right (REFERENCES-EDITORS 8.16), and it is what this tooltip must name.
             [EditorButton.CodeTab] = "ALT+",
+            // Live since the sound-editor screen wave, and reachable the same way: the tab strip
+            // is a ring walked by Alt+Left/Right, so that is the key its tooltip must name.
+            [EditorButton.SoundTab] = "ALT+",
         };
 
         foreach (EditorButtonPlace place in SpriteEditorLayout.Compute(1280, 720, regionCells: 1).Buttons)

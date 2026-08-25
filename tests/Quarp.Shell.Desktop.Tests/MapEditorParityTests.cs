@@ -359,6 +359,8 @@ public class MapEditorParityTests : IDisposable
             // Live since the code-editor screen wave; Alt+Left/Right walk the strip (see the
             // sprite screen's twin of this table for why it is not Home).
             [EditorButton.CodeTab] = "ALT+",
+            // Live since the sound-editor screen wave; same key, same reason as the code tab.
+            [EditorButton.SoundTab] = "ALT+",
             // The four tools carry their digits (TIC-80's own numbering); the map's keyboard
             // pencil is bare Z since wave 3d, because Space became the pan modifier there.
             [EditorButton.ToolPencil] = "Z DRAWS",

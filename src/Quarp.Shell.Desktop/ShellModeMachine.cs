@@ -123,6 +123,18 @@ public sealed class ShellModeMachine
     /// <summary>The code screen's scroll, footer fields and exit prompt; non-null exactly while <see cref="CodeEditor"/> is.</summary>
     public CodeEditorView? CodeView { get; private set; }
 
+    /// <summary>
+    /// The open effects bank of the same cart's <c>sfx.bin</c>, created lazily by the first
+    /// visit to the SOUND tab and then kept until the whole editor closes — so flipping tabs
+    /// never costs an unsaved note. Null until that first visit: a cart whose sound is never
+    /// opened must not get a session (and therefore cannot get an <c>sfx.bin</c>) it never
+    /// asked for.
+    /// </summary>
+    public SfxEditorSession? SfxEditor { get; private set; }
+
+    /// <summary>The sound screen's slot, cursor, pen, playback request and exit prompt; non-null exactly while <see cref="SfxEditor"/> is.</summary>
+    public SfxEditorView? SfxView { get; private set; }
+
     /// <summary>The folder both editor sessions belong to — remembered because a session does not carry its own path.</summary>
     private string? _editorFolder;
 
@@ -182,6 +194,12 @@ public sealed class ShellModeMachine
                 if (CodeView!.RequestClose(CodeEditor!))
                 {
                     CloseAfterCodeResolved();
+                }
+                break;
+            case ShellMode.SfxEditor:
+                if (SfxView!.RequestClose(SfxEditor!))
+                {
+                    CloseAfterSfxResolved();
                 }
                 break;
             default:
@@ -376,15 +394,18 @@ public sealed class ShellModeMachine
     }
 
     /// <summary>
-    /// The tilemap and sprites tabs, clicked or keyed — the one door between the editor's two
-    /// faces (<see cref="EditorIcons.TabTarget"/> owns which button means which). Asking for
-    /// the tab already on screen is the honest no-op the tab strip promises. The map session is
-    /// born here, on first arrival, and a cart whose map.bin is the wrong length reports the way
-    /// a failed launch does instead of throwing the shell away.
+    /// The four live tabs — sprites, tilemap, code and sound — clicked or keyed: the one door
+    /// between the faces of one open cartridge (<see cref="EditorIcons.TabTarget"/> owns which
+    /// button means which). Asking for the tab already on screen is the honest no-op the tab
+    /// strip promises. Every session but the sheet's is born here, on first arrival, and a bank
+    /// that will not load — a map.bin of the wrong length, an unreadable src/main.cs, an sfx.bin
+    /// that breaks a rule of AUDIO-FORMAT §5 — reports the way a failed launch does instead of
+    /// throwing the shell away.
     /// </summary>
     public void SwitchEditorTab(ShellMode target)
     {
-        if (Mode is not (ShellMode.Editor or ShellMode.MapEditor or ShellMode.CodeEditor))
+        if (Mode is not (ShellMode.Editor or ShellMode.MapEditor or ShellMode.CodeEditor
+            or ShellMode.SfxEditor))
         {
             return;
         }
@@ -411,19 +432,42 @@ public sealed class ShellModeMachine
             Mode = ShellMode.MapEditor;
             return;
         }
-        if (target != ShellMode.CodeEditor)
+        if (target == ShellMode.CodeEditor)
+        {
+            if (CodeEditor is null)
+            {
+                try
+                {
+                    // The same lazy birth and the same failure rule as the map's: an unreadable
+                    // src/main.cs reports the way a failed launch does and leaves the tab the
+                    // author is standing on exactly where it was.
+                    CodeEditor = new CodeEditorSession(_editorFolder!);
+                    CodeView = new CodeEditorView();
+                }
+                catch (Exception e) when (e is CartLoadException or IOException or UnauthorizedAccessException)
+                {
+                    LibraryMessage = $"{Editor!.CartName}: {FirstLine(e.Message)}";
+                    return;
+                }
+            }
+            Mode = ShellMode.CodeEditor;
+            return;
+        }
+        if (target != ShellMode.SfxEditor)
         {
             return;
         }
-        if (CodeEditor is null)
+        if (SfxEditor is null)
         {
             try
             {
-                // The same lazy birth and the same failure rule as the map's: an unreadable
-                // src/main.cs reports the way a failed launch does and leaves the tab the author
-                // is standing on exactly where it was.
-                CodeEditor = new CodeEditorSession(_editorFolder!);
-                CodeView = new CodeEditorView();
+                // The fourth lazy birth, same rule as the other three: a corrupt sfx.bin — wrong
+                // magic, wrong length, a step past the slot's end that is not the zero word —
+                // reports the way a failed launch does and leaves the tab the author is standing
+                // on exactly where it was. A cart with no sfx.bin at all opens silently, because
+                // an absent bank is 64 empty slots and not an error (AUDIO-FORMAT §1).
+                SfxEditor = new SfxEditorSession(_editorFolder!);
+                SfxView = new SfxEditorView();
             }
             catch (Exception e) when (e is CartLoadException or IOException or UnauthorizedAccessException)
             {
@@ -431,10 +475,10 @@ public sealed class ShellModeMachine
                 return;
             }
         }
-        Mode = ShellMode.CodeEditor;
+        Mode = ShellMode.SfxEditor;
     }
 
-    /// <summary>The keyboard half of the tab strip: Home flips between the two graphics faces.</summary>
+    /// <summary>The keyboard half of the tab strip: Home flips between the two GRAPHICS faces. The code and sound screens are reached by Alt+Left/Right, which is the ring that can hold four stops.</summary>
     public void ToggleEditorTab() =>
         SwitchEditorTab(Mode == ShellMode.MapEditor ? ShellMode.Editor : ShellMode.MapEditor);
 
@@ -447,7 +491,8 @@ public sealed class ShellModeMachine
     /// </summary>
     public void CycleEditorTab(int direction)
     {
-        if (Mode is not (ShellMode.Editor or ShellMode.MapEditor or ShellMode.CodeEditor))
+        if (Mode is not (ShellMode.Editor or ShellMode.MapEditor or ShellMode.CodeEditor
+            or ShellMode.SfxEditor))
         {
             return;
         }
@@ -542,6 +587,31 @@ public sealed class ShellModeMachine
         CloseAfterCodeResolved();
     }
 
+    /// <summary>Z on the sound screen's exit prompt — the bank half of <see cref="SaveEditorAndClose"/>, same failure rule: a write that did not land keeps the editor and the author's notes alive with the error in the footer.</summary>
+    public void SaveSfxAndClose()
+    {
+        if (Mode != ShellMode.SfxEditor || SfxView is not { ExitPromptShown: true })
+        {
+            return;
+        }
+        if (SfxEditor!.Save())
+        {
+            SfxView.CloseExitPrompt();
+            CloseAfterSfxResolved();
+        }
+    }
+
+    /// <summary>X on the sound screen's exit prompt: leave the notes unsaved — <c>sfx.bin</c> stays byte-for-byte untouched, and a cart that never had one still does not.</summary>
+    public void DiscardSfxAndClose()
+    {
+        if (Mode != ShellMode.SfxEditor || SfxView is not { ExitPromptShown: true })
+        {
+            return;
+        }
+        SfxView.CloseExitPrompt();
+        CloseAfterSfxResolved();
+    }
+
     /// <summary>The sheet's half of the exit is settled — now every other open bank's.</summary>
     private void CloseAfterSheetResolved() => CloseUnlessAnotherBankIsDirty(ShellMode.Editor);
 
@@ -550,6 +620,9 @@ public sealed class ShellModeMachine
 
     /// <summary>The code's half is settled.</summary>
     private void CloseAfterCodeResolved() => CloseUnlessAnotherBankIsDirty(ShellMode.CodeEditor);
+
+    /// <summary>The sound bank's half is settled.</summary>
+    private void CloseAfterSfxResolved() => CloseUnlessAnotherBankIsDirty(ShellMode.SfxEditor);
 
     /// <summary>
     /// One bank of the open cartridge has just been answered for; if any <em>other</em> open
@@ -592,6 +665,15 @@ public sealed class ShellModeMachine
             }
             return;
         }
+        if (resolved != ShellMode.SfxEditor && SfxEditor is { IsDirty: true } sfx)
+        {
+            Mode = ShellMode.SfxEditor;
+            if (!SfxView!.ExitPromptShown)
+            {
+                SfxView.RequestClose(sfx);
+            }
+            return;
+        }
         CloseEditor();
     }
 
@@ -608,6 +690,8 @@ public sealed class ShellModeMachine
         MapView = null;
         CodeEditor = null;
         CodeView = null;
+        SfxEditor = null;
+        SfxView = null;
         _editorFolder = null;
         Mode = ShellMode.Library;
         Library.Rescan();

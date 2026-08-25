@@ -3,16 +3,20 @@ using Microsoft.Xna.Framework.Input;
 namespace Quarp.Shell.Desktop;
 
 /// <summary>
-/// One frame of mouse input for the editor, already edge-detected — the pointer sibling of
-/// <see cref="ShellCommands"/>. The mouse exists in the shell for the first time in M9 stage 2
-/// and <b>only the editor reads it</b>: the library stays keyboard-driven (work order), so
-/// this struct is consumed in exactly one mode and carries only what the pencil, the
-/// eyedropper and the two click targets (swatches, sheet grid) need.
+/// One frame of mouse input, already edge-detected — the pointer sibling of
+/// <see cref="ShellCommands"/>. The mouse exists in the shell for the first time in M9 stage 2.
+/// It was the editor's alone while the library was keyboard-only (work order); wave R1 moved
+/// the library onto the console, which gave it a grid to point at, so this struct is now read
+/// there too. Its fields are still shaped by the editor's needs — the pencil, the eyedropper,
+/// the swatches and the sheet grid — and the library uses only <see cref="LeftPressed"/>.
 ///
-/// <para>Positions are window-client pixels, the same space
-/// <c>GraphicsDevice.PresentationParameters</c> reports and <see cref="SpriteEditorLayout"/>
-/// is computed in, so hit tests need no conversion — the "scale" between mouse and screen is
-/// handled by the layout being measured from the same window every frame.</para>
+/// <para><b>Positions are window-client pixels</b>, the same space
+/// <c>GraphicsDevice.PresentationParameters</c> reports. What a reader does with them differs
+/// by screen, and that difference is the whole of wave R1 at this layer: the four
+/// host-resolution editor screens hit-test directly, because their layouts are measured from
+/// the same window every frame; a screen drawn on the console must first convert through
+/// <see cref="FramePlacement"/>, the single owner of window-to-console coordinates. No screen
+/// may do that arithmetic itself.</para>
 /// </summary>
 public readonly struct EditorMouse
 {

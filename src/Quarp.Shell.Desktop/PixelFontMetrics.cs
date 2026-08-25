@@ -31,12 +31,20 @@ public static class PixelFontMetrics
     public static int LineHeight(int scale) => SystemFont.CellHeight * scale;
 
     /// <summary>
-    /// Whole-integer host-UI text scale from the window size — one formula for every host
-    /// screen (library, sprite editor), living with the font's metrics because it is a fact
-    /// about text density. Anchored at 320x180 rather than the console's 160x90 because host
-    /// UI wants density, not console-sized letters: a 1280x720 window gets x4 (24 px line
-    /// height, ~28 rows), and the floor of 2 keeps text legible in a window shrunk below the
-    /// anchor.
+    /// Whole-integer host-UI text scale from the window size. Anchored at 320x180 rather than
+    /// the console's 160x90 because host UI wanted density, not console-sized letters: a
+    /// 1280x720 window gets x4 (24 px line height, ~28 rows), and the floor of 2 keeps text
+    /// legible in a window shrunk below the anchor.
+    ///
+    /// <para><b>This anchor is repealed and this formula is on its way out</b> (owner,
+    /// 2026-08-25: "in PICO-8 the resolution and colours of the screen are the same not only
+    /// for every game but for every tool and interface of the console itself — this is an
+    /// unbreakable rule"). A 320x180 text grid laid over a 160x90 console is a second machine,
+    /// and the shell is not allowed a second machine. Wave R1 built the road off it — a shell
+    /// console of its own (<c>ShellScreen</c>), one frame path (<c>ConsolePresenter</c>), one
+    /// coordinate owner (<c>FramePlacement</c>) — and moved the library across as the proof.
+    /// The four editor screens and the boot menu still read this; they are the queue, and this
+    /// file goes away with the last of them. Do not add callers.</para>
     /// </summary>
     public static int UiScale(int width, int height) =>
         Math.Max(2, Math.Min(width / 320, height / 180));

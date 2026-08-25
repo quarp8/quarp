@@ -304,12 +304,14 @@ public class SpriteEditorLayoutTests
     [Fact]
     public void ExactlyTheVerdictsButtonsAreStubs()
     {
-        // The tilemap tab left this list in M9 stage 3 and the CODE tab in the code-editor
-        // screen wave — both editors landed, so both icons are live and EditorIcons.TabTarget
-        // routes them. Sounds and music remain honestly dead.
+        // The tilemap tab left this list in M9 stage 3, the CODE tab in the code-editor screen
+        // wave and the SOUND tab in the sound-editor screen wave — all three editors landed, so
+        // all three icons are live and EditorIcons.TabTarget routes them. Music alone remains
+        // honestly dead: it has no editor, and a button with nothing behind it must look and act
+        // dead until it has one.
         var stubs = new[]
         {
-            EditorButton.SoundTab, EditorButton.MusicTab,
+            EditorButton.MusicTab,
         };
         foreach (EditorButton button in AllButtons)
         {

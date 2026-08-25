@@ -1,119 +1,156 @@
+using System.Globalization;
 using Microsoft.Xna.Framework;
-using Microsoft.Xna.Framework.Graphics;
 using Quarp.Core;
 
 namespace Quarp.Shell.Desktop;
 
 /// <summary>
-/// Draws the library screen — the console's face when no cartridge is running (the sprite
-/// editor has its own renderer, <see cref="SpriteEditorRenderer"/>, because it also owns a
-/// sheet texture). Host UI, deliberately unlike the game presenter: it paints at the window's
-/// native resolution (an organizer decision for M9 stage 1 — this is the host's screen, not
-/// the virtual one), but on <see cref="Palette.Master32"/> colours and the system font, so it
-/// still reads as the console and not as an OS dialog.
+/// Draws the library screen — the console's face when no cartridge is running — onto the
+/// <b>console itself</b>. Wave R1: this file used to paint at the window's native resolution
+/// through <c>PixelFontAtlas</c> and a <c>GraphicsDevice</c>; it now calls <c>Cls</c>,
+/// <c>RectFill</c> and <c>Print</c> on a <see cref="ShellScreen"/>, the same calls a cartridge
+/// makes, and the result is presented by the same <see cref="ConsolePresenter"/> the cartridge
+/// frame goes through.
 ///
-/// <para>Nothing here can touch a framebuffer or a hash: the golden master is the cartridge's
-/// frame, and no cartridge is running while this draws. That is also why this file needs no
-/// determinism care — it may measure the window every frame and lay out from it.</para>
+/// <para><b>What that changed and why.</b> The owner's law of 2026-08-25: the console's
+/// resolution and colours are the same for every game <em>and for every tool of the console
+/// itself</em>. The old host path was a second machine — 320x180-anchored text density over a
+/// 160x90 console — and this screen was its main inhabitant. Three things follow from the
+/// move, all visible to a player: the list holds nine rows instead of the two dozen a 720p
+/// window used to give it (<see cref="LibraryLayout"/> explains the arithmetic), the footer
+/// hint is re-cut to fit 40 columns, and a long name is truncated at 38 characters instead of
+/// running off a wide window. That is what the console's real screen affords, and it is the
+/// size PICO-8's and TIC-80's own cart lists live inside.</para>
+///
+/// <para><b>The gain is not cosmetic.</b> A screen drawn into a framebuffer can be hashed by
+/// <see cref="FrameHash"/>, exactly as a cartridge's frame is, and that is what
+/// <c>LibraryScreenGoldenTests</c> does. Layout regressions on this screen were previously
+/// undetectable by any test in the suite — there was no buffer to look at, only a
+/// <c>SpriteBatch</c> nobody could run headless.</para>
+///
+/// <para><b>Not the cartridge's console.</b> The framebuffer written here belongs to the
+/// shell (<see cref="ShellScreen"/>); the golden master the CI compares between architectures
+/// is <see cref="CartSession"/>'s, and no call in this file can reach it.</para>
 /// </summary>
-public sealed class LibraryRenderer : IDisposable
+public static class LibraryRenderer
 {
-    private readonly GraphicsDevice _device;
-    private readonly PixelFontAtlas _font;
-    private readonly Texture2D _white;
+    // The library's fixed cast of palette roles — the same six the host-resolution version
+    // used, now as console colour slots rather than unpacked RGB. Indices are Master32's
+    // documented visible slots (Palette.cs): 0 ink, 1 gray, 2 light gray, 3 white, 4 blue,
+    // 10 red. With no Pal remap in force (ShellScreen.Begin resets it) slot n is master n.
+    private const byte Ink = 0;
+    private const byte Dim = 1;
+    private const byte Text = 2;
+    private const byte Bright = 3;
+    private const byte SelectionBar = 4;
+    private const byte Error = 10;
 
-    // The library's fixed cast of palette roles. Indices are Master32's documented visible
-    // slots (Palette.cs): 0 ink, 1 gray, 2 light gray, 3 white, 4 blue, 10 red.
-    private static readonly Color Ink = PaletteColors.Opaque(0);
-    private static readonly Color Dim = PaletteColors.Opaque(1);
-    private static readonly Color Text = PaletteColors.Opaque(2);
-    private static readonly Color Bright = PaletteColors.Opaque(3);
-    private static readonly Color SelectionBar = PaletteColors.Opaque(4);
-    private static readonly Color Error = PaletteColors.Opaque(10);
+    /// <summary>The whole of the footer, cut to 40 columns. Was 51 characters at host resolution.</summary>
+    private const string FooterHint = "^V SELECT  Z PLAY  X EDIT  ESC MENU";
 
-    public LibraryRenderer(GraphicsDevice device)
+    /// <summary>
+    /// The layout the screen is drawn with. Public because the input router needs the same
+    /// rows the renderer drew in order to answer a click, and computing them twice from two
+    /// call sites is how a hit test drifts one row away from the picture.
+    /// </summary>
+    public static LibraryLayout LayoutFor(ShellScreen screen, CartLibrary library, string? message)
     {
-        ArgumentNullException.ThrowIfNull(device);
-        _device = device;
-        _font = new PixelFontAtlas(device);
-        _white = new Texture2D(device, 1, 1);
-        _white.SetData(new[] { Color.White });
+        ArgumentNullException.ThrowIfNull(screen);
+        ArgumentNullException.ThrowIfNull(library);
+        return LibraryLayout.Compute(
+            screen.Width, screen.Height, library.Entries.Count, library.SelectedIndex, message is not null);
     }
 
     /// <summary>
-    /// One frame of the library. Owns the whole surface (clears, begins and ends the batch):
-    /// callers hand over the window, not a layer.
+    /// One frame of the library. Owns the whole surface: it resets the console's drawing state
+    /// and clears, so nothing another screen left behind can bend these pixels.
     /// </summary>
     /// <param name="message">The last failed launch's message, or null (ShellModeMachine.LibraryMessage).</param>
-    public void DrawLibrary(SpriteBatch batch, int width, int height, CartLibrary library, string? message)
+    /// <returns>The layout used, so a test can assert against exactly what was drawn.</returns>
+    public static LibraryLayout Draw(ShellScreen screen, CartLibrary library, string? message)
     {
-        ArgumentNullException.ThrowIfNull(batch);
-        ArgumentNullException.ThrowIfNull(library);
-        _device.Clear(Ink);
-        int scale = PixelFontAtlas.UiScale(width, height);
-        int margin = 4 * scale;
-        batch.Begin(samplerState: SamplerState.PointClamp);
+        LibraryLayout layout = LayoutFor(screen, library, message);
+        VirtualConsole console = screen.Console;
+        screen.Begin();
+        console.Cls(Ink);
 
-        int y = margin;
-        _font.Draw(batch, "QUARP", margin, y, scale * 2, Bright);
-        _font.Draw(batch, "GAME LIBRARY", margin + PixelFontAtlas.MeasureWidth("QUARP ", scale * 2), y + PixelFontAtlas.LineHeight(scale), scale, Dim);
-        y += PixelFontAtlas.LineHeight(scale * 2) + scale * 2;
+        // The header. The second word is placed at the cursor Print returns rather than at a
+        // measured offset: the font owns its own advance, and asking it is one owner fewer.
+        int after = console.Print("QUARP", LibraryLayout.Margin, LibraryLayout.TitleY, Bright);
+        console.Print("GAME LIBRARY", after + SystemFont.CellWidth, LibraryLayout.TitleY, Dim);
 
-        // The bottom strip: key hints always, the error line above them only when there is one.
-        int footerY = height - margin - PixelFontAtlas.LineHeight(scale);
-        _font.Draw(batch, "UP/DOWN SELECT   Z/ENTER PLAY   X EDITOR   ESC MENU", margin, footerY, scale, Dim);
-        int listBottom = footerY - scale * 2;
-        if (message is not null)
+        // Position counter, right-aligned in the header band. It exists because the list window
+        // is nine rows: with more carts than that, a player scrolling needs to know there is a
+        // beyond, and the bar alone does not say so.
+        if (library.Entries.Count > 0)
         {
-            listBottom -= PixelFontAtlas.LineHeight(scale) + scale;
-            _font.Draw(batch, message, margin, listBottom + scale, scale, Error);
+            string counter = (library.SelectedIndex + 1).ToString(CultureInfo.InvariantCulture)
+                + "/" + library.Entries.Count.ToString(CultureInfo.InvariantCulture);
+            console.Print(
+                counter,
+                screen.Width - LibraryLayout.Margin - counter.Length * SystemFont.CellWidth,
+                LibraryLayout.TitleY,
+                Dim);
         }
+
+        Fill(console, layout.HeaderRule, Dim);
 
         if (library.Entries.Count == 0)
         {
-            // The work order's empty-state promise, verbatim in spirit: tell the player where
-            // carts come from instead of showing them a test pattern.
-            _font.Draw(batch, "NO CARTRIDGES FOUND", margin, y, scale, Bright);
-            y += PixelFontAtlas.LineHeight(scale) + scale;
-            _font.Draw(batch, "PUT A CART FOLDER OR A .QUARP8 FILE IN CARTS/", margin, y, scale, Text);
-            y += PixelFontAtlas.LineHeight(scale);
-            _font.Draw(batch, "OR CREATE ONE:  QUARP NEW MYGAME", margin, y, scale, Text);
+            DrawEmptyState(console);
         }
         else
         {
-            DrawEntries(batch, library, margin, y, listBottom, width, scale);
+            DrawEntries(console, library, layout);
         }
 
-        batch.End();
-    }
+        if (message is not null)
+        {
+            console.Print(layout.FitLine(message), LibraryLayout.Margin, layout.MessageY, Error);
+        }
 
-    public void Dispose()
-    {
-        _font.Dispose();
-        _white.Dispose();
+        Fill(console, layout.FooterRule, Dim);
+        console.Print(FooterHint, LibraryLayout.Margin, layout.FooterY, Dim);
+        return layout;
     }
 
     /// <summary>
-    /// The cart rows, windowed around the selection so a library longer than the screen
-    /// scrolls instead of clipping. The selected row gets a bar, not just a colour: colour
-    /// alone disappears on a bad projector, and this screen is the first thing a player sees.
+    /// The work order's empty-state promise, verbatim in spirit: tell the player where carts
+    /// come from instead of showing them a test pattern. Re-wrapped for 40 columns — the one
+    /// line that used to say it now takes two.
     /// </summary>
-    private void DrawEntries(SpriteBatch batch, CartLibrary library, int margin, int top, int bottom, int width, int scale)
+    private static void DrawEmptyState(VirtualConsole console)
     {
-        int rowHeight = PixelFontAtlas.LineHeight(scale) + scale;
-        int visible = Math.Max(1, (bottom - top) / rowHeight);
-        int count = library.Entries.Count;
-        int first = Math.Clamp(library.SelectedIndex - visible / 2, 0, Math.Max(0, count - visible));
-        for (int i = first; i < Math.Min(count, first + visible); i++)
+        console.Print("NO CARTRIDGES FOUND", LibraryLayout.Margin, LibraryLayout.ListTop, Bright);
+        console.Print("PUT A CART FOLDER OR A .QUARP8", LibraryLayout.Margin, 21, Text);
+        console.Print("FILE IN CARTS/", LibraryLayout.Margin, 28, Text);
+        console.Print("OR CREATE ONE: QUARP NEW MYGAME", LibraryLayout.Margin, 38, Text);
+    }
+
+    /// <summary>
+    /// The cart rows, windowed around the selection so a library longer than nine entries
+    /// scrolls instead of clipping. The selected row gets a bar, not just a colour.
+    /// </summary>
+    private static void DrawEntries(VirtualConsole console, CartLibrary library, LibraryLayout layout)
+    {
+        for (int slot = 0; slot < layout.DrawnRows; slot++)
         {
-            int rowY = top + (i - first) * rowHeight;
-            bool selected = i == library.SelectedIndex;
+            int index = layout.FirstVisible + slot;
+            var row = layout.Row(slot);
+            bool selected = index == library.SelectedIndex;
             if (selected)
             {
-                batch.Draw(_white, new Rectangle(margin - scale, rowY - scale / 2, width - 2 * margin + 2 * scale, rowHeight), SelectionBar);
+                Fill(console, row, SelectionBar);
             }
-            _font.Draw(batch, library.Entries[i].Name, margin, rowY, scale, selected ? Bright : Text);
+            console.Print(
+                layout.FitName(library.Entries[index].Name),
+                LibraryLayout.RowTextX,
+                row.Y + LibraryLayout.RowTextOffset,
+                selected ? Bright : Text);
         }
     }
 
+    /// <summary>One filled rectangle, the layout's geometry unpacked into the console's call.</summary>
+    private static void Fill(VirtualConsole console, Rectangle rect, byte color) =>
+        console.RectFill(rect.X, rect.Y, rect.Width, rect.Height, color);
 }

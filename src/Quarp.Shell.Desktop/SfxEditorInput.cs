@@ -64,7 +64,14 @@ public static class SfxEditorInput
     {
         SfxEditorSession session = shell.Modes.SfxEditor!;
         SfxEditorView view = shell.Modes.SfxView!;
-        // The same layout the renderer will draw this frame — geometry has one owner.
+        // The same layout the renderer will draw this frame — geometry has one owner. Since
+        // wave R5 the two numbers <see cref="EditorShell"/> carries are the size of the surface
+        // this screen is laid out on, and that surface is the console itself (ADR-029): 160x90,
+        // not the back buffer. Nothing in this file changed to say so — the router lays out and
+        // hit-tests in whatever surface it is handed, which is exactly why the same type served
+        // this screen before the move and after it. The conversions happen in QuarpGame, through
+        // FramePlacement, the single owner of window-to-console coordinates; every pointer
+        // coordinate below is therefore already a console pixel.
         var layout = SfxEditorLayout.Compute(shell.BackBufferWidth, shell.BackBufferHeight);
 
         if (view.ExitPromptShown)

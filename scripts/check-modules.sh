@@ -179,18 +179,19 @@ LAYERS=(
   # SpriteBatch — только ShellScreen и вызовы ядра. Вместе с текстурами ушли и два кэша
   # версий, которые файл держал, чтобы их не перезаливать: держать нечего.
   "MapEditorRenderer.cs|2"     # пиксели экрана карты — в консоли, не в окне
-  # CodeEditorRenderer переехал сюда из «рендера» в волне R4 по тому же признаку, что
-  # LibraryRenderer в R1, SpriteEditorRenderer в R2 и MapEditorRenderer в R3: ни GraphicsDevice,
-  # ни Texture2D, ни SpriteBatch, ни PixelFontAtlas — только ShellScreen и вызовы ядра.
-  # Проверяемая примета слоя 2 выполняется буквально: CodeEditorScreenGoldenTests строит его
-  # без GraphicsDevice.
+  # CodeEditorRenderer (волна R4) и SfxEditorRenderer (R5) переехали сюда из «рендера» по тому
+  # же признаку, что LibraryRenderer в R1, SpriteEditorRenderer в R2 и MapEditorRenderer в R3:
+  # ни GraphicsDevice, ни Texture2D, ни SpriteBatch, ни PixelFontAtlas — только ShellScreen и
+  # вызовы ядра. Вместе с устройством оба перестали быть IDisposable: владеть нечем, поэтому
+  # классы стали статическими. Проверяемая примета слоя 2 выполняется буквально: их голден-тесты
+  # строят экран без GraphicsDevice. После R5 в «рендере» не осталось ни одного экрана редактора.
   "CodeEditorRenderer.cs|2"    # пиксели экрана кода — в консоли, не в окне
+  "SfxEditorRenderer.cs|2"     # пиксели экрана звука — в консоли, не в окне
 
   # --- 3 «рендер»: владеет ресурсом устройства ---
   "PixelFontAtlas.cs|3"        # текстурная полоса глифов
   "EditorIconAtlas.cs|3"       # текстурная полоса иконок
   "EditorChromeRenderer.cs|3"  # пиксели общей рамы (хостовой)
-  "SfxEditorRenderer.cs|3"     # пиксели экрана звука
   "ConsolePresenter.cs|3"      # единственная дорога кадра: буфер -> текстура -> окно
   "ShellOverlay.cs|3"          # текстовый слой поверх кадра
   "MainMenuRenderer.cs|3"      # пиксели главного меню

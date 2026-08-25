@@ -165,83 +165,44 @@ public class EditorChromeTests
     }
 
     /// <summary>
-    /// The one screen still standing in the HOST frame reports that frame and not a copy of it —
-    /// the same scale, margin, button size, bands, prompt line, prompt verbs and tab rectangles
-    /// <see cref="EditorChrome.Compute"/> produces on its own. This is the simplification wave's
-    /// whole claim, and the one a future review could undo without any screen looking wrong on
-    /// its own.
+    /// <b>The host frame has no editor tenant left, and this is where that is written down.</b>
+    /// Sound was the last one; it moved to the console in wave R5, so the test that used to
+    /// measure a screen against <see cref="EditorChrome.Compute"/> has no screen to measure.
+    /// It is not replaced by a weaker version of itself — a comparison with nothing is not a
+    /// test — it is replaced by the fact that made it pointless: the five screens all carry the
+    /// console frame's button, and none of them carries the host frame's.
     ///
-    /// <para><b>Re-pinned three times now, and this paragraph is why.</b> The test began by
-    /// comparing four screens with each other. Wave R2 moved the sprite editor onto the console
-    /// (ADR-029), R3 the map, R4 the code editor — so the sound screen is the last tenant, and
-    /// "compare it with its sibling" has no sibling left to name. Rather than delete the
-    /// instrument at the exact moment the frame has one user (which is when a second owner of it
-    /// is easiest to introduce and hardest to notice), it now measures that screen against the
-    /// frame's own owner: a bare <see cref="EditorChrome"/> computed here from nothing but a
-    /// window size. That is strictly the stronger question — two screens can agree with each
-    /// other and both be wrong about the chrome — and it is the question that stays askable
-    /// until the day the sound screen moves and this test dies with
-    /// <see cref="EditorChrome"/> itself.</para>
+    /// <para><see cref="EditorChrome"/> itself is still alive for one reason and one only: the
+    /// boot menu still paints at the window's resolution through the host font path. When the
+    /// menu moves too, the type, its renderer, its icon atlas and this file go together — and
+    /// that is the whole remaining debt of ADR-029.</para>
     ///
-    /// <para><b>Save, Undo and Redo left the comparison with the code screen.</b> They are chrome
-    /// only in the host frame, where <see cref="EditorChrome.Compute"/> right-aligns them into
-    /// the status band from a slot list each screen passes in. The slot list is the screen's, not
-    /// the frame's, so a bare chrome cannot produce their rectangles and asserting them here
-    /// would mean re-deriving the frame's arithmetic in a test — a second owner in the very file
-    /// that exists to forbid one. Their placement stays covered by the sound screen's own
-    /// disjointness test.</para>
-    ///
-    /// <para>Break recipe: give <see cref="SfxEditorLayout"/> back its own copy of the frame
-    /// arithmetic (a local <c>ui</c>, <c>margin</c>, <c>tabStrip</c>, <c>statusBar</c>) and then
-    /// change one constant in <see cref="EditorChrome"/> — every other test stays green and this
-    /// one goes red, naming the second owner.</para>
+    /// <para>Break recipe: drag any one screen back into the host frame — its button size stops
+    /// being <see cref="ConsoleChrome.ButtonSize"/> and this test names it.</para>
     /// </summary>
-    [Theory]
-    [InlineData(640, 360)]
-    [InlineData(1280, 720)]
-    [InlineData(1920, 1080)]
-    [InlineData(2560, 1440)]
-    public void TheLastHostFrameScreenStandsInTheFrameItself(int width, int height)
+    [Fact]
+    public void EveryEditorScreenStandsInTheConsoleFrameAndNoneInTheHostFrame()
     {
-        var sfx = SfxEditorLayout.Compute(width, height);
-        // The frame with nothing in it: an empty status-slot list places the exit tab and the
-        // five editor tabs and nothing else — this file's own two helpers, unchanged.
-        EditorChrome chrome = Chrome(width, height);
-        EditorButtonPlace[] buttons = Placed(width, height);
-
-        Assert.Equal(chrome.Ui, sfx.Ui);
-        Assert.Equal(chrome.Margin, sfx.Margin);
-        Assert.Equal(chrome.ButtonSize, sfx.ButtonSize);
-        Assert.Equal(chrome.TabStrip, sfx.TabStrip);
-        Assert.Equal(chrome.StatusBar, sfx.StatusBar);
-        Assert.Equal(chrome.PromptY, sfx.PromptY);
-        foreach (EditorPromptVerb verb in Enum.GetValues<EditorPromptVerb>())
-        {
-            Assert.Equal(chrome.PromptVerbRect(verb), sfx.PromptVerbRect(verb));
-        }
-        // The exit button and the five editor tabs land where the frame puts them.
-        EditorButton[] shared =
-        {
-            EditorButton.ExitTab, EditorButton.CodeTab, EditorButton.SpritesTab,
-            EditorButton.TilemapTab, EditorButton.SoundTab, EditorButton.MusicTab,
-        };
-        foreach (EditorButton button in shared)
-        {
-            Assert.Equal(EditorChrome.ButtonRect(buttons, button), sfx.ButtonRect(button));
-        }
-        // And the console frame is a DIFFERENT frame, on purpose: the three screens that have
-        // moved carry tabs ten console pixels wide wherever the window is, and they agree with
-        // each other. Asserting both here is what stops a later hand from "fixing" the
-        // difference by dragging one of them back into the host frame.
         var sprite = SpriteEditorLayout.Compute(160, 90, regionCells: 1);
         var map = MapEditorLayout.Compute(160, 90);
         var code = CodeEditorLayout.Compute(160, 90);
+        var sfx = SfxEditorLayout.Compute(160, 90);
+
         Assert.Equal(ConsoleChrome.ButtonSize, sprite.ButtonSize);
         Assert.Equal(ConsoleChrome.ButtonSize, map.ButtonSize);
         Assert.Equal(ConsoleChrome.ButtonSize, code.ButtonSize);
-        Assert.Equal(sprite.ButtonRect(EditorButton.ExitTab), map.ButtonRect(EditorButton.ExitTab));
-        Assert.Equal(sprite.ButtonRect(EditorButton.ExitTab), code.ButtonRect(EditorButton.ExitTab));
-        Assert.NotEqual(sfx.ButtonRect(EditorButton.ExitTab), sprite.ButtonRect(EditorButton.ExitTab));
+        Assert.Equal(ConsoleChrome.ButtonSize, sfx.ButtonSize);
+
+        // One exit button, one place, on all four screens.
+        Rectangle exit = sprite.ButtonRect(EditorButton.ExitTab);
+        Assert.Equal(exit, map.ButtonRect(EditorButton.ExitTab));
+        Assert.Equal(exit, code.ButtonRect(EditorButton.ExitTab));
+        Assert.Equal(exit, sfx.ButtonRect(EditorButton.ExitTab));
+
+        // And the host frame really is a different frame, so nobody can "fix" the difference
+        // by dragging a screen back: its button is bigger than the console's whole tab.
+        EditorChrome host = Chrome(1280, 720);
+        Assert.True(host.ButtonSize > ConsoleChrome.ButtonSize);
     }
 
     /// <summary>

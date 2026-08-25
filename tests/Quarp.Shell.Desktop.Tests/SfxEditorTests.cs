@@ -84,27 +84,21 @@ public class SfxEditorTests : IDisposable
 
         /// <summary>
         /// Rebuilt per frame, like the window's. Since wave R2 the two numbers are <b>the size
-        /// of the surface the screen on show is laid out on</b> (ADR-029): 160x90, not the back
-        /// buffer. <c>QuarpGame</c> makes exactly this switch — see <c>ConsoleEditorContext</c> —
-        /// so a frame here means what a frame there means. The consequence for whoever writes a
-        /// test against a console screen: <b>its mouse points are console pixels</b>, taken
-        /// straight off the layout's own rectangles. Production reaches the same numbers by
-        /// putting the window's point through <see cref="EditorMouse.ToConsole"/>, whose own
-        /// arithmetic is pinned in <c>EditorMouseReaderTests</c> rather than re-run here.
-        ///
-        /// <para><b>Wave R4 turned the test round.</b> It used to name the one screen that had
-        /// moved; four have now, and the SOUND screen — this file's own — is the one that has
-        /// not. So the exception is written here instead of the rule. It matters beyond
-        /// tidiness: this harness walks the tab strip, and the frames it spends on the sprite,
-        /// map and code screens on the way through must hand each of those routers the surface
-        /// it is actually laid out on.</para>
+        /// of the surface the screen on show is laid out on</b>, and the sprite editor's surface
+        /// is the console itself (ADR-029): 160x90, not the back buffer. <c>QuarpGame</c> makes
+        /// exactly this switch — see <c>ConsoleEditorContext</c> — so a frame here means what a
+        /// frame there means. The consequence for whoever writes a test against the sprite
+        /// screen: <b>its mouse points are console pixels</b>, taken straight off the layout's
+        /// own rectangles. Production reaches the same numbers by putting the window's point
+        /// through <see cref="EditorMouse.ToConsole"/>, whose own arithmetic is pinned in
+        /// <c>EditorMouseReaderTests</c> rather than re-run here.
         /// </summary>
         internal EditorShell Context =>
-            Modes.Mode == ShellMode.SfxEditor
-                ? new(Modes, Flyout, Hover, SheetScroll, WindowWidth, WindowHeight)
-                : new(Modes, Flyout, Hover, SheetScroll, ConsoleWidth, ConsoleHeight);
+            Modes.Mode is ShellMode.Editor or ShellMode.SfxEditor
+                ? new(Modes, Flyout, Hover, SheetScroll, ConsoleWidth, ConsoleHeight)
+                : new(Modes, Flyout, Hover, SheetScroll, WindowWidth, WindowHeight);
 
-        internal SfxEditorLayout Layout => SfxEditorLayout.Compute(WindowWidth, WindowHeight);
+        internal SfxEditorLayout Layout => SfxEditorLayout.Compute(ConsoleWidth, ConsoleHeight);
 
         internal SfxEditorSession Session => Modes.SfxEditor!;
 
@@ -165,27 +159,16 @@ public class SfxEditorTests : IDisposable
         internal void ClickRect(Rectangle rect) => Click(rect.Center.X, rect.Center.Y);
 
         /// <summary>
-        /// Since wave R2 the sprite editor lives on the console's own 160x90 frame (ADR-029)
-        /// while this screen is still on the host frame, so the two no longer place their tabs
-        /// on the same pixels. The rectangle must come from the layout of the screen ON SHOW.
-        /// </summary>
-        /// <summary>
-        /// The rectangle comes from the layout of the screen ON SHOW. The sound screen is the
-        /// only one still measured against the window; every other screen this harness can be
-        /// standing on is on the console, and its tabs are ten console pixels wide.
+        /// Every screen this harness can put on show now lives on the console's own 160x90
+        /// frame (ADR-029; the sprite editor since wave R2, this one since R5), so both branches
+        /// answer in console pixels. The rectangle must still come from the layout of the screen
+        /// ON SHOW: the two place different tool blocks, and only their six shared frame buttons
+        /// land on the same pixels.
         /// </summary>
         internal void ClickButton(EditorButton button) => ClickRect(
-            Modes.Mode switch
-            {
-                ShellMode.Editor =>
-                    SpriteEditorLayout.Compute(ConsoleWidth, ConsoleHeight, Modes.Editor!.RegionCells)
-                        .ButtonRect(button),
-                ShellMode.MapEditor =>
-                    MapEditorLayout.Compute(ConsoleWidth, ConsoleHeight).ButtonRect(button),
-                ShellMode.CodeEditor =>
-                    CodeEditorLayout.Compute(ConsoleWidth, ConsoleHeight).ButtonRect(button),
-                _ => Layout.ButtonRect(button),
-            });
+            Modes.Mode == ShellMode.Editor
+                ? SpriteEditorLayout.Compute(160, 90, Modes.Editor!.RegionCells).ButtonRect(button)
+                : Layout.ButtonRect(button));
     }
 
     // ==================================================================================
@@ -719,23 +702,28 @@ public class SfxEditorTests : IDisposable
     // ==================================================================================
 
     /// <summary>
-    /// Everything the screen draws is inside the window, above the reserved prompt line, and
-    /// clear of everything else — at the shell's default window and at a quarter of it. The three
-    /// grids share one column per step, so their columns are checked to line up: that is the
-    /// whole reason the eye can read a step across three panels.
+    /// Everything the screen draws is inside the <b>console</b>, above the reserved message
+    /// line, clear of the status band and clear of everything else. The three grids share one
+    /// column per step, so their columns are checked to line up: that is the whole reason the eye
+    /// can read a step across three panels.
     ///
-    /// <para>Break recipe: size the grid cell from the width instead of the height in
-    /// <see cref="SfxEditorLayout.Compute"/> and the panel is pushed off the right edge at
-    /// 1280x720; drop the <c>minPanel</c> term and the same thing happens at 640x360; give the
-    /// loop row a different cell width and the column-alignment assertions go red.</para>
+    /// <para><b>Re-pinned in wave R5, and one number in this test is the whole wave.</b> It used
+    /// to be a [Theory] over two window sizes, because the screen was measured against a back
+    /// buffer. There is one size now and it is the console's (ADR-029), so the theory became a
+    /// fact and the constants below are fixed console pixels.</para>
+    ///
+    /// <para>Break recipe: give the instrument four pixels per step instead of
+    /// <see cref="SfxEditorLayout.StepWidth"/>'s three and the panel column shrinks to 30 px,
+    /// which pushes the instrument's left edge to column 32 and puts the button row's last
+    /// button on the pitch grid — the overlap assertion names that button. Move the effect row
+    /// off the frame's last seven rows and it lands on the status band, which the intersection
+    /// assertion names.</para>
     /// </summary>
-    [Theory]
-    [InlineData(1280, 720)]
-    [InlineData(640, 360)]
-    public void EverythingSitsInsideTheWindowAndNothingOverlaps(int width, int height)
+    [Fact]
+    public void EverythingSitsInsideTheConsoleAndNothingOverlaps()
     {
-        var layout = SfxEditorLayout.Compute(width, height);
-        var window = new Rectangle(0, 0, width, height);
+        var layout = SfxEditorLayout.Compute(ConsoleWidth, ConsoleHeight);
+        var window = new Rectangle(0, 0, ConsoleWidth, ConsoleHeight);
 
         var boxes = new (string Name, Rectangle Rect)[]
         {
@@ -767,10 +755,24 @@ public class SfxEditorTests : IDisposable
         Assert.Equal(layout.Pitch.X, layout.Volume.X);
         Assert.Equal(layout.Pitch.Width, layout.Volume.Width);
         Assert.Equal(0, layout.Pitch.Width % SfxEditorLayout.StepColumns);
-        Assert.Equal(layout.Cell * SfxEditorLayout.OctaveRows, layout.Pitch.Height);
-        Assert.Equal(layout.Cell * SfxEditorLayout.VolumeLevels, layout.Volume.Height);
-        Assert.True(layout.Cell >= 1);
-        Assert.True(layout.SlotCell >= 1);
+        Assert.Equal(
+            SfxEditorLayout.PitchRowHeight * SfxEditorLayout.OctaveRows, layout.Pitch.Height);
+        Assert.Equal(
+            SfxEditorLayout.VolumeRowHeight * SfxEditorLayout.VolumeLevels, layout.Volume.Height);
+
+        // The arithmetic of the type comment, as numbers a reader can check: 96 of instrument,
+        // two of gutter and 62 of panel make 160; the effect row is the frame's last seven rows
+        // and is full width because five characters is what keeps FADEIN and FADEOUT apart.
+        Assert.Equal(96, layout.Pitch.Width);
+        Assert.Equal(64, layout.Pitch.X);
+        Assert.Equal(62, layout.SpeedField.Width);
+        Assert.Equal(layout.Chrome.ContentBottom, layout.Effects.Bottom);
+        Assert.Equal(5, SfxEditorLayout.CellLabelChars(layout.EffectCellRect(0)));
+        Assert.Equal(3, SfxEditorLayout.CellLabelChars(layout.WaveCellRect(0)));
+        Assert.Equal("FADEO", SfxEditorLayout.FitCellLabel("FADEOUT", layout.EffectCellRect(6)));
+        Assert.NotEqual(
+            SfxEditorLayout.FitCellLabel("FADEIN", layout.EffectCellRect(4)),
+            SfxEditorLayout.FitCellLabel("FADEOUT", layout.EffectCellRect(6)));
 
         // Every button this screen owns is placed, inside the window, and clear of everything.
         Assert.Equal(AllButtons.Count(EditorIcons.BelongsToSfxEditor), layout.Buttons.Count);
@@ -791,52 +793,42 @@ public class SfxEditorTests : IDisposable
     }
 
     /// <summary>
-    /// This screen is the <b>last tenant of the host frame</b>, and it still stands in the frame
-    /// itself rather than in a copy of it: the same scale, margin, button size, bands, prompt
-    /// line and prompt verbs <see cref="EditorChrome.Compute"/> produces from nothing but a
-    /// window size, and the same rectangles for the exit button and the five editor tabs.
+    /// This screen stands in the SAME frame as the two screens that moved onto the console
+    /// before it: identical button size, margins, bands, prompt verbs and — the part the mouse
+    /// depends on — identical rectangles for the six tabs, which is what lets an author's hand
+    /// aim at a tab without first asking which editor is on screen.
     ///
-    /// <para><b>Re-pinned in wave R4, and this is the whole of why.</b> This test used to
-    /// compare the sound screen with a sibling: three of them at first, then the code screen
-    /// alone after R2 and R3 took the sprite and map screens onto the console. Wave R4 took the
-    /// code screen too (ADR-029), so there is no sibling left to compare with — its exit tab is
-    /// ten console pixels wide where this one's is hundreds of window pixels across, and
-    /// asserting those equal would assert a falsehood. The comparison therefore turns inward:
-    /// the screen is measured against <see cref="EditorChrome"/> itself, which is the stronger
-    /// question anyway (two screens can agree with each other and both be wrong about the frame)
-    /// and the only one that survives having exactly one tenant. When this screen moves in its
-    /// own wave, this test and <see cref="EditorChrome"/> die together — and the second half
-    /// below is what will notice if it moves and this file is forgotten.</para>
+    /// <para><b>Re-pinned in wave R5, and the reference changed sides.</b> Until this wave the
+    /// sound screen was measured against the <em>code</em> screen, because the two were the last
+    /// pair left in the host frame. ADR-029 moved this one onto the console, so its tab is ten
+    /// console pixels wide where the code screen's is 1152 window pixels across; asking whether
+    /// those are equal would be asking whether 10 equals 1152. The sprite and map screens are the
+    /// siblings now, and the last two assertions say out loud that the host frame is a different
+    /// frame — which is what stops a later hand from "fixing" an inequality by dragging this
+    /// screen back into it.</para>
     ///
-    /// <para><b>Save, Undo and Redo dropped out of the shared list, and not because they moved
-    /// on this screen.</b> In the host frame they are placed by
-    /// <see cref="EditorChrome.Compute"/> from a status-slot array each screen passes in — the
-    /// slot list is the screen's, not the frame's — so a bare chrome computed here cannot
-    /// produce their rectangles, and re-deriving them in a test would be exactly the second
-    /// owner this file exists to forbid. Their placement on this screen stays covered by
-    /// <see cref="EverythingSitsInsideTheWindowAndNothingOverlaps"/>.</para>
+    /// <para>Break recipe: give <see cref="SfxEditorLayout"/> its own copy of the frame
+    /// arithmetic instead of calling <see cref="ConsoleChrome.Compute"/> — every assertion here
+    /// goes red at once, naming the second owner.</para>
     /// </summary>
     [Fact]
-    public void TheSoundScreenIsTheLastTenantOfTheHostFrameAndStandsInItself()
+    public void TheSoundScreenStandsInTheSameConsoleFrameAsItsSiblings()
     {
-        var sfx = SfxEditorLayout.Compute(WindowWidth, WindowHeight);
-        // The frame with nothing in it: six buttons is exactly the exit tab plus the five editor
-        // tabs, and an empty status-slot list places nothing else.
-        var buttons = new EditorButtonPlace[6];
-        int placed = 0;
-        EditorChrome chrome = EditorChrome.Compute(
-            WindowWidth, WindowHeight, buttons, ref placed, new EditorButton?[0]);
-        Assert.Equal(6, placed);
+        var sfx = SfxEditorLayout.Compute(ConsoleWidth, ConsoleHeight);
+        var sprite = SpriteEditorLayout.Compute(ConsoleWidth, ConsoleHeight, regionCells: 1);
+        var map = MapEditorLayout.Compute(ConsoleWidth, ConsoleHeight);
 
-        Assert.Equal(chrome.Ui, sfx.Ui);
-        Assert.Equal(chrome.Margin, sfx.Margin);
-        Assert.Equal(chrome.ButtonSize, sfx.ButtonSize);
-        Assert.Equal(chrome.TabStrip, sfx.TabStrip);
-        Assert.Equal(chrome.StatusBar, sfx.StatusBar);
-        Assert.Equal(chrome.PromptY, sfx.PromptY);
+        Assert.Equal(sprite.ButtonSize, sfx.ButtonSize);
+        Assert.Equal(sprite.Margin, sfx.Margin);
+        Assert.Equal(sprite.TabStrip, sfx.TabStrip);
+        Assert.Equal(sprite.StatusBar, sfx.StatusBar);
+        Assert.Equal(sprite.PromptY, sfx.PromptY);
+        Assert.Equal(map.TabStrip, sfx.TabStrip);
+        Assert.Equal(map.StatusBar, sfx.StatusBar);
         foreach (EditorPromptVerb verb in Enum.GetValues<EditorPromptVerb>())
         {
-            Assert.Equal(chrome.PromptVerbRect(verb), sfx.PromptVerbRect(verb));
+            Assert.Equal(sprite.PromptVerbRect(verb), sfx.PromptVerbRect(verb));
+            Assert.Equal(map.PromptVerbRect(verb), sfx.PromptVerbRect(verb));
         }
         EditorButton[] shared =
         {
@@ -845,20 +837,15 @@ public class SfxEditorTests : IDisposable
         };
         foreach (EditorButton button in shared)
         {
-            Assert.Equal(EditorChrome.ButtonRect(buttons, button), sfx.ButtonRect(button));
+            Assert.Equal(sprite.ButtonRect(button), sfx.ButtonRect(button));
+            Assert.Equal(map.ButtonRect(button), sfx.ButtonRect(button));
         }
 
-        // The other four screens are on the console and this one is not — the fact that makes
-        // the paragraph above true, asserted so that the day it stops being true, it is this
-        // test that says so.
-        Assert.NotEqual(
-            ConsoleChrome.ButtonSize, sfx.ButtonSize);
-        Assert.Equal(
-            ConsoleChrome.ButtonSize,
-            CodeEditorLayout.Compute(160, 90).ButtonSize);
-        Assert.NotEqual(
-            CodeEditorLayout.Compute(160, 90).ButtonRect(EditorButton.ExitTab),
-            sfx.ButtonRect(EditorButton.ExitTab));
+        // The code screen moved in wave R4, so it agrees with this one rather than differing
+        // from it — the host frame has no editor tenant left at all. That the two frames are
+        // different frames is pinned once, where it belongs: EditorChromeTests.
+        var code = CodeEditorLayout.Compute(ConsoleWidth, ConsoleHeight);
+        Assert.Equal(code.ButtonRect(EditorButton.ExitTab), sfx.ButtonRect(EditorButton.ExitTab));
     }
 
     /// <summary>
@@ -869,7 +856,7 @@ public class SfxEditorTests : IDisposable
     [Fact]
     public void EveryGridCellRoundTripsThroughItsRectangle()
     {
-        var layout = SfxEditorLayout.Compute(WindowWidth, WindowHeight);
+        var layout = SfxEditorLayout.Compute(ConsoleWidth, ConsoleHeight);
 
         for (int step = 0; step < SfxEditorLayout.StepColumns; step++)
         {
@@ -1146,7 +1133,7 @@ public class SfxEditorTests : IDisposable
     [Fact]
     public void EveryPlacedLiveSoundButtonChangesSomethingObservable()
     {
-        foreach (EditorButtonPlace place in SfxEditorLayout.Compute(WindowWidth, WindowHeight).Buttons)
+        foreach (EditorButtonPlace place in SfxEditorLayout.Compute(ConsoleWidth, ConsoleHeight).Buttons)
         {
             string folder = NewCartFolder();
             ShellModeMachine machine = MachineOnTheSoundTab(folder);
@@ -1267,7 +1254,7 @@ public class SfxEditorTests : IDisposable
     [Fact]
     public void EveryKeylessControlAnnouncesItsKeys()
     {
-        var layout = SfxEditorLayout.Compute(WindowWidth, WindowHeight);
+        var layout = SfxEditorLayout.Compute(ConsoleWidth, ConsoleHeight);
         foreach (SfxRegion region in Enum.GetValues<SfxRegion>())
         {
             if (region == SfxRegion.None)
@@ -1308,9 +1295,18 @@ public class SfxEditorTests : IDisposable
     }
 
     /// <summary>
-    /// The status band's two fields, named: where the cursor is and what is under it on the left,
-    /// the slot's three numbers on the right — in the vocabulary <c>sfx.txt</c> uses, so an author
-    /// moving between the screen and the text source reads one set of words.
+    /// The status band's two fields, named: what the cursor stands on at the left, which of the
+    /// 64 sounds is open at the right — in the vocabulary <c>sfx.txt</c> uses, so an author moving
+    /// between the screen and the text source reads one set of words.
+    ///
+    /// <para><b>Re-pinned in wave R5, and the right-hand field lost three numbers.</b> The host
+    /// line repeated the slot's speed, length and loop there. On the console all three have
+    /// permanent homes of their own — the speed and length stepper fields, and the loop row's own
+    /// markers — so repeating them would spend the console's one status line saying what is
+    /// already on screen twice. What it says instead is the one fact nothing else can: which slot
+    /// this is. Both halves together must also fit the line, which is why the left field's slot
+    /// number went with them: 39 characters is the whole line
+    /// (<see cref="ConsoleChrome.LineChars"/>), and the assertion below is that arithmetic.</para>
     /// </summary>
     [Fact]
     public void TheStatusLineReadsTheCursorAndTheSlot()
@@ -1318,7 +1314,7 @@ public class SfxEditorTests : IDisposable
         Harness harness = OpenSoundEditor(out _);
 
         Assert.Contains("---", SfxEditorRenderer.Coordinates(harness.Session, harness.View), StringComparison.Ordinal);
-        Assert.Contains("NO LOOP", SfxEditorRenderer.Summary(harness.Session, harness.View), StringComparison.Ordinal);
+        Assert.Equal("SFX 00", SfxEditorRenderer.Summary(harness.View));
         Assert.Null(SfxEditorRenderer.StandingNotice(harness.Session));
 
         harness.Tap(Keys.Z);
@@ -1326,8 +1322,23 @@ public class SfxEditorTests : IDisposable
 
         string coordinates = SfxEditorRenderer.Coordinates(harness.Session, harness.View);
         Assert.Contains(
-            AudioTextCompiler.NoteName(harness.Session.StepNote(0, 0)), coordinates, StringComparison.Ordinal);
+            AudioTextCompiler.NoteName(harness.Session.StepNote(0, 0)).ToUpperInvariant(),
+            coordinates, StringComparison.Ordinal);
         Assert.Contains("STEP 00", coordinates, StringComparison.Ordinal);
-        Assert.Contains("LEN 1", SfxEditorRenderer.Summary(harness.Session, harness.View), StringComparison.Ordinal);
+
+        // The two fields cannot collide: the right one is right-aligned to the screen's edge, so
+        // what the left one may use is the line minus the right one, and the longest step this
+        // screen can describe is a note with the longest effect name the format has.
+        var layout = SfxEditorLayout.Compute(ConsoleWidth, ConsoleHeight);
+        for (int effect = 0; effect < SfxEditorSession.EffectCount; effect++)
+        {
+            harness.Session.SetStep(
+                0, 0, SfxEditorSession.MaxNote, SfxEditorSession.WaveCount - 1,
+                SfxEditorSession.MaxVolume, effect);
+            string line = SfxEditorRenderer.Coordinates(harness.Session, harness.View);
+            Assert.True(
+                line.Length + SfxEditorRenderer.Summary(harness.View).Length + 1 <= layout.Chrome.LineChars,
+                $"the status line's two fields collide: \"{line}\" plus the slot field");
+        }
     }
 }

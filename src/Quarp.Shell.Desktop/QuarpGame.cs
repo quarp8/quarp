@@ -28,9 +28,9 @@ namespace Quarp.Shell.Desktop;
 /// run. A running cart is presented as the core's indexed framebuffer scaled by whole integers
 /// (ARCHITECTURE §5); the library is now drawn <em>into a framebuffer of its own</em>
 /// (<see cref="ShellScreen"/>) with the same core calls a cartridge uses, and both go to the
-/// window through the one <see cref="ConsolePresenter"/>. Waves R2 and R3 brought the sprite
-/// and map editors onto the same road; the two remaining editor screens (code, sound) and the
-/// boot menu still paint at the window's native resolution and are scheduled to follow, and
+/// window through the one <see cref="ConsolePresenter"/>. Waves R2, R3 and R5 brought the
+/// sprite, map and sound editors onto the same road; the one remaining editor screen (code) and
+/// the boot menu still paint at the window's native resolution and are scheduled to follow, and
 /// while they do, this class is the one place where both roads are visible.</para>
 ///
 /// <para><b>Time (M2).</b> MonoGame's <c>IsFixedTimeStep</c> is off and replaced by
@@ -73,7 +73,6 @@ public sealed class QuarpGame : Game
     private SpriteBatch _spriteBatch = null!;
     private ConsolePresenter _presenter = null!;
     private ShellOverlay _overlay = null!;
-    private SfxEditorRenderer _sfxUi = null!;
     private MainMenuRenderer _menuUi = null!;
     private AudioOutput? _audio;
 
@@ -227,7 +226,6 @@ public sealed class QuarpGame : Game
         _spriteBatch = new SpriteBatch(GraphicsDevice);
         _presenter = new ConsolePresenter(GraphicsDevice, _profile);
         _overlay = new ShellOverlay(GraphicsDevice, _profile.Width, _profile.Height);
-        _sfxUi = new SfxEditorRenderer(GraphicsDevice);
         _menuUi = new MainMenuRenderer(GraphicsDevice);
 
         // The two window events the boot screens live on. Characters buffer here and are
@@ -315,7 +313,17 @@ public sealed class QuarpGame : Game
                     gameTime.ElapsedGameTime.TotalSeconds);
                 break;
             case ShellMode.SfxEditor:
-                SfxEditorInput.Update(EditorContext(), commands, mouse, gameTime.ElapsedGameTime.TotalSeconds);
+                // The third screen off the window's coordinate system (wave R5): same two
+                // conversions the sprite and map screens get, through the same single owner.
+                // The router does no scale arithmetic of its own, and neither may any other
+                // reader.
+                SfxEditorInput.Update(
+                    ConsoleEditorContext(),
+                    commands,
+                    mouse.ToConsole(_shellScreen.Placement(
+                        GraphicsDevice.PresentationParameters.BackBufferWidth,
+                        GraphicsDevice.PresentationParameters.BackBufferHeight)),
+                    gameTime.ElapsedGameTime.TotalSeconds);
                 // The one editor frame with a second half: the router decided whether the slot
                 // should sound, and this drives the chip that makes it so. Kept out of the
                 // router on purpose — a router that owned a speaker could not run in a headless
@@ -753,22 +761,13 @@ public sealed class QuarpGame : Game
             case ShellMode.Editor:
             case ShellMode.MapEditor:
             case ShellMode.CodeEditor:
-                // Four screens on one road since wave R4: all are drawn into the shell's own
+            case ShellMode.SfxEditor:
+                // Every screen on one road since wave R5: all are drawn into the shell's own
                 // console and presented by the same presenter the cartridge's frame goes
                 // through. The draw clock feeds the sprite screen's marching ants and the code
                 // screen's caret blink — chrome animating in host time, like the tooltip delay;
                 // no simulation or hash sees it.
                 RenderShellScreen(gameTime.TotalGameTime.TotalSeconds);
-                break;
-            case ShellMode.SfxEditor:
-                _sfxUi.Draw(
-                    _spriteBatch,
-                    GraphicsDevice.PresentationParameters.BackBufferWidth,
-                    GraphicsDevice.PresentationParameters.BackBufferHeight,
-                    _modes.SfxEditor!,
-                    _modes.SfxView!,
-                    _hover.Target,
-                    _hover.TooltipVisible);
                 break;
             case ShellMode.Menu:
                 _menuUi.Draw(
@@ -830,12 +829,11 @@ public sealed class QuarpGame : Game
     /// this method and <see cref="RenderFrame"/> is which framebuffer is presented and whether
     /// the pause indicator has anything to say.
     ///
-    /// <para>Four screens live here as of wave R4: the library (wave R1), the sprite editor
-    /// (R2), the map editor (R3) and the code editor (R4). Which one is drawn is the mode's
-    /// business and nothing else changes — same console, same presenter, same whole-integer
-    /// scale. One editor is left at the window's resolution — sound — and it is still dispatched
-    /// separately in <see cref="Draw"/>; it joins this method in its own wave, and
-    /// <see cref="EditorChrome"/> dies with it.</para>
+    /// <para>As of wave R5 <b>every</b> screen lives here: the library (R1), the sprite editor
+    /// (R2), the map editor (R3), the code editor (R4) and the sound editor (R5). Which one is
+    /// drawn is the mode's business and nothing else changes — same console, same presenter,
+    /// same whole-integer scale. Nothing is left at the window's resolution but the boot menu,
+    /// so the host frame (<see cref="EditorChrome"/>) has no editor tenant any more.</para>
     /// </summary>
     private void RenderShellScreen(double timeSeconds)
     {
@@ -860,6 +858,12 @@ public sealed class QuarpGame : Game
             CodeEditorRenderer.Draw(
                 _shellScreen, _modes.CodeEditor!, _modes.CodeView!,
                 _hover.Target, _hover.TooltipVisible, timeSeconds);
+        }
+        else if (_modes.Mode == ShellMode.SfxEditor)
+        {
+            SfxEditorRenderer.Draw(
+                _shellScreen, _modes.SfxEditor!, _modes.SfxView!,
+                _hover.Target, _hover.TooltipVisible);
         }
         else
         {
@@ -913,7 +917,6 @@ public sealed class QuarpGame : Game
             _overlay?.Dispose();
             _presenter?.Dispose();
             _menuUi?.Dispose();
-            _sfxUi?.Dispose();
             _audio?.Dispose();
         }
         base.Dispose(disposing);

@@ -385,10 +385,11 @@ public class CodeEditorScreenTests : IDisposable
             Assert.Equal(sprite.ButtonRect(button), code.ButtonRect(button));
             Assert.Equal(map.ButtonRect(button), code.ButtonRect(button));
         }
-        // And the host frame is a DIFFERENT frame, on purpose: the one screen left in it carries
-        // tabs hundreds of window pixels wide wherever the window is.
-        var sound = SfxEditorLayout.Compute(WindowWidth, WindowHeight);
-        Assert.NotEqual(sound.ButtonRect(EditorButton.ExitTab), code.ButtonRect(EditorButton.ExitTab));
+        // The sound screen was the last host-frame tenant and it moved in wave R5, so it belongs
+        // in the agreement now rather than opposite it. That the console frame is a different
+        // frame from the host one is pinned once, where it belongs: EditorChromeTests.
+        var sound = SfxEditorLayout.Compute(ConsoleWidth, ConsoleHeight);
+        Assert.Equal(sound.ButtonRect(EditorButton.ExitTab), code.ButtonRect(EditorButton.ExitTab));
     }
 
     // ==================================================================================

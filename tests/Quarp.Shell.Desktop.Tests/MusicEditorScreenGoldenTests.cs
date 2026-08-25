@@ -48,6 +48,22 @@ namespace Quarp.Shell.Desktop.Tests;
 /// the section markers stand between the number and the first voice, the whole-song overview is a
 /// pixel a pattern down the right edge, a muted channel loses its brightness and not its number —
 /// so a failure tells whoever reads it whether the screen is broken or merely redrawn.</para>
+///
+/// <para><b>Re-pinned 2026-08-25, wave X5 (the tracker's plate turned dark, the panels got an
+/// edge, the overview got a song in it).</b> Three causes, all named before the numbers were
+/// read and all confirmed on the running window: (a) the cursor row's plate was a LIGHT band
+/// and the 3x5 digits on it were being eaten — TIC-80 draws that plate dark and the glyphs
+/// light over it (<c>music.c</c>, <c>drawTrackerChannel</c>), so ours is dark now; (b) the
+/// pattern grid and the overview had no border, so on an empty song they read as ground;
+/// (c) the overview was an empty box with one dot in it — it now carries a lane per channel, a
+/// tick every fourth pattern, the cursor row and the playhead, which is the fact
+/// <c>drawTrackerFrames</c> carries with sixteen numbered buttons and we cannot, at sixteen
+/// pixels of width. No rectangle moved. Four probes moved by VALUE and none by coordinate;
+/// each is commented where it stands. Was / became:
+/// <c>3a0d59326c050125</c> / <c>d02bc2109b9fc4b0</c>,
+/// <c>22161effe99e69b8</c> / <c>7d275675a9a49b49</c>,
+/// <c>e0a1d594f0c1e76b</c> / <c>4020d9d32eb89e26</c>,
+/// <c>6924d083aabcb026</c> / <c>101a599676bc6e4f</c>.</para>
 /// </summary>
 public class MusicEditorScreenGoldenTests : IDisposable
 {
@@ -143,16 +159,24 @@ public class MusicEditorScreenGoldenTests : IDisposable
         // part of the grid and must not be underlined by it.
         Assert.Equal((byte)1, console.Pget(12, 17));
         Assert.Equal((byte)1, console.Pget(141, 17));
-        Assert.Equal((byte)0, console.Pget(142, 17));
+        // Wave X5 moved four of the probes below by ONE VALUE each, and none of them by a
+        // coordinate — the layout did not move a pixel. Two causes, both deliberate:
+        // (a) the cursor row's plate went from Dim to ActiveBg, because TIC-80's tracker draws
+        //     that plate DARK and the glyphs light over it (music.c, drawTrackerChannel), and
+        //     ours was a light band the 3x5 digits were being eaten by;
+        // (b) the pattern grid and the overview gained an edge, so column 142 — the gap between
+        //     grid and overview — is now the grid's right side rather than ground, and column
+        //     153 inside the overview is channel 2's lane.
+        Assert.Equal((byte)1, console.Pget(142, 17));
         // The cursor's cell wears a bright frame twenty-six pixels wide and six tall; the cell
         // beside it does not. A grid drawn at any other column pitch fails the second.
         Assert.Equal((byte)3, console.Pget(38, 18));
         Assert.Equal((byte)3, console.Pget(63, 18));
         Assert.Equal((byte)3, console.Pget(38, 23));
-        Assert.Equal((byte)1, console.Pget(64, 18));
+        Assert.Equal((byte)4, console.Pget(64, 18));
         // The cursor's whole row is banded, from the number field across; the row below is not.
         // A row drawn at any other height fails the second.
-        Assert.Equal((byte)1, console.Pget(12, 18));
+        Assert.Equal((byte)4, console.Pget(12, 18));
         Assert.Equal((byte)0, console.Pget(12, 24));
         // An empty cell reads "--" in dim ink, centred in its column — the dash's own row, one
         // pixel down from the glyph's top.
@@ -181,7 +205,7 @@ public class MusicEditorScreenGoldenTests : IDisposable
             Assert.InRange(pixel, (byte)0, (byte)15);
         }
 
-        Assert.Equal("3a0d59326c050125", FrameHash.Of(screen.Framebuffer));
+        Assert.Equal("d02bc2109b9fc4b0", FrameHash.Of(screen.Framebuffer));
     }
 
     /// <summary>
@@ -227,7 +251,7 @@ public class MusicEditorScreenGoldenTests : IDisposable
         // channel 3 does not, and the flag column is lit on the two patterns that carry a loop
         // and dark on the one between them.
         Assert.Equal((byte)2, console.Pget(151, 12));
-        Assert.Equal((byte)0, console.Pget(153, 12));
+        Assert.Equal((byte)3, console.Pget(153, 12));
         Assert.Equal((byte)3, console.Pget(157, 12));
         Assert.Equal((byte)3, console.Pget(157, 15));
         Assert.Equal((byte)0, console.Pget(157, 13));
@@ -236,7 +260,7 @@ public class MusicEditorScreenGoldenTests : IDisposable
         // Unsaved work: the save button's face is the modified floppy in warn yellow.
         Assert.Equal((byte)8, console.Pget(1, 22));
 
-        Assert.Equal("22161effe99e69b8", FrameHash.Of(screen.Framebuffer));
+        Assert.Equal("7d275675a9a49b49", FrameHash.Of(screen.Framebuffer));
     }
 
     /// <summary>
@@ -282,7 +306,7 @@ public class MusicEditorScreenGoldenTests : IDisposable
         // the author will hear.
         Assert.Equal((byte)1, console.Pget(151, 12));
 
-        Assert.Equal("e0a1d594f0c1e76b", FrameHash.Of(screen.Framebuffer));
+        Assert.Equal("4020d9d32eb89e26", FrameHash.Of(screen.Framebuffer));
     }
 
     /// <summary>
@@ -318,7 +342,7 @@ public class MusicEditorScreenGoldenTests : IDisposable
         // on screen, which is the whole reason the prompt lives on one reserved line.
         Assert.Equal((byte)2, console.Pget(99, 18));
 
-        Assert.Equal("6924d083aabcb026", FrameHash.Of(screen.Framebuffer));
+        Assert.Equal("101a599676bc6e4f", FrameHash.Of(screen.Framebuffer));
     }
 
     /// <summary>

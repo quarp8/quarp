@@ -53,6 +53,22 @@ namespace Quarp.Shell.Desktop.Tests;
 /// semitone row is two, a note is drawn in the colour of its own waveform, the loop's brackets
 /// stand on the columns they mark, the panel's fields sit under the preview — so a failure tells
 /// whoever reads it whether the screen is broken or merely redrawn.</para>
+///
+/// <para><b>Re-pinned 2026-08-25, wave X5 (the sound screen's panels got an edge and a
+/// ruler).</b> Cause named before the numbers were read, then confirmed on the running window:
+/// the pitch grid is the biggest panel on this screen and, on an empty slot, it was drawing
+/// nothing at all — no border, no step columns, no pitch rows. The author saw a hole where the
+/// instrument should be. TIC-80 does not: <c>sfx.c</c>'s <c>drawCanvas</c> lays the frame down
+/// BEFORE any note exists, and <c>drawCanvasLeds</c> paints every cell, lit or dark, so the
+/// grid can be read empty. Ours now carries the same two facts in the one column per step that
+/// no cell can ever paint, so the ruler cannot cover a note whatever the slot holds. The slot
+/// selector gained two bright ticks on its own frame naming the open slot, and the volume row
+/// reads by step. No rectangle moved: every new pixel landed in a column or row that was
+/// ground before. Every <c>Pget</c> probe in this file passed the change untouched — that is
+/// what says the screen was redrawn and not broken. Was / became:
+/// <c>b8c78584d4e7387f</c> / <c>5667a47283e3db13</c>,
+/// <c>52c6287e53c8cef8</c> / <c>344994e27925881c</c>,
+/// <c>edeada55e2807126</c> / <c>85c142c68c85088a</c>.</para>
 /// </summary>
 public class SfxEditorScreenGoldenTests : IDisposable
 {
@@ -169,7 +185,7 @@ public class SfxEditorScreenGoldenTests : IDisposable
             Assert.InRange(pixel, (byte)0, (byte)15);
         }
 
-        Assert.Equal("b8c78584d4e7387f", FrameHash.Of(screen.Framebuffer));
+        Assert.Equal("5667a47283e3db13", FrameHash.Of(screen.Framebuffer));
     }
 
     /// <summary>
@@ -223,7 +239,7 @@ public class SfxEditorScreenGoldenTests : IDisposable
         // Still no standing notice — this bank is writable.
         Assert.Equal((byte)0, console.Pget(1, 79));
 
-        Assert.Equal("52c6287e53c8cef8", FrameHash.Of(screen.Framebuffer));
+        Assert.Equal("344994e27925881c", FrameHash.Of(screen.Framebuffer));
     }
 
     /// <summary>
@@ -259,7 +275,7 @@ public class SfxEditorScreenGoldenTests : IDisposable
         // still on screen, which is the whole reason the prompt lives on one reserved line.
         Assert.Equal((byte)6, console.Pget(64, 33));
 
-        Assert.Equal("edeada55e2807126", FrameHash.Of(screen.Framebuffer));
+        Assert.Equal("85c142c68c85088a", FrameHash.Of(screen.Framebuffer));
     }
 
     /// <summary>

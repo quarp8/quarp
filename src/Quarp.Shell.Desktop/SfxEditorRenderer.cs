@@ -64,11 +64,12 @@ namespace Quarp.Shell.Desktop;
 /// <see cref="CartSession"/>'s, and no call in this file can reach it.</para>
 ///
 /// <para><b>Cost, measured rather than waved away.</b> The heaviest loop on this frame is the
-/// preview's one bar per interior column — sixty of them — and the volume grid's worst case of
-/// 32 steps x 7 levels of a 2x2 block. Against the 14400 pixels the <c>Cls</c> on the same frame
-/// writes, that is an order below what the sprite and map screens already pay. This is drawing,
-/// not simulation: it happens once per rendered frame, never inside a tick, and no rewind
-/// replays it.</para>
+/// instrument's ruler — twenty-four dotted columns of sixteen <c>Pset</c>s each plus eight whole
+/// lines of forty-five pixels, about 750 pixels — followed by the preview's one bar per interior
+/// column and the volume grid's worst case of 32 steps x 7 levels of a 2x2 block. Against the
+/// 14400 pixels the <c>Cls</c> on the same frame writes, all of it together is a twentieth of one
+/// clear. This is drawing, not simulation: it happens once per rendered frame, never inside a
+/// tick, and no rewind replays it.</para>
 /// </summary>
 public static class SfxEditorRenderer
 {
@@ -111,8 +112,10 @@ public static class SfxEditorRenderer
         console.Cls(Ink);
 
         DrawBands(console, layout.Chrome);
+        DrawPanelFrames(console, layout);
         DrawStepCursor(console, layout, view);
         DrawStaffRules(console, layout);
+        DrawInstrumentRuler(console, layout);
         DrawPitchGrid(console, layout, session, view);
         DrawLoopRow(console, layout, session, view);
         DrawVolumeGrid(console, layout, session, view);
@@ -224,9 +227,95 @@ public static class SfxEditorRenderer
         return target.Sfx is SfxRegion.None ? null : EditorIcons.SfxRegionTooltip(target.Sfx);
     }
 
+    /// <summary>
+    /// The borders of the two panels that can be empty — the instrument (pitch grid, loop row and
+    /// volume grid together) and the 64-slot selector. They are drawn <b>second</b>, right after
+    /// the three band rules and before anything else, for the reason
+    /// <c>SpriteEditorRenderer.DrawPanelFrames</c> gives: every pixel they touch is either free
+    /// ground or a pixel some neighbour owns, and the neighbour must win. Here the only such
+    /// neighbour is the step cursor's band, whose last step reaches the instrument's right rule.
+    ///
+    /// <para>They exist because of the defect the owner saw on 2026-08-25: on a slot with one
+    /// note in it the right half of the screen — the largest panel there is — read as a hole,
+    /// because silence draws nothing and nothing is colour 0. TIC-80's <c>drawCanvas</c> rings
+    /// each of its led panels before filling it (<c>sfx.c</c>, REFERENCES-EDITORS §5.1); the two
+    /// rectangles are <see cref="SfxEditorLayout.InstrumentFrame"/> and
+    /// <see cref="SfxEditorLayout.SlotsFrame"/>, which carry the argument about which of their
+    /// sides can be drawn at all.</para>
+    /// </summary>
+    private static void DrawPanelFrames(VirtualConsole console, in SfxEditorLayout layout)
+    {
+        Outline(console, layout.InstrumentFrame, Dim);
+        Outline(console, layout.SlotsFrame, Dim);
+    }
+
     /// <summary>The band of the step under the cursor, drawn under everything so the three grids read as one column.</summary>
     private static void DrawStepCursor(VirtualConsole console, in SfxEditorLayout layout, SfxEditorView view) =>
         Fill(console, layout.StepColumnRect(view.CursorStep), Dim);
+
+    /// <summary>
+    /// <b>The instrument's ruler</b> — what makes the three grids readable when they are empty
+    /// and when they are full alike. It is TIC-80's led lattice
+    /// (<c>drawCanvasLeds</c>, REFERENCES-EDITORS §5.1: every cell of a panel is drawn, lit ones
+    /// bright and unlit ones in the panel's dark twin) at the density our palette allows —
+    /// <see cref="SfxEditorLayout.StepGapX"/> carries that argument in full, and the short of it
+    /// is that the lattice lives in the one column per step that no cell can paint, so it covers
+    /// nothing at any data and needs no draw-order promise to keep that true.
+    ///
+    /// <para><b>What it says, in three registers.</b>
+    /// <list type="bullet">
+    /// <item><description><b>Steps.</b> Every step boundary carries a mark, and the last step of
+    /// every beat (<see cref="SfxEditorLayout.BeatSteps"/> = 4, TIC-80's <c>NOTES_PER_BEAT</c>)
+    /// carries a whole line the height of the instrument instead of a dotted one. Counting to
+    /// step 20 is then counting five lines, not twenty columns.</description></item>
+    /// <item><description><b>Pitches.</b> A dot on the row of each of the seven <em>natural</em>
+    /// semitones of the octave and none on the five sharps, which draws the piano's own pattern
+    /// down the grid — the 2-3 grouping of the white keys. That is TIC-80's <c>drawPianoOctave</c>
+    /// (7 white and 5 black keys per octave, §5.1) read as rows rather than as keys, and it is
+    /// what lets the eye say "that note is E" instead of "that note is on the fifth row". The C
+    /// row's dot is <see cref="ConsoleChromeRenderer.Text"/> rather than
+    /// <see cref="ConsoleChromeRenderer.Dim"/>: it is the octave's anchor, and the octave on
+    /// screen is what the OCT field is changing.</description></item>
+    /// <item><description><b>Volumes.</b> A dot at the top of every one of the eight levels, so a
+    /// bar's height can be read off the scale beside it rather than guessed. Without this the
+    /// volume row was, in the owner's words, one solid light block: thirty-two full bars and
+    /// nothing to measure them against.</description></item>
+    /// </list></para>
+    /// </summary>
+    private static void DrawInstrumentRuler(VirtualConsole console, in SfxEditorLayout layout)
+    {
+        int top = layout.Pitch.Y;
+        int height = layout.Volume.Bottom - top;
+        for (int step = 0; step < SfxEditorLayout.StepColumns; step++)
+        {
+            int x = layout.StepGapX(step);
+            if (SfxEditorLayout.IsBeatEnd(step))
+            {
+                console.RectFill(x, top, 1, height, Dim);
+                continue;
+            }
+            for (int semitone = 0; semitone < SfxEditorLayout.OctaveRows; semitone++)
+            {
+                if (!IsNaturalKey(semitone))
+                {
+                    continue;
+                }
+                console.Pset(x, layout.PitchCellRect(step, semitone).Y, semitone == 0 ? Text : Dim);
+            }
+            console.Pset(x, layout.Loop.Y + layout.Loop.Height / 2, Dim);
+            for (int level = 0; level < SfxEditorLayout.VolumeLevels; level++)
+            {
+                console.Pset(x, layout.VolumeCellRect(step, level).Y, Dim);
+            }
+        }
+    }
+
+    /// <summary>
+    /// True for the seven semitones a piano gives a white key — C D E F G A B, counted from C at
+    /// 0. The set is written as a twelve-bit mask rather than as a switch because it is one fact
+    /// about one octave and a reader can see the whole of it at once: bits 0, 2, 4, 5, 7, 9, 11.
+    /// </summary>
+    private static bool IsNaturalKey(int semitone) => (0b1010_1011_0101 >> semitone & 1) != 0;
 
     /// <summary>
     /// The two clear rows between the three grids, drawn as dim rules. They are the instrument's
@@ -328,6 +417,14 @@ public static class SfxEditorRenderer
     /// one good idea: an empty slot is drawn darker than a used one, so the bank's shape is
     /// readable at a glance without clicking through it. The open slot carries the library's blue
     /// and a bright frame, because at 3x3 a colour alone is two pixels of signal.
+    ///
+    /// <para><b>And two ticks on the selector's own frame, which is what actually finds it.</b>
+    /// The plate and the ring were not enough: they are one palette step from the used slots
+    /// around them, and the plate is the palette's dark blue, so on a full bank the open slot
+    /// read to the owner's eye as "a tiny blue dot" rather than as the thing being edited. The
+    /// ticks stand outside the lattice, on ground that is colour 0, and name the open slot's
+    /// column and row — <see cref="SfxEditorLayout.SlotColumnTickRect"/> carries the whole
+    /// argument.</para>
     /// </summary>
     private static void DrawSelector(
         VirtualConsole console, in SfxEditorLayout layout, SfxEditorSession session, SfxEditorView view)
@@ -342,6 +439,8 @@ public static class SfxEditorRenderer
         }
         Rectangle chosen = layout.SlotCellRect(view.SelectedSlot);
         console.Rect(chosen.X, chosen.Y, chosen.Width, chosen.Height, Bright);
+        Fill(console, layout.SlotColumnTickRect(view.SelectedSlot), Bright);
+        Fill(console, layout.SlotRowTickRect(view.SelectedSlot), Bright);
     }
 
     /// <summary>
@@ -521,4 +620,13 @@ public static class SfxEditorRenderer
     /// <summary>One filled rectangle, a layout rectangle unpacked into the console's call.</summary>
     private static void Fill(VirtualConsole console, Rectangle rect, byte color) =>
         console.RectFill(rect.X, rect.Y, rect.Width, rect.Height, color);
+
+    /// <summary>One outline, skipped when the rectangle came back empty — the sprite screen's own helper.</summary>
+    private static void Outline(VirtualConsole console, Rectangle rect, byte color)
+    {
+        if (rect.Width > 0 && rect.Height > 0)
+        {
+            console.Rect(rect.X, rect.Y, rect.Width, rect.Height, color);
+        }
+    }
 }

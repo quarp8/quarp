@@ -116,6 +116,14 @@ public readonly struct SfxEditorLayout
     /// <summary>Console pixels per step across all three grids — see the type comment for why three and not four.</summary>
     public const int StepWidth = 3;
 
+    /// <summary>
+    /// Steps in one beat. Four, which is TIC-80's own <c>NOTES_PER_BEAT</c> — the value its music
+    /// editor scrolls by and highlights beats with (REFERENCES-EDITORS §6.1) — and half of the
+    /// eight-note "SFX quarter" PICO-8 names for this very editor (§5.3). It is what the
+    /// instrument's ruler counts in, so an author can find step 20 without counting to twenty.
+    /// </summary>
+    public const int BeatSteps = 4;
+
     /// <summary>Console pixels per semitone row. Two, which is exactly TIC-80's led cell height (REFERENCES-EDITORS §5.1).</summary>
     public const int PitchRowHeight = 2;
 
@@ -183,6 +191,31 @@ public readonly struct SfxEditorLayout
     /// <summary>The pitch grid: 32 steps by one octave, semitone 11 on the top row.</summary>
     public Rectangle Pitch { get; private init; }
 
+    /// <summary>
+    /// The ring around the whole instrument — pitch grid, loop row and volume grid, which share
+    /// one column per step and are read as one panel.
+    ///
+    /// <para><b>Why it exists at all.</b> TIC-80 rings every led panel of its sound editor before
+    /// filling it: <c>drawCanvas</c> draws the border at <c>x - 1, y - 1, w + 2, h + 2</c> and
+    /// only then calls <c>drawCanvasLeds</c> (<c>src/studio/editors/sfx.c</c>,
+    /// REFERENCES-EDITORS §5.1). Ours had no border, and an empty slot draws nothing, and the
+    /// screen's ground is colour 0 — so the largest panel on the screen read as a hole in the
+    /// interface. That is the same defect the sprite screen's canvas had on 2026-08-25, and
+    /// <see cref="SpriteEditorLayout.CanvasFrame"/> is the same rectangle answering it.</para>
+    ///
+    /// <para><b>Three sides stand outside the panel and the fourth stands inside it, on purpose.</b>
+    /// Left, top and bottom are a pixel clear of the grids. The right side would want column 160,
+    /// which does not exist — the instrument runs flush to the screen's edge — so it stands on
+    /// <see cref="StepGapX"/> of the last step, the one column no cell of any of the three grids
+    /// can paint. The alternative was moving the whole instrument a pixel left, which would shift
+    /// every rectangle on the right half of the screen to buy a column that is already free. The
+    /// sprite screen had to make the other choice for its sheet window
+    /// (<see cref="SpriteEditorLayout.SheetFrame"/> leaves the fourth side off the screen)
+    /// because there no such column existed.</para>
+    /// </summary>
+    public Rectangle InstrumentFrame =>
+        new(Pitch.X - 1, Pitch.Y - 1, Pitch.Width + 1, Volume.Bottom - Pitch.Y + 2);
+
     /// <summary>The loop marker row, under the pitch grid and sharing its columns.</summary>
     public Rectangle Loop { get; private init; }
 
@@ -191,6 +224,20 @@ public readonly struct SfxEditorLayout
 
     /// <summary>The 64-slot selector, 16 by 4.</summary>
     public Rectangle Slots { get; private init; }
+
+    /// <summary>
+    /// The ring around the 64-slot selector. TIC-80 draws its selector inside a panel of its own
+    /// (<c>drawSelectorPanel</c>, §5.1) and ours stood on bare ground; the ring is also what the
+    /// open slot's two bright ticks hang off, which is how this screen answers "which of the
+    /// sixty-four squares am I editing" at a glance — see <see cref="SlotColumnTickRect"/>.
+    ///
+    /// <para>Its left side is the screen's own edge and is therefore not drawn: the selector
+    /// starts at column 0. That is the same honest three-sided answer
+    /// <see cref="SpriteEditorLayout.SheetFrame"/> gives, and the rectangle is written whole
+    /// rather than clipped here because <c>VirtualConsole</c> clips it for free.</para>
+    /// </summary>
+    public Rectangle SlotsFrame =>
+        new(Slots.X - 1, Slots.Y - 1, Slots.Width + 2, Slots.Height + 2);
 
     /// <summary>The waveform preview box — one cycle of the pen's wave, full width of the panel.</summary>
     public Rectangle Preview { get; private init; }
@@ -385,6 +432,27 @@ public readonly struct SfxEditorLayout
     public Rectangle StepColumnRect(int step) =>
         new(Pitch.X + step * StepWidth, Pitch.Y, StepWidth, Volume.Bottom - Pitch.Y);
 
+    /// <summary>
+    /// The one console column of a step that no grid cell can ever paint, and the column the
+    /// instrument's ruler lives in.
+    ///
+    /// <para>Every cell of all three grids is drawn a pixel narrower than <see cref="StepWidth"/>
+    /// so that neighbouring steps read as columns rather than as one slab
+    /// (<c>SfxEditorRenderer.Column</c>). That reserved pixel is this one, and it is reserved in
+    /// the pitch grid, the loop row and the volume grid alike — which is exactly what a ruler
+    /// needs: markup that cannot cover content, at any data, without depending on draw order.
+    /// TIC-80 gets the same effect the other way round, by drawing <em>every</em> led of a panel
+    /// and colouring the unlit ones in the panel's dark twin (<c>drawCanvasLeds</c>, §5.1). We
+    /// cannot: the console's sixteen slots hold one grey (slot 1) and no dark twin per hue, so a
+    /// full lattice of unlit cells would be a slab of grey with the notes barely standing above
+    /// it. <b>The divergence is therefore density, not idea</b>: the same lattice, drawn one pixel
+    /// per cell in the column that is free anyway.</para>
+    /// </summary>
+    public int StepGapX(int step) => Pitch.X + step * StepWidth + StepWidth - 1;
+
+    /// <summary>True at the last step of a beat — where the ruler draws a whole line instead of a dotted one.</summary>
+    public static bool IsBeatEnd(int step) => step % BeatSteps == BeatSteps - 1;
+
     // ---- the panel ----
 
     /// <summary>Console point to a slot number in the selector, or false off it.</summary>
@@ -411,6 +479,28 @@ public readonly struct SfxEditorLayout
             Slots.Y + slot / SlotColumns * SlotCellSize,
             SlotCellSize,
             SlotCellSize);
+
+    /// <summary>
+    /// The open slot's tick on the selector's top rule — the column it stands in, said outside
+    /// the lattice.
+    ///
+    /// <para><b>Why a tick and not a brighter square.</b> The cell itself already wears the
+    /// library's blue under a bright ring, and that was not enough to find: at 3x3 a used slot is
+    /// light grey (slot 2) and the ring is white (slot 3), two neighbours in the palette, while
+    /// the blue plate (slot 4) is the palette's <em>dark</em> blue and so reads as a hole rather
+    /// than as a highlight — the owner's eye reported exactly that, "a tiny blue dot". Nothing
+    /// inside a sixteen-by-four field of 3x3 squares can be made to stand out by hue or by one
+    /// step of brightness. A mark <b>outside</b> the field can: the frame's ground is colour 0,
+    /// so a white tick on it is maximum contrast, and two of them — a column and a row — name one
+    /// square of the sixty-four between them. TIC-80 hangs marks off a panel's frame for the same
+    /// reason (the sheet's neighbouring-page strokes, §2.1).</para>
+    /// </summary>
+    public Rectangle SlotColumnTickRect(int slot) =>
+        new(SlotCellRect(slot).X, SlotsFrame.Y, SlotCellSize, 1);
+
+    /// <summary>The open slot's tick on the selector's right rule — the row it stands in. See <see cref="SlotColumnTickRect"/>.</summary>
+    public Rectangle SlotRowTickRect(int slot) =>
+        new(SlotsFrame.Right - 1, SlotCellRect(slot).Y, 1, SlotCellSize);
 
     /// <summary>The console rectangle of one waveform cell, 0-5.</summary>
     public Rectangle WaveCellRect(int wave) => RowCellRect(Waves, wave, SfxEditorSession.WaveCount);

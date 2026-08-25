@@ -125,6 +125,13 @@ public readonly struct MusicEditorLayout
     public const int OverviewFlagWidth = 2;
 
     /// <summary>
+    /// Patterns in one group of the overview's ruler — four, the same beat grouping the sound
+    /// screen counts steps in (<see cref="SfxEditorLayout.BeatSteps"/>) and TIC-80's own
+    /// <c>NOTES_PER_BEAT</c> (§6.1). Sixty-four unmarked rows cannot be counted; sixteen groups can.
+    /// </summary>
+    public const int OverviewGroup = 4;
+
+    /// <summary>
     /// The tool column, top to bottom: play/stop, then the three the host frame kept in its
     /// status bar. Those three moved for the reason the other four screens' did — the console's
     /// status line is five pixels tall and an icon-button is ten.
@@ -171,6 +178,21 @@ public readonly struct MusicEditorLayout
 
     /// <summary>The tracker rows — <see cref="VisibleRows"/> patterns of the sixty-four.</summary>
     public Rectangle Rows { get; private init; }
+
+    /// <summary>
+    /// The ring around the pattern grid — the channel header and the ten tracker rows together,
+    /// because they are one panel: the header names the columns the rows are read in, and a rule
+    /// already separates them.
+    ///
+    /// <para>TIC-80 grounds each tracker channel on a rectangle of its own before writing a row
+    /// into it (<c>drawTrackerChannel</c>, REFERENCES-EDITORS §6.1), and every panel on the
+    /// sprite screen has carried a ring since 2026-08-25
+    /// (<see cref="SpriteEditorLayout.CanvasFrame"/>). This one had none: its top and bottom were
+    /// the frame's own rules, there with or without a grid, and its sides were nothing. All four
+    /// are drawn here, so the panel has one owner rather than two accidents.</para>
+    /// </summary>
+    public Rectangle GridFrame =>
+        new(Rows.X - 1, Header.Y - 1, Rows.Width + 2, Rows.Bottom - Header.Y + 2);
 
     /// <summary>Left edge of the first channel column; the number and the markers stand left of it.</summary>
     public int ChannelsX { get; private init; }
@@ -395,6 +417,20 @@ public readonly struct MusicEditorLayout
     public Rectangle OverviewChannelRect(int pattern, int channel) =>
         new(OverviewInterior.X + channel * OverviewChannelWidth,
             OverviewInterior.Y + pattern, OverviewChannelWidth, 1);
+
+    /// <summary>
+    /// The one column of a channel's overview lane that no mark can paint, and the column the
+    /// overview's ruler lives in.
+    ///
+    /// <para>A channel's mark is drawn a pixel narrower than <see cref="OverviewChannelWidth"/> —
+    /// the same trick the sound screen's grids use (<see cref="SfxEditorLayout.StepGapX"/>) — so
+    /// this column is free at every pattern, for every song. The lane rules drawn down it stop
+    /// the overview from being an empty box on an empty song and tell channel 2's marks from
+    /// channel 3's on a full one; the group ticks and the cursor's and playhead's rows go in the
+    /// same column, so <b>nothing the overview draws about itself can cover the song</b>.</para>
+    /// </summary>
+    public int OverviewLaneX(int channel) =>
+        OverviewInterior.X + channel * OverviewChannelWidth + OverviewChannelWidth - 1;
 
     /// <summary>The overview's flag column for one pattern — two pixels: loop marks, then stop.</summary>
     public Rectangle OverviewFlagRect(int pattern) =>

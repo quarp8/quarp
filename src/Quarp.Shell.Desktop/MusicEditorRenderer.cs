@@ -40,9 +40,10 @@ namespace Quarp.Shell.Desktop;
 /// <see cref="CartSession"/>'s, and no call in this file can reach it.</para>
 ///
 /// <para><b>Cost, measured rather than waved away.</b> The heaviest loop on this frame is the
-/// overview's 64 rows x 4 channels of a 3x1 fill — 256 spans of three pixels — against the 14400
-/// pixels the <c>Cls</c> on the same frame writes. This is drawing, not simulation: it happens
-/// once per rendered frame, never inside a tick, and no rewind replays it.</para>
+/// overview's 64 rows x 4 channels of a 3x1 fill — 256 spans of three pixels — plus its ruler's
+/// four 64-pixel lane rules and sixteen group ticks, against the 14400 pixels the <c>Cls</c> on
+/// the same frame writes. This is drawing, not simulation: it happens once per rendered frame,
+/// never inside a tick, and no rewind replays it.</para>
 /// </summary>
 public static class MusicEditorRenderer
 {
@@ -85,6 +86,7 @@ public static class MusicEditorRenderer
         console.Cls(Ink);
 
         DrawBands(console, layout.Chrome);
+        DrawGridFrame(console, layout);
         DrawHeader(console, layout, view);
         DrawRows(console, layout, session, view);
         DrawOverview(console, layout, session, view);
@@ -176,6 +178,19 @@ public static class MusicEditorRenderer
     }
 
     /// <summary>
+    /// The border of the pattern grid, drawn <b>second</b> — right after the three band rules and
+    /// before anything that stands on it — for the reason
+    /// <c>SpriteEditorRenderer.DrawPanelFrames</c> gives: the frame is the ground its controls
+    /// stand on, so a control that owns one of its pixels must be able to paint over it.
+    /// <see cref="MusicEditorLayout.GridFrame"/> carries the argument for the rectangle.
+    /// </summary>
+    private static void DrawGridFrame(VirtualConsole console, in MusicEditorLayout layout)
+    {
+        Rectangle frame = layout.GridFrame;
+        console.Rect(frame.X, frame.Y, frame.Width, frame.Height, Dim);
+    }
+
+    /// <summary>
     /// The channel header: a number and two toggles per channel, and the rule under the band. A
     /// lit toggle wears the library's blue plate and a bright face, an idle one is dim ink — fill
     /// and brightness carry the signal, never hue alone, the same rule the sprite screen's flag
@@ -209,10 +224,29 @@ public static class MusicEditorRenderer
     }
 
     /// <summary>
-    /// The ten tracker rows on screen. The cursor's row gets a dim band under everything, so the
+    /// The ten tracker rows on screen. The cursor's row gets a band under everything, so the
     /// eye can follow one bar across the number, the markers and the four voices — the same trick
     /// the sound screen's step column plays across its three grids. The playhead's row is marked
     /// in warn yellow instead, because while the song plays that is the row the ear is on.
+    ///
+    /// <para><b>The band is dark, and it was light, and that was the defect.</b> TIC-80 draws the
+    /// row under the tracker cursor as a <em>dark</em> plate with the row's text still light on
+    /// top of it (<c>music.c</c>, <c>drawTrackerChannel</c>: the highlight is
+    /// <c>tic_color_dark_grey</c>, the glyphs stay white — REFERENCES-EDITORS §6.1). Ours used
+    /// <see cref="ConsoleChromeRenderer.Dim"/>, which on this palette is a <em>mid</em> grey
+    /// (slot 1, #6e7b8f): lighter than the ground, lighter than a resting cell's own dim "--",
+    /// and only one step darker than ordinary text. The owner's eye read the result as "a solid
+    /// wide light stripe with the digits almost unreadable on it", which is exactly what those
+    /// three facts predict. <see cref="ConsoleChromeRenderer.ActiveBg"/> (slot 4, #2c3e8c) is the
+    /// darkest colour among the console's sixteen after the ground itself, so it is this
+    /// palette's <c>dark_grey</c>: every ink the row can print — text, dim, bright, warn — is
+    /// lighter than it, and all four stay legible without a single one of them changing.</para>
+    ///
+    /// <para><b>The named cost.</b> Blue is also what a marked cell wears
+    /// (<see cref="InSelection"/>), so a selected cell that happens to lie on the cursor's own row
+    /// no longer shows its plate. The rest of the marked rectangle still does, and the cursor's
+    /// row is one row of it; the alternative was a second dark slot, and the palette has
+    /// none.</para>
     /// </summary>
     private static void DrawRows(
         VirtualConsole console, in MusicEditorLayout layout, MusicEditorSession session, MusicEditorView view)
@@ -228,7 +262,7 @@ public static class MusicEditorRenderer
             bool playing = view.Playing && view.PlayingPattern == pattern;
             if (pattern == session.CursorPattern)
             {
-                Fill(console, layout.RowRect(pattern, first), Dim);
+                Fill(console, layout.RowRect(pattern, first), ActiveBg);
             }
             Rectangle number = layout.NumberRect(pattern, first);
             if (playing)
@@ -315,12 +349,31 @@ public static class MusicEditorRenderer
     /// silent one leaves ink, a section flag lights the two-pixel column at the right, the frame
     /// shows which slice the grid is editing, and the playhead is a single warn pixel on the box's
     /// own left edge. It is the map screen's minimap, applied to a song.
+    ///
+    /// <para><b>What was missing, and what the references say to put there.</b> On the owner's
+    /// screen this was a tall empty rectangle with one dot in it, and three things were wrong at
+    /// once. (1) It had <em>no scale</em>: sixty-four unmarked one-pixel rows and four unmarked
+    /// three-pixel lanes cannot be counted, so a mark in the middle of the box named no pattern
+    /// and no channel. (2) It <em>vanished when the song was empty</em>, because a silent channel
+    /// left nothing behind — the same "an empty panel is a hole" defect the sound screen's grids
+    /// had. (3) It did not show <em>where the cursor is</em> at all: the bracket says which ten
+    /// patterns the grid holds, which is not the same fact. TIC-80's frame column is the reference
+    /// for all three — <c>drawTrackerFrames</c> draws every one of its sixteen frames as a button
+    /// that is there whether or not it holds anything, with the current one highlighted and its
+    /// number written above the column (REFERENCES-EDITORS §6.1) — and PICO-8's pattern navigator
+    /// is a permanent list of patterns for the same reason (§6.3). Sixteen pixels of width cannot
+    /// hold sixty-four numbered buttons, so the fact is carried by a ruler instead: lane rules
+    /// down every channel, a tick every <see cref="MusicEditorLayout.OverviewGroup"/> patterns, a
+    /// bright row for the cursor and a warn row for the playhead. <b>All of it lives in
+    /// <see cref="MusicEditorLayout.OverviewLaneX"/> — the column a channel's mark cannot reach —
+    /// so the ruler never hides a note of the song.</b></para>
     /// </summary>
     private static void DrawOverview(
         VirtualConsole console, in MusicEditorLayout layout, MusicEditorSession session, MusicEditorView view)
     {
         Rectangle box = layout.Overview;
         console.Rect(box.X, box.Y, box.Width, box.Height, Dim);
+        DrawOverviewRuler(console, layout);
         for (int pattern = 0; pattern < MusicEditorLayout.PatternCount; pattern++)
         {
             for (int channel = 0; channel < MusicEditorLayout.ChannelCount; channel++)
@@ -344,11 +397,70 @@ public static class MusicEditorRenderer
                 console.Pset(flagCell.X + 1, flagCell.Y, Error);
             }
         }
+        // The cursor's row and, over it, the playhead's — both in the lane columns, so they read
+        // across the whole box without touching a single mark. The cursor is drawn even while the
+        // song plays: "where I am editing" does not stop being true because something is
+        // sounding, and the two coincide often enough that hiding one would be a lie.
+        MarkOverviewRow(console, layout, session.CursorPattern, Bright);
+        // The playhead is the wiring's number, not this screen's: the chip reports where it is,
+        // and a song being edited under it can shrink between the report and this frame. The
+        // bound is therefore checked HERE, once, and used for both marks — the row and the
+        // pixel on the frame. Before this wave the pixel was drawn on any non-negative number,
+        // which put it outside the box and into the message band for anything past 63.
+        bool playhead = view.Playing
+            && view.PlayingPattern >= 0
+            && view.PlayingPattern < MusicEditorLayout.PatternCount;
+        if (playhead)
+        {
+            MarkOverviewRow(console, layout, view.PlayingPattern, Warn);
+        }
         Rectangle window = layout.OverviewWindowRect(view.FirstPattern);
         console.Rect(window.X, window.Y, window.Width, window.Height, Bright);
-        if (view.Playing && view.PlayingPattern >= 0)
+        if (playhead)
         {
             console.Pset(box.X, layout.OverviewRowRect(view.PlayingPattern).Y, Warn);
+        }
+    }
+
+    /// <summary>
+    /// The overview's own scale, drawn under the song: a dim rule down each channel's lane so the
+    /// four voices are told apart and the box is never empty, and a brighter tick across all four
+    /// lanes every <see cref="MusicEditorLayout.OverviewGroup"/> patterns so sixty-four rows can
+    /// be counted in groups of four.
+    /// </summary>
+    private static void DrawOverviewRuler(VirtualConsole console, in MusicEditorLayout layout)
+    {
+        Rectangle interior = layout.OverviewInterior;
+        for (int channel = 0; channel < MusicEditorLayout.ChannelCount; channel++)
+        {
+            console.RectFill(layout.OverviewLaneX(channel), interior.Y, 1, interior.Height, Dim);
+        }
+        for (int pattern = 0; pattern < MusicEditorLayout.PatternCount;
+             pattern += MusicEditorLayout.OverviewGroup)
+        {
+            MarkOverviewRow(console, layout, pattern, Text);
+        }
+    }
+
+    /// <summary>
+    /// One pattern's row marked across the overview's four lane columns. Out-of-range patterns are
+    /// ignored rather than thrown at: the only callers pass a cursor and a playhead, and a
+    /// renderer that throws while painting a frame takes the console down with the author's
+    /// unsaved work still on screen — the rule <see cref="TooltipText"/> already states for the
+    /// hover label, applied to the one other place on this screen that reads an index it does not
+    /// own.
+    /// </summary>
+    private static void MarkOverviewRow(
+        VirtualConsole console, in MusicEditorLayout layout, int pattern, byte ink)
+    {
+        if (pattern < 0 || pattern >= MusicEditorLayout.PatternCount)
+        {
+            return;
+        }
+        int y = layout.OverviewRowRect(pattern).Y;
+        for (int channel = 0; channel < MusicEditorLayout.ChannelCount; channel++)
+        {
+            console.Pset(layout.OverviewLaneX(channel), y, ink);
         }
     }
 

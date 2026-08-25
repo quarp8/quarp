@@ -61,6 +61,21 @@ public enum EditorButton
     /// which screen a button belongs to now that two screens share this list.
     /// </summary>
     ToolEraser,
+
+    /// <summary>
+    /// The map editor's fourth tool (wave 3d): TIC-80's <c>MAP_DRAG_MODE</c> — a left-drag on
+    /// the canvas pans the viewport instead of painting. Map-only, like
+    /// <see cref="ToolEraser"/>: the sprite canvas is one region at one magnification and has
+    /// nothing to pan.
+    /// </summary>
+    ToolHand,
+
+    /// <summary>
+    /// The map editor's grid switch (wave 3d): TIC-80's <c>drawGridButton</c> ("SHOW/HIDE GRID",
+    /// key <c>`</c>), on by default. Map-only for the same reason the hand is — the sprite
+    /// canvas draws its own pixel grid unconditionally and has no such choice to offer.
+    /// </summary>
+    GridToggle,
 }
 
 /// <summary>
@@ -94,6 +109,8 @@ public enum EditorIcon
     SelectBrush,
     Wand,
     Eraser,
+    Hand,
+    Grid,
 }
 
 /// <summary>
@@ -370,6 +387,28 @@ public static class EditorIcons
             0b00000000,
             0b11111111,
         },
+        new byte[] // Hand: an open palm with four fingers and a thumb — TIC-80's tic_icon_hand
+        {
+            0b00010100,
+            0b00010101,
+            0b00110101,
+            0b00110101,
+            0b01110111,
+            0b01111110,
+            0b00111110,
+            0b00011100,
+        },
+        new byte[] // Grid: four cells of tile boundary — the lines the switch shows and hides
+        {
+            0b10010010,
+            0b00000000,
+            0b00000000,
+            0b10010010,
+            0b00000000,
+            0b00000000,
+            0b10010010,
+            0b00000000,
+        },
     };
 
     /// <summary>How many glyphs exist — the atlas sizes its strip from this.</summary>
@@ -411,19 +450,28 @@ public static class EditorIcons
     /// button: <see cref="SpriteEditorLayout"/> places everything this answers true for, and
     /// <see cref="MapEditorLayout"/> everything <see cref="BelongsToMapEditor"/> does.
     /// </summary>
-    public static bool BelongsToSpriteEditor(EditorButton button) => button is not EditorButton.ToolEraser;
+    public static bool BelongsToSpriteEditor(EditorButton button) => button is not (
+        EditorButton.ToolEraser or EditorButton.ToolHand or EditorButton.GridToggle);
 
     /// <summary>
     /// The map editor's own button list: the shared chrome (tabs, exit, save, undo, redo), the
-    /// pencil and the eraser. Everything the map has no model verb for — fill, stamp, shapes,
-    /// transforms, select, clear, the sprite-size toggle and the layer tabs — stays off this
-    /// screen, because a placed button with nothing behind it is the defect class the button
-    /// contract test closed in wave 2g.
+    /// four tools of TIC-80's <c>map->mode</c> (pencil, hand, select, fill — REFERENCES-EDITORS
+    /// §3.1), the grid switch and the eraser. Everything the map still has no model verb for —
+    /// stamp, shapes, transforms, clear, the sprite-size toggle and the layer tabs — stays off
+    /// this screen, because a placed button with nothing behind it is the defect class the
+    /// button contract test closed in wave 2g.
+    ///
+    /// <para><see cref="EditorButton.ToolSelect"/> and <see cref="EditorButton.ToolFill"/> are
+    /// borrowed from the sprite editor's list rather than duplicated under map-only names: one
+    /// enum member per <em>meaning</em>, and "rectangle select" means the same thing on both
+    /// canvases. What differs is the verb behind the click, and that already has two owners —
+    /// <see cref="ClickButton"/> and <see cref="ClickMapButton"/>.</para>
     /// </summary>
     public static bool BelongsToMapEditor(EditorButton button) => button is
         EditorButton.ExitTab or EditorButton.CodeTab or EditorButton.SpritesTab
         or EditorButton.TilemapTab or EditorButton.SoundTab or EditorButton.MusicTab
-        or EditorButton.ToolPencil or EditorButton.ToolEraser
+        or EditorButton.ToolPencil or EditorButton.ToolHand or EditorButton.ToolSelect
+        or EditorButton.ToolFill or EditorButton.ToolEraser or EditorButton.GridToggle
         or EditorButton.Save or EditorButton.Undo or EditorButton.Redo;
 
     /// <summary>
@@ -590,6 +638,8 @@ public static class EditorIcons
         EditorButton.Undo => EditorIcon.Undo,
         EditorButton.Redo => EditorIcon.Redo,
         EditorButton.ToolEraser => EditorIcon.Eraser,
+        EditorButton.ToolHand => EditorIcon.Hand,
+        EditorButton.GridToggle => EditorIcon.Grid,
         // The text-faced buttons (size toggle, layer tabs) have no glyph on purpose — the
         // renderer branches on ButtonText before ever asking here, so reaching this is a bug.
         _ => throw new ArgumentOutOfRangeException(nameof(button), button, "a text-faced button has no icon (ButtonText owns its face)."),
@@ -615,7 +665,13 @@ public static class EditorIcons
         EditorButton.ToolShape => "SHAPES  5 CYCLES   DRAG DRAWS, CTRL FILLS, HOLD/RCLICK VARIANTS",
         EditorButton.ToolTransform => "TRANSFORM  6 CYCLES, F/V/R APPLY   CLICK APPLIES, HOLD/RCLICK VARIANTS",
         EditorButton.Clear => "CLEAR  DEL",
-        EditorButton.ToolEraser => "EMPTY TILE 0  DEL",
+        // The three map-only buttons live in THIS table, not in MapTooltip: their meaning does
+        // not differ between screens (the sprite editor simply never places them), and a text
+        // that exists only in the override would leave this method — the fallthrough every
+        // other caller reaches — answering "REDO CTRL+Y" for them.
+        EditorButton.ToolEraser => "ERASE  DEL   SELECTS TILE 000",
+        EditorButton.ToolHand => "DRAG MAP  2   SPACE+DRAG PANS ANYWHERE   ARROWS AND [ ] PGUP/PGDN TRAVEL",
+        EditorButton.GridToggle => "SHOW/HIDE GRID  `   OFF AT THE SMALLEST MAP SCALE",
         EditorButton.Save => "SAVE  CTRL+S",
         EditorButton.Undo => "UNDO  CTRL+Z",
         EditorButton.SizeToggle => "SPRITE SIZE  TAB CYCLES, CLICK LISTS 8/16/32",
@@ -645,7 +701,9 @@ public static class EditorIcons
     /// The map editor's tooltip for a button whose meaning differs on that screen, falling
     /// through to <see cref="Tooltip(EditorButton)"/> for everything shared. Two screens, one
     /// tooltip file: keeping the fallback here rather than a second table there is what stops
-    /// "SAVE  CTRL+S" from existing twice and drifting once.
+    /// "SAVE  CTRL+S" from existing twice and drifting once. Note what is <b>not</b> here: the
+    /// map-only buttons (the eraser, the hand, the grid switch) are in the base table, because
+    /// their meaning does not differ between screens — only one screen places them.
     ///
     /// <para>The two buttonless controls of that screen — the tile picker and the minimap —
     /// have no <see cref="HoverTarget"/> kind of their own (that type is shared chrome and does
@@ -657,7 +715,11 @@ public static class EditorIcons
     public static string MapTooltip(EditorButton button) => button switch
     {
         EditorButton.ToolPencil =>
-            "PENCIL  ARROWS MOVE, Z/SPACE DRAW, X PICKS   SHIFT+ARROWS PICK A TILE",
+            "PENCIL  1   ARROWS MOVE, Z DRAWS, X PICKS   SHIFT+ARROWS PICK A TILE",
+        EditorButton.ToolSelect =>
+            "SELECT  3   DRAG MARKS A RECTANGLE, DEL EMPTIES IT, ESC DROPS IT",
+        EditorButton.ToolFill =>
+            "FILL  4   Z FILLS THE AREA AT THE CURSOR   RCLICK FILLS WITH TILE 000",
         EditorButton.TilemapTab =>
             "MAPS - ACTIVE   [ ] PAGE ACROSS, PGUP/PGDN PAGE DOWN, HOME SWITCHES TAB",
         _ => Tooltip(button),
@@ -665,6 +727,16 @@ public static class EditorIcons
 
     /// <summary>Swatch tooltip: the keyboard color mechanism, discoverable where the colors are.</summary>
     public static string SwatchTooltip(int color) => $"COLOR {color}   , PREV   . NEXT";
+
+    /// <summary>
+    /// Flag toggle tooltip (wave 3b-2). The bit is 0-based (PICO-8: "indexed from 0 starting
+    /// from the left", and it is <c>Fget</c>'s own index); its key is the 1-based digit, so the
+    /// pair has to be spelled out or the row would be a guessing game. The third clause is the
+    /// group rule made discoverable — at region 16 or 32 px a click moves four or sixteen
+    /// sprites at once, and a panel that did that silently would be a trap.
+    /// </summary>
+    public static string FlagTooltip(int bit) =>
+        $"FLAG {bit}  SHIFT+{bit + 1}   SETS THE WHOLE REGION";
 
     /// <summary>
     /// The sheet slider's tooltip (wave 2h) — it is the one control without a button, so this
@@ -684,6 +756,54 @@ public static class EditorIcons
         6 => EditorButton.ToolTransform,
         _ => null,
     };
+
+    /// <summary>
+    /// The <b>map</b> screen's digit table, top-to-bottom down its tool column and — the same
+    /// thing — TIC-80's own numbering (REFERENCES-EDITORS §3.1: <c>DRAW [1]</c>,
+    /// <c>DRAG MAP [2]</c>, <c>SELECT [3]</c>, <c>FILL [4]</c>). Separate from
+    /// <see cref="ButtonForDigit"/> because the two screens hold different tools in different
+    /// order, and one table pretending to serve both would put the map's fill on the sprite
+    /// editor's stamp key. Digits 5 and 6 are the sprite editor's alone and answer null here.
+    /// </summary>
+    public static EditorButton? MapButtonForDigit(int digit) => digit switch
+    {
+        1 => EditorButton.ToolPencil,
+        2 => EditorButton.ToolHand,
+        3 => EditorButton.ToolSelect,
+        4 => EditorButton.ToolFill,
+        _ => null,
+    };
+
+    /// <summary>
+    /// Which map tool a button IS, or null for every button that is not one of the four. The
+    /// single owner of the button↔tool mapping: <see cref="ClickMapButton"/> routes clicks
+    /// through it, <see cref="PressMapToolDigit"/> routes keys through it, and
+    /// <c>MapEditorRenderer</c> asks it which button to draw active — so the highlight cannot
+    /// disagree with the tool in hand.
+    /// </summary>
+    public static MapEditorTool? MapToolOf(EditorButton button) => button switch
+    {
+        EditorButton.ToolPencil => MapEditorTool.Pencil,
+        EditorButton.ToolHand => MapEditorTool.Hand,
+        EditorButton.ToolSelect => MapEditorTool.Select,
+        EditorButton.ToolFill => MapEditorTool.Fill,
+        _ => null,
+    };
+
+    /// <summary>
+    /// The map screen's whole tool-digit policy, the twin of <see cref="PressToolDigit"/>: a
+    /// digit that names one of the four tools selects it, and every other digit does nothing.
+    /// No repeat-cycles here — the map has no group slots, so a second press of the same digit
+    /// is the honest no-op of re-choosing the tool already in hand.
+    /// </summary>
+    public static void PressMapToolDigit(MapEditorView view, int digit)
+    {
+        ArgumentNullException.ThrowIfNull(view);
+        if (MapButtonForDigit(digit) is EditorButton slot && MapToolOf(slot) is MapEditorTool tool)
+        {
+            view.SelectTool(tool);
+        }
+    }
 
     /// <summary>
     /// The keyboard's whole toolbar-digit policy in one testable place (the shell calls this
@@ -801,24 +921,34 @@ public static class EditorIcons
     /// which is <see cref="ShellModeMachine"/>'s verb and not the session's. Tab clicks never
     /// come here: <see cref="TabTarget"/> answers them first.
     ///
-    /// <para>The pencil is the one honest no-op, exactly as the sprites tab is on the other
-    /// screen: it names the tool already in hand. The map model of stage 3 has a single
-    /// drawing verb (<see cref="MapEditorSession.PaintTile"/>) and a single reader
-    /// (<see cref="MapEditorSession.PickTile"/>), so there is nothing for a click to switch
-    /// to — inventing a tool the model does not have would be worse than a button that says
-    /// what is true.</para>
+    /// <para><b>Two owners of state, one router (wave 3d).</b> The tools, the marked rectangle
+    /// and the grid switch are what the author is <em>looking at</em>, not what
+    /// <c>map.bin</c> holds, so they live in <see cref="MapEditorView"/> — and this table
+    /// therefore takes both halves. It is still one router: nothing else decides what a map
+    /// button means, and the contract sweep clicks every placed button through exactly this.</para>
     /// </summary>
-    public static bool ClickMapButton(MapEditorSession session, EditorButton button)
+    public static bool ClickMapButton(MapEditorSession session, MapEditorView view, EditorButton button)
     {
         ArgumentNullException.ThrowIfNull(session);
+        ArgumentNullException.ThrowIfNull(view);
+        if (MapToolOf(button) is MapEditorTool tool)
+        {
+            view.SelectTool(tool);
+            return false;
+        }
         switch (button)
         {
             case EditorButton.ExitTab:
                 return true;                        // clean → back; dirty → the prompt — MapEditorView judges
             case EditorButton.ToolEraser:
-                // MAP-FORMAT §2: tile 0 is emptiness rather than sprite 0, so "select tile 0"
-                // IS the eraser. Legal on a read-only map — choosing a tile writes nothing.
-                session.SelectSprite(0);
+                // MAP-FORMAT §2 and REFERENCES-EDITORS §7.3: not one of the three references
+                // has an eraser TOOL — LIKO-12 erases by forcing the selected tile to 0 under
+                // the right button. So this button is not a mode: it SELECTS tile 0, and the
+                // pencil then erases with it. Legal on a read-only map — choosing writes nothing.
+                session.SelectSprite(MapEditorSession.EmptyTile);
+                return false;
+            case EditorButton.GridToggle:
+                view.ToggleGrid();                  // TIC-80's drawGridButton; ` is its key
                 return false;
             case EditorButton.Save:
                 session.Save();                     // the modified/saved icon IS this button — click = Ctrl+S
@@ -830,7 +960,7 @@ public static class EditorIcons
                 session.Redo();
                 return false;
             default:
-                return false;                       // ToolPencil: the tool already in hand
+                return false;                       // SpritesTab and the stubs: nothing to do here
         }
     }
 

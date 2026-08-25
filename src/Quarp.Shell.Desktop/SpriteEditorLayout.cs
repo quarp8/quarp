@@ -29,6 +29,16 @@ namespace Quarp.Shell.Desktop;
 /// future blocks any more; that reserve was exactly the emptiness the sixth review
 /// rejected.</para>
 ///
+/// <para><b>Wave 3b-2 put one more block in that column</b>: the eight flag toggles
+/// (<see cref="FlagPanel"/>), a single row between the layer tabs and the sheet window, on the
+/// same <c>contentX</c> left edge and the same 2*ui spacing as its neighbours. Its cells are
+/// the palette's own grid — a swatch wide, a swatch tall, a gap apart — so
+/// <see cref="FlagPanel"/> lands on exactly the two edges <see cref="Swatches"/> does and the
+/// column stops being three unrelated widths. Its height comes out of the sheet window (that
+/// column has no spare pixels, by the sixth review's own design), which costs the sheet one
+/// whole scale at the default window and nothing else: the block below it is quantized to whole
+/// scales of the strip, so a shorter row would have bought slack under the slider, not sheet.</para>
+///
 /// <para><b>Every scale is a whole integer</b>, floored at 1: the canvas is the region's
 /// pixels multiplied up, the sheet view is the <see cref="SheetStrip"/> presentation strip
 /// multiplied up, icons are 8-px masks multiplied up, and fractional scales would resample
@@ -107,6 +117,18 @@ public readonly struct SpriteEditorLayout
 
     /// <summary>Bounding box of all 16 swatches — the renderer frames it, the hit test pre-filters with it.</summary>
     public Rectangle Swatches { get; private init; }
+
+    /// <summary>Side of one flag toggle's cell — a swatch, so the row shares the palette's grid and edges.</summary>
+    public int FlagSize { get; private init; }
+
+    /// <summary>
+    /// Bounding box of the eight flag toggles (wave 3b-2): one row on the content column's own
+    /// left edge, between the layer tabs and the sheet window, one gap unit from each — the
+    /// seventh review's shared left edge and equal spacing, extended to the block it never had.
+    /// The renderer walks <see cref="FlagRect"/> from it and the hit test pre-filters with it,
+    /// exactly as <see cref="Swatches"/> does for the palette.
+    /// </summary>
+    public Rectangle FlagPanel { get; private init; }
 
     /// <summary>Region side in pixels, denormalized from the session so hit tests need only the layout.</summary>
     public int RegionPixels { get; private init; }
@@ -189,7 +211,25 @@ public readonly struct SpriteEditorLayout
         // hold), and the width is then trimmed to whole sprite columns, so the window never
         // shows a sliced cell and the slider's thumb reports an honest fraction.
         int rowY = swatches.Bottom + 2 * ui;
-        int sheetTop = rowY + button + 2 * ui;
+        // Wave 3b-2's flag row, between the tabs and the sheet, on the column's one left edge
+        // and one 2*ui gap from each neighbour — the same rhythm palette → row → sheet already
+        // had, with one more block in it, so the seventh review's "общий левый край и равные
+        // промежутки" still reads true down the whole column.
+        //
+        // A flag CELL is a swatch: same side, same gap, eight of them where the palette has
+        // eight — so the row lands on the palette's own two edges and the column reads as one
+        // stack of blocks instead of three widths. What is DRAWN inside a cell is the small
+        // square the reference rows use (see FlagMarkRect); the cell around it is the hit
+        // target, which is why the toggles can look like TIC-80's 5x5 squares without being
+        // 5 px to hit. Sizing the cell down instead would not have bought the sheet a row of
+        // pixels either: the sheet's height is quantized to whole scales of the strip, and at
+        // every window size the shell is used at, a half-height row and a full-height one
+        // leave the sheet on the same whole scale — the difference lands in the slack under
+        // the slider, which is exactly where it must not.
+        int flagsY = rowY + button + 2 * ui;
+        int flagSize = swatchSize;
+        var flagPanel = new Rectangle(contentX, flagsY, paletteWidth, flagSize);
+        int sheetTop = flagPanel.Bottom + 2 * ui;
         int sliderHeight = 4 * ui;
         // Math.Max(1, ...) is a floor, not a fit: in a window below the shell's working size
         // (320x180, the console's own resolution) even one-to-one does not fit under the row,
@@ -228,6 +268,8 @@ public readonly struct SpriteEditorLayout
             SheetSlider = slider,
             SwatchSize = swatchSize,
             Swatches = swatches,
+            FlagSize = flagSize,
+            FlagPanel = flagPanel,
             RegionPixels = regionPixels,
         };
     }
@@ -332,6 +374,50 @@ public readonly struct SpriteEditorLayout
             Swatches.Y + color / SwatchColumns * (SwatchSize + gap),
             SwatchSize,
             SwatchSize);
+    }
+
+    /// <summary>
+    /// One flag toggle's rectangle, bit 0 leftmost — the one place flag geometry exists, so the
+    /// renderer's square and the router's click can never sit on different pixels. The number a
+    /// toggle carries is read off its POSITION (PICO-8's "indexed from 0 starting from the
+    /// left"), the way the sixteen swatches carry their indices: eight cells on the palette's
+    /// own grid need no digits to be counted, and the hover tooltip names the bit and its key
+    /// for the author who wants it spelled out.
+    /// </summary>
+    public Rectangle FlagRect(int bit) =>
+        new(FlagPanel.X + bit * (FlagSize + Ui), FlagPanel.Y, FlagSize, FlagSize);
+
+    /// <summary>
+    /// The square actually painted inside a toggle's cell: two thirds of it, centred. The
+    /// reference rows are small marks (TIC-80's 5x5 squares, PICO-8's circles) and a row of
+    /// palette-sized blocks would read as a second palette; the cell keeps the click easy while
+    /// the mark keeps the row light. Floored at 3 so the shrunk-window case still has a body,
+    /// an outline and a centre pixel to distinguish its three states.
+    /// </summary>
+    public Rectangle FlagMarkRect(int bit)
+    {
+        Rectangle cell = FlagRect(bit);
+        int side = Math.Max(3, FlagSize * 2 / 3);
+        return new Rectangle(
+            cell.X + (cell.Width - side) / 2, cell.Y + (cell.Height - side) / 2, side, side);
+    }
+
+    /// <summary>Window point → flag bit 0-7, or false — the same shape as <see cref="TrySwatch"/>, gaps included and therefore rejected.</summary>
+    public bool TryFlag(int x, int y, out int bit)
+    {
+        if (FlagPanel.Contains(x, y))
+        {
+            for (int i = 0; i < SpriteEditorSession.FlagBits; i++)
+            {
+                if (FlagRect(i).Contains(x, y))
+                {
+                    bit = i;
+                    return true;
+                }
+            }
+        }
+        bit = 0;
+        return false;
     }
 
     /// <summary>Window point → region-local pixel, or false when the point is off the canvas (a press, not a drag).</summary>

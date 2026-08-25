@@ -71,12 +71,20 @@ public class SheetScrollTests
     /// <summary>
     /// The default window's own numbers. The sixth review took the strip from 12 x 4 = 48
     /// sprites to 16 x 8 = 128; the seventh gave a button-wide tool column back to the canvas's
-    /// right side, and the sheet paid for it in width: 14 x 8 = 112 sprites at once. Still no
-    /// sliced cell at either edge, and the slider still has strip left to reach.
+    /// right side, and the sheet paid for it in width.
+    ///
+    /// <para><b>Re-pinned in wave 3b-2, deliberately and once: 14 columns became 18.</b> The
+    /// flag row landed between the layer tabs and this window and took a swatch's height out of
+    /// the column, which is more than the eight pixels of slack the old scale-5 sheet was
+    /// standing on — so the sheet dropped to scale 4 and, being 4/5 the size, fits 18 whole
+    /// columns of the strip instead of 14. That is 144 sprites visible where 112 were, in a
+    /// window 4/5 as tall: the trade the row costs, stated in numbers rather than remembered.
+    /// Nothing else about the slider moved — the ceiling is still live and the cells are still
+    /// whole.</para>
     ///
     /// <para>Negative control: drop the whole-cell trim in the layout and the width assertion
-    /// goes red; give the tool column zero width and the count climbs back to 16, which is how
-    /// this test says out loud what that column costs.</para>
+    /// goes red; give the tool column zero width and the count climbs, which is how this test
+    /// says out loud what that column costs.</para>
     /// </summary>
     [Fact]
     public void DefaultWindowPinsALiveSliderAndUsefulColumnCount()
@@ -86,7 +94,7 @@ public class SheetScrollTests
 
         Assert.Equal(SheetStrip.PixelWidth - layout.SheetVisiblePixels, layout.SheetMaxScroll);
         Assert.True(layout.SheetMaxScroll > 0);
-        Assert.Equal(14, completeColumns);                              // 14 x 8 = 112 sprites, no partial column
+        Assert.Equal(18, completeColumns);                              // 18 x 8 = 144 sprites, no partial column
         Assert.Equal(completeColumns * VirtualConsole.SpriteSize * layout.SheetScale, layout.Sheet.Width);
         Assert.Equal(SheetStrip.PixelHeight * layout.SheetScale, layout.Sheet.Height);
         Assert.True(layout.SheetThumb(0).Width < layout.SheetSlider.Width);

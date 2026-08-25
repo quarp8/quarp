@@ -221,16 +221,23 @@ public class MapEditorModeTests : IDisposable
 
     // ---- the button contract ----
 
-    /// <summary>Everything a map button click may legally touch, in one comparable value.</summary>
+    /// <summary>
+    /// Everything a map button click may legally touch, in one comparable value — the tool,
+    /// the grid switch and the marked rectangle joined in wave 3d, because that wave's four
+    /// tool buttons and its grid button change nothing else. A button whose only effect is
+    /// invisible to this record would read as unwired, which is the contract working.
+    /// </summary>
     private sealed record Snapshot(
-        ShellMode Mode, int Version, bool Dirty, bool CanUndo, bool CanRedo, int Tile, bool PromptShown);
+        ShellMode Mode, int Version, bool Dirty, bool CanUndo, bool CanRedo, int Tile,
+        bool PromptShown, MapEditorTool Tool, bool GridShown, bool HasSelection);
 
     private static Snapshot Observe(ShellModeMachine machine)
     {
         MapEditorSession map = machine.MapEditor!;
+        MapEditorView view = machine.MapView!;
         return new Snapshot(
             machine.Mode, map.Version, map.IsDirty, map.CanUndo, map.CanRedo, map.SelectedSprite,
-            machine.MapView!.ExitPromptShown);
+            view.ExitPromptShown, view.Tool, view.GridShown, view.HasSelection);
     }
 
     /// <summary>The shell's press dispatch over the real router pieces — see the type comment.</summary>
@@ -245,7 +252,7 @@ public class MapEditorModeTests : IDisposable
             machine.SwitchEditorTab(tab);               // travel is the mode machine's verb
             return;
         }
-        if (EditorIcons.ClickMapButton(machine.MapEditor!, button))
+        if (EditorIcons.ClickMapButton(machine.MapEditor!, machine.MapView!, button))
         {
             machine.HandleEscape();                     // the exit tab's verb belongs to the machine
         }
@@ -254,24 +261,32 @@ public class MapEditorModeTests : IDisposable
     /// <summary>
     /// A session where every live button has work to do: a non-zero tile selected (so the
     /// eraser's click is a visible change), one stroke undone (so undo AND redo both have a
-    /// step) and dirt (so save has a write and the exit tab has a prompt to raise).
+    /// step), dirt (so save has a write and the exit tab has a prompt to raise), and — since
+    /// wave 3d — a tool that is NOT the one the button under test selects, so every one of the
+    /// four tool clicks is a visible change. The pencil's own case starts from the bucket,
+    /// exactly as the sprite editor's <c>Prepare</c> does.
     /// </summary>
-    private static void Prepare(MapEditorSession map)
+    private static void Prepare(MapEditorSession map, MapEditorView view, EditorButton button)
     {
         map.SelectSprite(7);
         Stroke(map, 1, 1);
         Stroke(map, 2, 2);
         map.Undo();
+        if (button == EditorButton.ToolPencil)
+        {
+            view.SelectTool(MapEditorTool.Fill);
+        }
     }
 
     /// <summary>
-    /// The sweep. Live buttons must change the snapshot; stubs, the tilemap tab (it names the
-    /// screen already on show) and the pencil (it names the only tool the map model has — see
-    /// <see cref="EditorIcons.ClickMapButton"/>) must change exactly nothing.
+    /// The sweep. Live buttons must change the snapshot; stubs and the tilemap tab (it names
+    /// the screen already on show) must change exactly nothing.
     ///
     /// <para>Break recipe: delete any <c>case</c> from <see cref="EditorIcons.ClickMapButton"/>
-    /// — that one button's assertion goes red by name. Add a button to
-    /// <see cref="MapEditorLayout"/> without wiring it and the same line names the new one.</para>
+    /// — that one button's assertion goes red by name; drop an entry from
+    /// <see cref="EditorIcons.MapToolOf"/> and its tool button goes red the same way. Add a
+    /// button to <see cref="MapEditorLayout"/> without wiring it and the same line names the
+    /// new one.</para>
     /// </summary>
     [Fact]
     public void EveryPlacedLiveMapButtonChangesSomethingObservable()
@@ -279,15 +294,14 @@ public class MapEditorModeTests : IDisposable
         foreach (EditorButtonPlace place in MapEditorLayout.Compute(1280, 720).Buttons)
         {
             ShellModeMachine machine = MachineOnTheMapTab(out _);
-            Prepare(machine.MapEditor!);
+            Prepare(machine.MapEditor!, machine.MapView!, place.Id);
             Snapshot before = Observe(machine);
 
             RouteClick(machine, place.Id);
 
             Snapshot after = Observe(machine);
             bool contractedNoOp = EditorIcons.IsStub(place.Id)
-                || place.Id == EditorButton.TilemapTab
-                || place.Id == EditorButton.ToolPencil;
+                || place.Id == EditorButton.TilemapTab;
             if (contractedNoOp)
             {
                 Assert.True(before == after, $"{place.Id} is a no-op by contract but changed state");

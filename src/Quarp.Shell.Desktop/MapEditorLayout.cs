@@ -70,6 +70,18 @@ public readonly struct MapEditorLayout
         null, EditorButton.Redo, EditorButton.Undo, EditorButton.Save,
     };
 
+    /// <summary>The left tool column, top to bottom — the four map modes in their digit-key order (wave 3d).</summary>
+    private static readonly EditorButton[] _toolColumn =
+    {
+        EditorButton.ToolPencil, EditorButton.ToolHand, EditorButton.ToolSelect, EditorButton.ToolFill,
+    };
+
+    /// <summary>The right column, top to bottom: the empty-tile button (level with the pencil) and the grid switch.</summary>
+    private static readonly EditorButton[] _rightColumn =
+    {
+        EditorButton.ToolEraser, EditorButton.GridToggle,
+    };
+
     /// <summary>The frame this screen stands in — bands, margins, button size, prompt line. See <see cref="EditorChrome"/>.</summary>
     public EditorChrome Chrome { get; private init; }
 
@@ -86,7 +98,7 @@ public readonly struct MapEditorLayout
 
     public int PromptY => Chrome.PromptY;
 
-    /// <summary>The eleven placed buttons — six tabs, two tool columns of one, three status buttons.</summary>
+    /// <summary>The fifteen placed buttons — six tabs, a tool column of four, a right column of two, three status buttons.</summary>
     public IReadOnlyList<EditorButtonPlace> Buttons { get; private init; }
 
     /// <summary>The map viewport — a whole number of map cells, the surface the pencil paints on.</summary>
@@ -124,7 +136,7 @@ public readonly struct MapEditorLayout
 
     public static MapEditorLayout Compute(int width, int height)
     {
-        var buttons = new EditorButtonPlace[11];
+        var buttons = new EditorButtonPlace[15];
         int placed = 0;
         EditorChrome chrome = EditorChrome.Compute(width, height, buttons, ref placed, _statusSlots);
 
@@ -163,17 +175,34 @@ public readonly struct MapEditorLayout
         int rows = Math.Clamp(roomHeight / mapCell, 1, MapRows);
         var canvas = new Rectangle(canvasX, top, columns * mapCell, rows * mapCell);
 
-        // The two mirrored tool columns. The left one is the toolbar of the shell standard;
-        // the right one is the seventh review's second column, at the identical gap.
-        buttons[placed++] = new EditorButtonPlace
+        // The two mirrored tool columns. The left one is the toolbar of the shell standard —
+        // since wave 3d it holds all four of TIC-80's map modes, top to bottom in the order
+        // their digit keys run (REFERENCES-EDITORS §3.1: 1 draw, 2 drag, 3 select, 4 fill), so
+        // the column and the keyboard read the same way down. The right one is the seventh
+        // review's second column, at the identical gap: the empty-tile button first — it must
+        // stay level with the pencil, which is the symmetry the layout test pins — and the
+        // grid switch under it.
+        //
+        // Both columns grow DOWNWARD only. Widening either would move the canvas edges and
+        // change how much map is on screen, which is a number the owner judges by eye and a
+        // theory pins at 35x11 for every working window size.
+        for (int i = 0; i < _toolColumn.Length; i++)
         {
-            Id = EditorButton.ToolPencil, Rect = new Rectangle(margin, top, button, button),
-        };
-        buttons[placed++] = new EditorButtonPlace
+            buttons[placed++] = new EditorButtonPlace
+            {
+                Id = _toolColumn[i],
+                Rect = new Rectangle(margin, top + i * (button + chrome.Gap), button, button),
+            };
+        }
+        for (int i = 0; i < _rightColumn.Length; i++)
         {
-            Id = EditorButton.ToolEraser,
-            Rect = new Rectangle(canvas.Right + margin, top, button, button),
-        };
+            buttons[placed++] = new EditorButtonPlace
+            {
+                Id = _rightColumn[i],
+                Rect = new Rectangle(
+                    canvas.Right + margin, top + i * (button + chrome.Gap), button, button),
+            };
+        }
 
         // The minimap fills the room beside the picker — the pocket of air the sixth and
         // seventh reviews both refused to leave anywhere on an editor screen — and earns it:
@@ -255,10 +284,45 @@ public readonly struct MapEditorLayout
 
     /// <summary>The window rectangle of one map cell — the single mapping the cursor frame and the tiles share.</summary>
     public Rectangle MapCellRect(int cellX, int cellY, int cameraX, int cameraY) =>
+        MapAreaRect(cellX, cellY, 1, 1, cameraX, cameraY);
+
+    /// <summary>
+    /// The window rectangle of a block of cells — <see cref="MapCellRect"/> generalized, so the
+    /// selection outline and one cell are drawn from one formula. Deliberately not clipped to
+    /// the canvas: the caller draws a frame, and a rectangle whose corners were pulled inside
+    /// the viewport would claim the selection ends where the screen does.
+    /// </summary>
+    public Rectangle MapAreaRect(int cellX, int cellY, int width, int height, int cameraX, int cameraY) =>
         new(Canvas.X + (cellX - cameraX) * MapCell,
             Canvas.Y + (cellY - cameraY) * MapCell,
-            MapCell,
-            MapCell);
+            width * MapCell,
+            height * MapCell);
+
+    /// <summary>
+    /// How many cells right of the viewport's left edge a window x lies — the pan gesture's
+    /// whole arithmetic. Floored rather than truncated, so a pointer dragged left of the canvas
+    /// keeps counting downwards instead of sticking at 0 for a whole cell: C# division rounds
+    /// toward zero, and a pan that stalls at the edge is exactly what that would look like.
+    /// </summary>
+    public int CanvasColumnOffset(int x) => FloorDiv(x - Canvas.X, MapCell);
+
+    /// <summary>The same for a window y and the viewport's top edge.</summary>
+    public int CanvasRowOffset(int y) => FloorDiv(y - Canvas.Y, MapCell);
+
+    /// <summary>
+    /// The vertical grid line before visible column <paramref name="column"/> (0 is the
+    /// canvas's own left edge), one window pixel per <see cref="Ui"/> wide. Geometry lives
+    /// here, with every other rectangle the renderer draws and the mouse is tested against.
+    /// </summary>
+    public Rectangle GridColumnLine(int column, int thickness) =>
+        new(Canvas.X + column * MapCell, Canvas.Y, thickness, Canvas.Height);
+
+    /// <summary>The horizontal grid line above visible row <paramref name="row"/>.</summary>
+    public Rectangle GridRowLine(int row, int thickness) =>
+        new(Canvas.X, Canvas.Y + row * MapCell, Canvas.Width, thickness);
+
+    private static int FloorDiv(int value, int divisor) =>
+        value >= 0 ? value / divisor : -((-value + divisor - 1) / divisor);
 
     /// <summary>
     /// Window point → sprite number in the picker, or false. The inverse of the strip mapping

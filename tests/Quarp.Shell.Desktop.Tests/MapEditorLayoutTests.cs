@@ -304,6 +304,65 @@ public class MapEditorLayoutTests
         Assert.Equal(sprite.StatusBar, layout.StatusBar);
     }
 
+    /// <summary>
+    /// The grid's lines fall exactly on cell boundaries and stay inside the canvas (wave 3d).
+    /// Geometry, not pixels: the renderer only chooses whether to draw them and in what colour.
+    /// Break recipe: drop the <c>Canvas.X +</c> from
+    /// <see cref="MapEditorLayout.GridColumnLine"/> and the containment assertion goes red;
+    /// start the loop at column 0 in the renderer instead and the line would land on the
+    /// canvas frame, which is what the "interior only" range below documents.
+    /// </summary>
+    [Fact]
+    public void TheGridLinesFallOnCellBoundariesInsideTheCanvas()
+    {
+        var layout = Default();
+
+        for (int column = 1; column < layout.VisibleColumns; column++)
+        {
+            Rectangle line = layout.GridColumnLine(column, layout.Ui);
+            Assert.Equal(layout.Canvas.X + column * layout.MapCell, line.X);
+            Assert.Equal(layout.Canvas.Y, line.Y);
+            Assert.Equal(layout.Canvas.Height, line.Height);
+            Assert.True(layout.Canvas.Contains(new Rectangle(line.X, line.Y, 1, line.Height)));
+        }
+        for (int row = 1; row < layout.VisibleRows; row++)
+        {
+            Rectangle line = layout.GridRowLine(row, layout.Ui);
+            Assert.Equal(layout.Canvas.Y + row * layout.MapCell, line.Y);
+            Assert.Equal(layout.Canvas.X, line.X);
+            Assert.Equal(layout.Canvas.Width, line.Width);
+            Assert.True(layout.Canvas.Contains(new Rectangle(line.X, line.Y, line.Width, 1)));
+        }
+    }
+
+    /// <summary>
+    /// The pan gesture's arithmetic: a window x inside the canvas answers its column offset,
+    /// and one to the LEFT of the canvas answers a negative one rather than sticking at zero.
+    /// C# division truncates toward zero, so the naive form reports 0 for the whole first cell
+    /// off the edge and a drag would stall there.
+    ///
+    /// <para>Break recipe: replace <c>FloorDiv</c> with plain <c>/</c> in
+    /// <see cref="MapEditorLayout.CanvasColumnOffset"/> — the two negative cases go red and
+    /// every positive one still passes, which is precisely the shape of that bug.</para>
+    /// </summary>
+    [Fact]
+    public void ThePanOffsetsFloorInsteadOfTruncating()
+    {
+        var layout = Default();
+        int cell = layout.MapCell;
+
+        Assert.Equal(0, layout.CanvasColumnOffset(layout.Canvas.X));
+        Assert.Equal(0, layout.CanvasColumnOffset(layout.Canvas.X + cell - 1));
+        Assert.Equal(3, layout.CanvasColumnOffset(layout.Canvas.X + 3 * cell + cell / 2));
+        Assert.Equal(-1, layout.CanvasColumnOffset(layout.Canvas.X - 1));
+        Assert.Equal(-1, layout.CanvasColumnOffset(layout.Canvas.X - cell));
+        Assert.Equal(-2, layout.CanvasColumnOffset(layout.Canvas.X - cell - 1));
+
+        Assert.Equal(0, layout.CanvasRowOffset(layout.Canvas.Y));
+        Assert.Equal(2, layout.CanvasRowOffset(layout.Canvas.Y + 2 * cell));
+        Assert.Equal(-1, layout.CanvasRowOffset(layout.Canvas.Y - 1));
+    }
+
     /// <summary>A point in no panel hits nothing — the negative control for four hit tests at once.</summary>
     [Fact]
     public void APointOutsideEveryPanelHitsNothing()

@@ -124,6 +124,7 @@ LAYERS=(
   # --- 1 «документ»: модель, диск, чистые величины ---
   "SpriteEditorSession.cs|1"   # модель листа спрайтов, undo, запись в картридж
   "MapEditorSession.cs|1"      # модель карты и флагов
+  "CodeEditorSession.cs|1"     # модель текста src/main.cs: курсор, выделение, undo, поиск (+CodeMove, CodePosition)
   "CartLibrary.cs|1"           # какие картриджи есть на диске (+CartLibraryEntry)
   "ShellMode.cs|1"             # словарь режимов: четыре имени, ноль зависимостей
   "PixelFontMetrics.cs|1"      # арифметика метрик текста, без устройства
@@ -131,8 +132,10 @@ LAYERS=(
   "TimeSpeed.cs|1"             # ступень лестницы скоростей, точная дробь
   "TickAccumulator.cs|1"       # фиксированный шаг: копит время, отдаёт тики
   "AudioQueue.cs|1"            # политика очереди блоков, без устройства
-  "MainMenuSession.cs|1"       # модель бут-экрана: фазы, часы интро, выбор, поле имени (+MenuPhase, MenuItem)
-  "BootJingle.cs|1"            # ноты джингла: строит AudioBank, устройства не знает
+  "MainMenuSession.cs|1"       # модель главного меню: фазы, пункты, ввод имени (+MenuPhase, MenuItem)
+  "MenuArt.cs|1"               # маски логотипа: данные, ноль зависимостей
+  "BootJingle.cs|1"            # ноты стартового джингла: данные для аудио-очереди
+  "FilePicker.cs|1"            # системный диалог выбора папки: чистый P/Invoke, без устройства кадра
 
   # --- 2 «вид»: геометрия и состояние показа, headless ---
   "EditorChrome.cs|2"          # рама обоих редакторов (+EditorButtonPlace, EditorPromptVerb)
@@ -145,8 +148,7 @@ LAYERS=(
   "IconHoverTracker.cs|2"      # трёхсекундный контракт подсказки (+HoverTarget)
   "ToolbarFlyout.cs|2"         # состояние флаута группового слота
   "SelectionOutline.cs|2"      # геометрия бегущих муравьёв (+AntDash)
-  "MainMenuLayout.cs|2"        # раскладка бут-экрана: холст 160x90, целый масштаб, координаты мокапа
-  "MenuArt.cs|2"               # битмап логотипа с мокапа — данные плюс два аксессора
+  "MainMenuLayout.cs|2"        # раскладка экрана главного меню
 
   # --- 3 «рендер»: владеет ресурсом устройства ---
   "PixelFontAtlas.cs|3"        # текстурная полоса глифов
@@ -155,9 +157,8 @@ LAYERS=(
   "SpriteEditorRenderer.cs|3"  # пиксели экрана спрайтов
   "MapEditorRenderer.cs|3"     # пиксели экрана карты
   "LibraryRenderer.cs|3"       # пиксели экрана библиотеки
-  "MainMenuRenderer.cs|3"      # пиксели бут-экрана: интро и меню
-  "FilePicker.cs|3"            # ресурс ОС: диалог выбора файла (comdlg32), читает только проводка
   "ShellOverlay.cs|3"          # текстовый слой поверх кадра
+  "MainMenuRenderer.cs|3"      # пиксели главного меню
   "AudioOutput.cs|3"           # OpenAL-устройство
 
   # --- 4 «проводка»: цикл, режимы, ввод, точка входа ---

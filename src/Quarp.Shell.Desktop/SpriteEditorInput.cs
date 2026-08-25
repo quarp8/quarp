@@ -172,6 +172,13 @@ public static class SpriteEditorInput
         {
             editor.SelectLayer(editor.ActiveLayerIndex - 1);
         }
+        if (commands.EditorFlagDigit != 0)
+        {
+            // Shift+1..8: the keyboard half of clicking a flag toggle (wave 3b-2, the parity
+            // law). Same session verb as the click, so the two channels cannot drift about what
+            // a toggle means — including the region rule, which lives in the session.
+            editor.ToggleRegionFlag(commands.EditorFlagDigit - 1);
+        }
         // The PICO-8-style sheet strip's keyboard and wheel scroll (wave 2i): [ ] keep their
         // one-sprite step, while a vertical wheel naturally advances the horizontal-only
         // strip. All paths share the scroll state's boundary clamp.
@@ -253,6 +260,10 @@ public static class SpriteEditorInput
         {
             hover = HoverTarget.OfSwatch(hoveredSwatch);
         }
+        else if (layout.TryFlag(mouse.X, mouse.Y, out int hoveredFlag))
+        {
+            hover = HoverTarget.OfFlag(hoveredFlag);
+        }
         else if (layout.SheetSlider.Contains(mouse.X, mouse.Y))
         {
             hover = HoverTarget.OfSlider();
@@ -331,6 +342,13 @@ public static class SpriteEditorInput
             else if (layout.TrySwatch(mouse.X, mouse.Y, out int color))
             {
                 editor.SelectColor(color);
+            }
+            else if (layout.TryFlag(mouse.X, mouse.Y, out int flagBit))
+            {
+                // The flag row's click. The whole policy — which way a mixed block goes, how
+                // many sprites move, that it is one undo step — is the session's; this line
+                // only says which bit the pointer landed on.
+                editor.ToggleRegionFlag(flagBit);
             }
             else if (layout.TrySheetCell(mouse.X, mouse.Y, shell.SheetScroll.Offset, out int cellX, out int cellY))
             {

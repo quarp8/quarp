@@ -68,6 +68,9 @@ public sealed class MapEditorSession
     /// <summary>256 sprites in the sheet (SPEC-8 §3) — the tile picker's range; no byte value is ever an illegal tile.</summary>
     public const int SpriteCount = VirtualConsole.SpriteCount;
 
+    /// <summary>The empty cell (MAP-FORMAT §2) — named, because the eraser button, the right mouse button and <see cref="ClearArea"/> all mean this one fact.</summary>
+    public const int EmptyTile = 0;
+
     private readonly string _mapPath;
 
     /// <summary>What the disk holds: the dirty comparison's baseline, replaced on save. Never aliases <see cref="_map"/>.</summary>
@@ -192,7 +195,15 @@ public sealed class MapEditorSession
     /// to byte cannot truncate — <see cref="SelectSprite"/> is the only door into
     /// <see cref="SelectedSprite"/> and it refuses anything outside 0-255.
     /// </summary>
-    public void PaintTile(int cellX, int cellY)
+    public void PaintTile(int cellX, int cellY) => PaintTile(cellX, cellY, SelectedSprite);
+
+    /// <summary>
+    /// One pencil sample with the tile named outright — how the right mouse button erases
+    /// (REFERENCES-EDITORS §7.3: LIKO-12 forces the tile to 0 under button 2 and leaves the
+    /// picker alone). A parameter and not a second field: an "erase mode" would be a second
+    /// owner of what the pencil is putting down.
+    /// </summary>
+    public void PaintTile(int cellX, int cellY, int tile)
     {
         if (!StrokeActive)
         {
@@ -201,15 +212,128 @@ public sealed class MapEditorSession
         }
         RequireWritableMap();
         ValidateCell(cellX, cellY);
-        int offset = cellY * MapColumns + cellX;
-        byte tile = (byte)SelectedSprite;
+        ValidateSprite(tile);
+        WriteCell(cellY * MapColumns + cellX, (byte)tile);
+    }
+
+    /// <summary>
+    /// The fill tool (wave 3d): the connected run of cells holding the same value as the one
+    /// under the cursor becomes <paramref name="tile"/>. TIC-80's <c>fillMap</c> and LIKO-12's
+    /// <c>queuedFill</c>, and like both of them an explicit stack rather than recursion — the
+    /// map is 18 432 cells and a one-value map fills every one of them, which is a call depth
+    /// no stack survives (REFERENCES-EDITORS §3.1: <c>FILL_STACK_SIZE</c> is the whole map).
+    ///
+    /// <para>Connectivity is four-way, and the map's edges are edges: TIC-80 wraps its map in
+    /// <c>normalizeMap</c> and we do not, because <c>Mget</c> here does not wrap either — a
+    /// fill that leaked around the seam would paint the far side of the level. Filling with the
+    /// value already there returns before touching anything: no bytes, no <see cref="Version"/>
+    /// bump and <b>no undo step</b>, the same rule <see cref="EndStroke"/> applies to an idle
+    /// pencil click.</para>
+    /// </summary>
+    public void Fill(int cellX, int cellY, int tile)
+    {
+        RequireWritableMap();
+        ValidateCell(cellX, cellY);
+        ValidateSprite(tile);
+        int start = cellY * MapColumns + cellX;
+        byte target = _map[start];
+        byte replacement = (byte)tile;
+        if (target == replacement)
+        {
+            return;
+        }
+        EndStroke();        // an operation is its own step: whatever gesture was open commits first
+        BeginStroke();
+        FloodFill(start, target, replacement);
+        EndStroke();
+    }
+
+    /// <summary>The fill tool with the picker's tile — what the left button means.</summary>
+    public void Fill(int cellX, int cellY) => Fill(cellX, cellY, SelectedSprite);
+
+    /// <summary>
+    /// <c>Del</c> over a marked rectangle: every cell in it becomes <see cref="EmptyTile"/>,
+    /// as one undo step. TIC-80's <c>deleteSelection</c> (REFERENCES-EDITORS §7.3), including
+    /// its shape — the editor has no eraser tool, it has this and a tile numbered zero. An
+    /// empty rectangle is a no-op rather than a throw (the caller is a key press that may
+    /// arrive with nothing marked); a rectangle that leaves the map IS a throw, by
+    /// <see cref="ValidateCell"/>, for the same reason painting outside it is.
+    /// </summary>
+    public void ClearArea(int cellX, int cellY, int width, int height)
+    {
+        RequireWritableMap();
+        if (width <= 0 || height <= 0)
+        {
+            return;
+        }
+        ValidateCell(cellX, cellY);
+        ValidateCell(cellX + width - 1, cellY + height - 1);
+        EndStroke();
+        BeginStroke();
+        for (int y = cellY; y < cellY + height; y++)
+        {
+            for (int x = cellX; x < cellX + width; x++)
+            {
+                WriteCell(y * MapColumns + x, EmptyTile);
+            }
+        }
+        EndStroke();
+    }
+
+    /// <summary>
+    /// The one hand that writes a map byte. Every tool — pencil, fill, the Del rectangle —
+    /// goes through here, so "a cell changed" means exactly one thing: the dirt, the
+    /// <see cref="Version"/> the renderers watch and the stroke's changed-flag move together
+    /// or not at all. Re-stamping the same value is not a change, which is what keeps an idle
+    /// click out of the undo stack.
+    /// </summary>
+    /// <returns>True when the byte actually moved.</returns>
+    private bool WriteCell(int offset, byte tile)
+    {
         if (_map[offset] == tile)
         {
-            return;     // Re-stamping the same tile is not a change; see EndStroke for why that matters.
+            return false;
         }
         _map[offset] = tile;
         _strokeChanged = true;
         Version++;
+        return true;
+    }
+
+    /// <summary>
+    /// Four-way flood fill over an explicit stack. A cell is written the moment it is pushed,
+    /// so the map itself is the visited set and no cell can ever be pushed twice — which is
+    /// what bounds the stack at <see cref="MapPayloadSize"/> entries instead of hoping.
+    /// </summary>
+    private void FloodFill(int startOffset, byte target, byte replacement)
+    {
+        int[] stack = new int[MapPayloadSize];
+        int top = 0;
+        WriteCell(startOffset, replacement);
+        stack[top++] = startOffset;
+        while (top > 0)
+        {
+            int offset = stack[--top];
+            int x = offset % MapColumns;
+            int y = offset / MapColumns;
+            if (x > 0 && _map[offset - 1] == target && WriteCell(offset - 1, replacement))
+            {
+                stack[top++] = offset - 1;
+            }
+            if (x < MapColumns - 1 && _map[offset + 1] == target && WriteCell(offset + 1, replacement))
+            {
+                stack[top++] = offset + 1;
+            }
+            if (y > 0 && _map[offset - MapColumns] == target && WriteCell(offset - MapColumns, replacement))
+            {
+                stack[top++] = offset - MapColumns;
+            }
+            if (y < MapRows - 1 && _map[offset + MapColumns] == target
+                && WriteCell(offset + MapColumns, replacement))
+            {
+                stack[top++] = offset + MapColumns;
+            }
+        }
     }
 
     /// <summary>

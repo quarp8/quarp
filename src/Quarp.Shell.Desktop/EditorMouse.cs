@@ -29,8 +29,26 @@ public readonly struct EditorMouse
     /// <summary>Left button came up this frame — ends the stroke, committing it as one undo step.</summary>
     public bool LeftReleased { get; init; }
 
-    /// <summary>Right button went down this frame — the eyedropper (press, not hold, like PICO-8).</summary>
+    /// <summary>
+    /// Right button went down this frame. Sprite screen: the eyedropper (press, not hold, like
+    /// PICO-8) and the flyout's no-clock door. Map screen since wave 3d: the erase press —
+    /// LIKO-12's <c>tile.lua</c> forces the tile to 0 under button 2 for every drawing tool
+    /// (REFERENCES-EDITORS §7.3), and that is the map's only eraser.
+    /// </summary>
     public bool RightPressed { get; init; }
+
+    /// <summary>Right button held — the map's erase drag keeps stamping tile 0 along it.</summary>
+    public bool RightDown { get; init; }
+
+    /// <summary>Right button came up this frame — commits the map's erase gesture as one undo step.</summary>
+    public bool RightReleased { get; init; }
+
+    /// <summary>
+    /// Middle button went down this frame — the map's tile eyedropper (TIC-80
+    /// <c>processMouseDrawMode</c>: the middle button puts the tile under the cursor back in
+    /// the picker). No screen reads it as a hold, so there is no MiddleDown to keep in step.
+    /// </summary>
+    public bool MiddlePressed { get; init; }
 
     /// <summary>
     /// This frame's wheel movement in MonoGame detents (+120 per notch toward the user's
@@ -60,6 +78,8 @@ public sealed class EditorMouseReader
         bool wasLeft = _previous.LeftButton == ButtonState.Pressed;
         bool right = mouse.RightButton == ButtonState.Pressed;
         bool wasRight = _previous.RightButton == ButtonState.Pressed;
+        bool middle = mouse.MiddleButton == ButtonState.Pressed;
+        bool wasMiddle = _previous.MiddleButton == ButtonState.Pressed;
         int wheel = mouse.ScrollWheelValue - _previous.ScrollWheelValue;
         _previous = mouse;
         return new EditorMouse
@@ -70,6 +90,9 @@ public sealed class EditorMouseReader
             LeftPressed = left && !wasLeft,
             LeftReleased = !left && wasLeft,
             RightPressed = right && !wasRight,
+            RightDown = right,
+            RightReleased = !right && wasRight,
+            MiddlePressed = middle && !wasMiddle,
             WheelDelta = wheel,
         };
     }

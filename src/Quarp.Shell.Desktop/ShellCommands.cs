@@ -98,8 +98,29 @@ public readonly struct ShellCommands
     /// <summary>Editor: R — rotate the region 90° clockwise.</summary>
     public bool EditorRotate { get; init; }
 
-    /// <summary>Editor: Delete — clear the region to color 0.</summary>
+    /// <summary>Editor: Delete — clear the region to color 0. On the map screen: empty the marked rectangle, or (with nothing marked) select tile 0.</summary>
     public bool EditorClear { get; init; }
+
+    /// <summary>
+    /// Map editor: <c>`</c> — show / hide the tile grid, TIC-80's own key for its own
+    /// <c>drawGridButton</c> (REFERENCES-EDITORS §3.1). A bare key like the editor letters,
+    /// and unclaimed by anything else in the shell.
+    /// </summary>
+    public bool EditorGridToggle { get; init; }
+
+    /// <summary>
+    /// Map editor: Space is held — the temporary-pan modifier (TIC-80 <c>map.c</c>:
+    /// <c>bool space = tic_api_key(tic, tic_key_space)</c>, and a left drag under it pans the
+    /// viewport). A level, not an edge: the gesture it modifies lasts as long as the button
+    /// is down.
+    ///
+    /// <para><b>What it costs, said out loud.</b> Space is also half of
+    /// <see cref="EditorPaintDown"/>. On the MAP screen the modifier wins — the router there
+    /// refuses to open a paint gesture while this is true, and the keyboard pencil is bare Z —
+    /// which is the same "a chord must not double as its bare key" rule Ctrl already carries
+    /// over Z. The sprite screen never reads this field and keeps Z/Space unchanged.</para>
+    /// </summary>
+    public bool EditorPanModifier { get; init; }
 
     /// <summary>
     /// Editor: the keyboard pencil is held — bare Z (never the Ctrl+Z chord) or Space, either
@@ -123,9 +144,21 @@ public readonly struct ShellCommands
     /// Editor: which toolbar digit (1-6, the toolbar's top-to-bottom order) was pressed this
     /// frame, 0 for none. The digit policy — stubs stay dead, group slots cycle their variant
     /// on a repeat — is <see cref="EditorIcons.PressToolDigit"/>'s, not the reader's: this
-    /// only reports the key.
+    /// only reports the key. <b>Bare digits only</b> since wave 3b-2: Shift+digit belongs to
+    /// <see cref="EditorFlagDigit"/>, and a chord must not double as its bare key — the same
+    /// rule <see cref="MenuConfirm"/> and the editor letters already carry for Ctrl.
     /// </summary>
     public int EditorToolDigit { get; init; }
+
+    /// <summary>
+    /// Editor: which flag toggle Shift+1..8 asked for this frame as a 1-based digit, 0 for
+    /// none — the keyboard half of clicking a cell in the flag row (wave 3b-2). Bit
+    /// <c>EditorFlagDigit - 1</c>, because the flags are numbered 0-7 (<c>Fget</c>'s index,
+    /// PICO-8's "indexed from 0 starting from the left") while the keys they sit on are not.
+    /// Eight, not six: the tool digits stop at 6 and 7/8 were free either way, but the whole
+    /// row is on Shift so the eight keys read as one block.
+    /// </summary>
+    public int EditorFlagDigit { get; init; }
 
     /// <summary>
     /// Editor: Ctrl is held — the shape tool's "filled" modifier (PICO-8's pattern), a level
@@ -225,10 +258,20 @@ public sealed class ShellCommandReader
             EditorFlipV = !ctrl && Pressed(keyboard, Keys.V),
             EditorRotate = !ctrl && Pressed(keyboard, Keys.R),
             EditorClear = Pressed(keyboard, Keys.Delete),
+            // The grid key is the backtick, TIC-80's own. Bare, and Ctrl-guarded like every
+            // other editor letter — no chord lands on it today, and the guard is what keeps
+            // that true when one does.
+            EditorGridToggle = !ctrl && Pressed(keyboard, Keys.OemTilde),
+            EditorPanModifier = keyboard.IsKeyDown(Keys.Space),
             EditorPaintDown = paintDown,
             EditorPaintPressed = paintDown && !paintWasDown,
             EditorPaintReleased = !paintDown && paintWasDown,
-            EditorToolDigit = ToolDigit(keyboard),
+            // Shift splits the digit row in two (wave 3b-2): bare 1-6 are the toolbar's, and
+            // Shift+1..8 are the flag panel's. Before this wave Shift+1..6 quietly selected a
+            // tool — an accident of ToolDigit not looking at the modifier, named here rather
+            // than left to be rediscovered.
+            EditorToolDigit = shift ? 0 : ToolDigit(keyboard),
+            EditorFlagDigit = shift ? FlagDigit(keyboard) : 0,
             EditorShapeFill = ctrl,
             EditorColorPrev = Pressed(keyboard, Keys.OemComma),
             EditorColorNext = Pressed(keyboard, Keys.OemPeriod),
@@ -243,6 +286,19 @@ public sealed class ShellCommandReader
     private int ToolDigit(KeyboardState keyboard)
     {
         for (int i = 0; i < 6; i++)
+        {
+            if (Pressed(keyboard, Keys.D1 + i))
+            {
+                return i + 1;
+            }
+        }
+        return 0;
+    }
+
+    /// <summary>First freshly pressed flag digit 1-8, 0 for none — the same one-key-per-frame rule as the toolbar's.</summary>
+    private int FlagDigit(KeyboardState keyboard)
+    {
+        for (int i = 0; i < SpriteEditorSession.FlagBits; i++)
         {
             if (Pressed(keyboard, Keys.D1 + i))
             {

@@ -109,7 +109,12 @@ public enum SelectionVariant
 /// one <see cref="Snapshot"/> like a stroke, a fill or a transform, so a sheet edit and a flag
 /// edit undo/redo in the true order they happened. Length rules, absent-file-is-zeros, and the
 /// per-file dirty/save contract moved with the bank unchanged — see <see cref="ReadFlagsPayload"/>
-/// and <see cref="RequirePayload"/>.</para>
+/// and <see cref="RequirePayload"/>. <b>Wave 3b-2</b> gave the bank the panel it was missing and,
+/// with it, the reference consoles' group rule: a toggle acts on the whole selected REGION
+/// (<see cref="ToggleRegionFlag"/>, TIC-80's <c>drawFlags</c> over <c>getSpriteIndexes</c>), and
+/// the panel reads the block's three states off <see cref="RegionFlagsAll"/> and
+/// <see cref="RegionFlagsAny"/>. Both public write doors funnel into one private
+/// <see cref="WriteRegionFlags"/>, so the bank still has exactly one writer.</para>
 ///
 /// <para><b>The region can never hang off the sheet.</b> The size setter (8/16/32 px a side)
 /// and the grid click are the only two writers of the region, and both go through the same
@@ -479,6 +484,61 @@ public sealed class SpriteEditorSession
     {
         ValidateBit(bit);
         return (_flags[SpriteIndex] & (1 << bit)) != 0;
+    }
+
+    /// <summary>
+    /// Bits raised on <b>every</b> sprite of the selected region — TIC-80's <c>and</c> in
+    /// <c>drawFlags</c> (REFERENCES-EDITORS §2.1), the fold over the same block
+    /// <c>getSpriteIndexes</c> returns there. At <see cref="RegionCells"/> 1 this is
+    /// <see cref="Flags"/> itself; at 2 or 4 it is what makes the panel's three states
+    /// possible, and it is also what decides which way a click on a toggle goes
+    /// (see <see cref="ToggleRegionFlag"/>).
+    /// </summary>
+    public byte RegionFlagsAll
+    {
+        get
+        {
+            int all = 0xFF;
+            for (int dy = 0; dy < RegionCells; dy++)
+            {
+                for (int dx = 0; dx < RegionCells; dx++)
+                {
+                    all &= _flags[RegionSprite(dx, dy)];
+                }
+            }
+            return (byte)all;
+        }
+    }
+
+    /// <summary>Bits raised on <b>at least one</b> sprite of the selected region — TIC-80's <c>or</c>, the panel's "some of them" dot.</summary>
+    public byte RegionFlagsAny
+    {
+        get
+        {
+            int any = 0;
+            for (int dy = 0; dy < RegionCells; dy++)
+            {
+                for (int dx = 0; dx < RegionCells; dx++)
+                {
+                    any |= _flags[RegionSprite(dx, dy)];
+                }
+            }
+            return (byte)any;
+        }
+    }
+
+    /// <summary>One bit of <see cref="RegionFlagsAll"/> — the panel's "filled" state.</summary>
+    public bool IsFlagSetInAll(int bit)
+    {
+        ValidateBit(bit);
+        return (RegionFlagsAll & (1 << bit)) != 0;
+    }
+
+    /// <summary>One bit of <see cref="RegionFlagsAny"/> — with <see cref="IsFlagSetInAll"/> false, the panel's "dot".</summary>
+    public bool IsFlagSetInAny(int bit)
+    {
+        ValidateBit(bit);
+        return (RegionFlagsAny & (1 << bit)) != 0;
     }
 
     /// <summary>True while a pencil stroke is open (button held). The shell checks this before feeding drag positions.</summary>
@@ -1451,26 +1511,50 @@ public sealed class SpriteEditorSession
     /// has more kinds of open gesture than a stroke. Writing the value already there changes
     /// nothing and is therefore not a step and not dirt, exactly like a stroke that painted the
     /// color already at a pixel.
+    ///
+    /// <para>Since wave 3b-2 the body is <see cref="WriteRegionFlags"/> over a block of ONE
+    /// cell — the same write, the same undo step, the same no-op rule, expressed through the
+    /// one private writer this door now shares with <see cref="ToggleRegionFlag"/>. Two public
+    /// doors, one owner of the assignment: a second place that touched <c>_flags</c> is exactly
+    /// what the wave's order forbade.</para>
     /// </summary>
-    public void SetFlags(byte value)
-    {
-        InterruptGesture();
-        int sprite = SpriteIndex;
-        if (_flags[sprite] == value)
-        {
-            return;
-        }
-        _undo.Add(TakeSnapshot());
-        _redo.Clear();
-        _flags[sprite] = value;
-        Version++;
-    }
+    public void SetFlags(byte value) => WriteRegionFlags(1, _ => value);
 
     /// <summary>One checkbox in the flag panel: flips a single bit of the selected sprite, through <see cref="SetFlags"/> so there is one write door.</summary>
     public void ToggleFlag(int bit)
     {
         ValidateBit(bit);
         SetFlags((byte)(_flags[SpriteIndex] ^ (1 << bit)));
+    }
+
+    /// <summary>
+    /// The flag panel's actual click (wave 3b-2): one bit, applied to <b>every sprite of the
+    /// selected region</b>, as one step of this session's one undo stack. Our region is
+    /// TIC-80's <c>sprite-&gt;size</c> block, so this is that console's <c>drawFlags</c> rule
+    /// carried over rather than reinvented (REFERENCES-EDITORS §2.1) — including which way the
+    /// click goes when the block disagrees with itself: <c>and</c> decides. If the bit is
+    /// raised on <em>every</em> sprite of the block it comes down on every sprite; in every
+    /// other case — none of them, or only some — it goes <em>up</em> on every sprite. So the
+    /// mixed state is a state a click leaves, never one a click can produce, and two clicks
+    /// from any starting state land on "raised on all, then lowered on all".
+    ///
+    /// <para>It is not a second owner of the flag bank: it shares
+    /// <see cref="WriteRegionFlags"/> with <see cref="SetFlags"/>, which is the one place a
+    /// flag byte is ever assigned and the one place a flag undo step is ever pushed. At
+    /// <see cref="RegionCells"/> 1 the two are the same operation over the same single sprite.</para>
+    /// </summary>
+    public void ToggleRegionFlag(int bit)
+    {
+        ValidateBit(bit);
+        int mask = 1 << bit;
+        if ((RegionFlagsAll & mask) == 0)
+        {
+            WriteRegionFlags(RegionCells, current => (byte)(current | mask));
+        }
+        else
+        {
+            WriteRegionFlags(RegionCells, current => (byte)(current & ~mask));
+        }
     }
 
     /// <summary>
@@ -1582,6 +1666,54 @@ public sealed class SpriteEditorSession
 
     /// <summary>One undo entry: a deep copy of the live stack AND the live flags (wave 3b-1) — nothing else may hold these arrays.</summary>
     private Snapshot TakeSnapshot() => new(CloneStack(_layers), (byte[])_flags.Clone());
+
+    /// <summary>
+    /// Sprite number of one cell of the selected region, from its anchor. Safe without a bounds
+    /// check by the type comment's region invariant: the anchor is clamped to
+    /// <c>GridCells - RegionCells</c> by its only two writers, so a region can never hang off
+    /// the sheet and <c>dx, dy &lt; RegionCells</c> can never leave the bank.
+    /// </summary>
+    private int RegionSprite(int dx, int dy) => (RegionCellY + dy) * GridCells + RegionCellX + dx;
+
+    /// <summary>
+    /// The <b>one</b> writer of the flag bank, and the one pusher of a flag undo step — both
+    /// <see cref="SetFlags"/> (a block of one cell) and <see cref="ToggleRegionFlag"/> (the
+    /// whole region) come through here, so "one write door" survived the panel gaining a
+    /// second public verb. Applies <paramref name="transform"/> to every sprite of the
+    /// <paramref name="cells"/>-square block anchored at the region, as <b>one</b> operation:
+    /// one <see cref="InterruptGesture"/>, one snapshot, one <see cref="Version"/> bump, one
+    /// Ctrl+Z. A transform that changes no byte of the block is not a step and not dirt,
+    /// exactly like a stroke that painted the color already at every pixel it touched — which
+    /// is why the block is scanned before anything is written rather than after.
+    /// </summary>
+    private void WriteRegionFlags(int cells, Func<byte, byte> transform)
+    {
+        InterruptGesture();
+        bool changed = false;
+        for (int dy = 0; dy < cells && !changed; dy++)
+        {
+            for (int dx = 0; dx < cells && !changed; dx++)
+            {
+                byte current = _flags[RegionSprite(dx, dy)];
+                changed = transform(current) != current;
+            }
+        }
+        if (!changed)
+        {
+            return;
+        }
+        _undo.Add(TakeSnapshot());
+        _redo.Clear();
+        for (int dy = 0; dy < cells; dy++)
+        {
+            for (int dx = 0; dx < cells; dx++)
+            {
+                int sprite = RegionSprite(dx, dy);
+                _flags[sprite] = transform(_flags[sprite]);
+            }
+        }
+        Version++;
+    }
 
     private static void ValidateBit(int bit)
     {

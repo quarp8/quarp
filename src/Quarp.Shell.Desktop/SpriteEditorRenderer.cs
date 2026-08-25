@@ -12,7 +12,8 @@ namespace Quarp.Shell.Desktop;
 /// with the keyboard cursor, the shape preview, the selection as marching ants (plus the
 /// holes and floating fragment during a move) and the stamp ghost — all session-state
 /// overlays, never sheet pixels — the right column (palette at the window's edge, the sixth
-/// review's one narrow row of size toggle plus layer tabs, and under it the sheet window
+/// review's one narrow row of size toggle plus layer tabs, the eight flag toggles under that
+/// row in their three states, and under them the sheet window
 /// owning the rest of the column, with its scroll slider), the size toggle's number face, the
 /// status buttons (save/undo/redo/clear), the reserved prompt line and the hover tooltips.
 /// Host UI like <see cref="LibraryRenderer"/> — window-native resolution,
@@ -97,6 +98,7 @@ public sealed class SpriteEditorRenderer : IDisposable
         DrawCanvas(batch, layout, editor, timeSeconds);
         DrawButtons(batch, layout, editor, hover);
         DrawSwatches(batch, layout, editor);
+        DrawFlags(batch, layout, editor, hover);
         DrawSheet(batch, layout, editor, scroll.Offset);
         DrawSlider(batch, layout, scroll, hover);
         // The readouts: the cursor in SHEET pixels — the coordinate an author would type into
@@ -128,12 +130,24 @@ public sealed class SpriteEditorRenderer : IDisposable
     }
 
     /// <summary>
-    /// The screen's standing line under the prompt and the save error (ADR-027): gfx.png was
-    /// edited outside while gfx-layers.png stood — the stack wins and the next save will
-    /// overwrite it, which must be announced, not sprung.
+    /// The screen's standing line under the prompt and the save error. Two things can stand
+    /// here, and the out-of-sync warning (ADR-027) wins because it changes what saving does:
+    /// gfx.png was edited outside while gfx-layers.png stood — the stack wins and the next save
+    /// will overwrite it, which must be announced, not sprung.
+    ///
+    /// <para>The second is the trap this editor could otherwise spring in total silence
+    /// (2026-08-25, owner's report): a map cell holding 0 means "empty" and the console skips
+    /// it, so art drawn on sprite 0 can never appear on a map. The author who hits this has
+    /// already spent his time — he drew grass on the cell the editor opens on. Sprite 0 is a
+    /// perfectly good sprite for <c>Spr</c>, so this is a notice and not a block; the map
+    /// editor's picker carries the matching marker on the same tile.</para>
     /// </summary>
-    private static string? StandingNotice(SpriteEditorSession editor) =>
-        editor.GfxOutOfSyncOnDisk ? "GFX.PNG EDITED OUTSIDE - LAYERS WIN, SAVING OVERWRITES IT" : null;
+    public static string? StandingNotice(SpriteEditorSession editor) =>
+        editor.GfxOutOfSyncOnDisk
+            ? "GFX.PNG EDITED OUTSIDE - LAYERS WIN, SAVING OVERWRITES IT"
+            : editor.SpriteIndex == 0
+                ? "SPRITE 000 IS THE MAP'S EMPTY TILE - A MAP WILL NOT DRAW IT"
+                : null;
 
     private void UploadSheetIfChanged(SpriteEditorSession editor)
     {
@@ -396,6 +410,45 @@ public sealed class SpriteEditorRenderer : IDisposable
         }
     }
 
+    /// <summary>
+    /// The eight flag toggles (wave 3b-2), bit 0 leftmost. Three states, straight from the
+    /// reference row (REFERENCES-EDITORS §2.1, TIC-80's <c>drawFlags</c>): raised on every
+    /// sprite of the region — a filled cell; raised on some of them — an empty cell with a
+    /// centre dot; raised on none — an empty cell. At region 8 px "every" and "some" are the
+    /// same sprite, so the dot simply never appears; at 16 or 32 it is the only honest thing
+    /// to draw, because one square cannot say "half of these four".
+    ///
+    /// <para>Fill and emptiness carry the signal, not hue — the same discipline the swatch
+    /// frames use, and the reason the row stays readable for an author who cannot separate
+    /// blue from grey. The painted square is <see cref="SpriteEditorLayout.FlagMarkRect"/>, two
+    /// thirds of the cell the pointer may land on: the mark is the reference row's small square,
+    /// the cell around it is what makes it easy to hit, and only the layout knows either.</para>
+    /// </summary>
+    private void DrawFlags(
+        SpriteBatch batch, in SpriteEditorLayout layout, SpriteEditorSession editor, HoverTarget? hover)
+    {
+        for (int bit = 0; bit < SpriteEditorSession.FlagBits; bit++)
+        {
+            Rectangle mark = layout.FlagMarkRect(bit);
+            bool hovered = hover is HoverTarget target && target.Flag == bit;
+            batch.Draw(_chrome.White, mark, Ink);
+            _chrome.DrawFrame(batch, mark, 1, hovered ? Bright : Text);
+            if (editor.IsFlagSetInAll(bit))
+            {
+                batch.Draw(_chrome.White, mark, Bright);
+            }
+            else if (editor.IsFlagSetInAny(bit))
+            {
+                int dot = Math.Max(1, mark.Width / 3);
+                batch.Draw(
+                    _chrome.White,
+                    new Rectangle(
+                        mark.X + (mark.Width - dot) / 2, mark.Y + (mark.Height - dot) / 2, dot, dot),
+                    Text);
+            }
+        }
+    }
+
     private void DrawSheet(SpriteBatch batch, in SpriteEditorLayout layout, SpriteEditorSession editor, int scroll)
     {
         _chrome.DrawFrame(batch, layout.Sheet, layout.Ui, Dim);
@@ -433,6 +486,18 @@ public sealed class SpriteEditorRenderer : IDisposable
 
         // Highlight geometry is cell-derived because one canonical region may straddle two
         // strip pages. A single bounding box would falsely select the empty gap between them.
+        // Sprite 0 wears a dim frame wherever the strip shows it: it is the map's empty tile,
+        // and the author is told so here — where he draws — and not only after he has carried
+        // the art to the map screen and found it missing.
+        foreach (Rectangle zero in layout.SheetRegionHighlights(0, 0, 1, scroll))
+        {
+            Rectangle visibleZero = Rectangle.Intersect(zero, layout.Sheet);
+            if (visibleZero.Width > 0 && visibleZero.Height > 0)
+            {
+                _chrome.DrawFrame(batch, visibleZero, Math.Max(1, layout.Ui / 2), Dim);
+            }
+        }
+
         foreach (Rectangle highlight in layout.SheetRegionHighlights(
             editor.RegionCellX, editor.RegionCellY, editor.RegionCells, scroll))
         {
@@ -463,8 +528,8 @@ public sealed class SpriteEditorRenderer : IDisposable
     }
 
     /// <summary>
-    /// The tooltip's sprite-editor half: which text and which anchor. This screen has four
-    /// kinds of hover target (button, flyout variant, slider, swatch) and each names its own
+    /// The tooltip's sprite-editor half: which text and which anchor. This screen has five
+    /// kinds of hover target (button, flyout variant, slider, flag toggle, swatch) and each names its own
     /// tooltip and its own rectangle; the box itself belongs to the shared painter, which is
     /// where the flip-and-clamp rules live for both editors.
     /// </summary>
@@ -480,11 +545,13 @@ public sealed class SpriteEditorRenderer : IDisposable
             target.Button is EditorButton button ? EditorIcons.Tooltip(button, editor)
             : target.FlyoutSlot is EditorButton slot ? EditorIcons.VariantTooltip(slot, target.FlyoutVariant)
             : target.Slider ? EditorIcons.SliderTooltip
+            : target.Flag >= 0 ? EditorIcons.FlagTooltip(target.Flag)
             : EditorIcons.SwatchTooltip(target.Swatch);
         Rectangle anchor =
             target.Button is EditorButton anchorButton ? layout.ButtonRect(anchorButton)
             : target.FlyoutSlot is EditorButton anchorSlot ? layout.FlyoutVariantRect(anchorSlot, target.FlyoutVariant)
             : target.Slider ? layout.SheetSlider
+            : target.Flag >= 0 ? layout.FlagRect(target.Flag)
             : layout.SwatchRect(target.Swatch);
         _chrome.DrawTooltip(batch, layout.Chrome, width, height, text, anchor);
     }

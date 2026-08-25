@@ -132,6 +132,46 @@ public class EditorKeysAndStatusLayoutTests
         Assert.Equal(0, reader.Read(new KeyboardState(key)).EditorToolDigit);   // held ≠ pressed again
     }
 
+    /// <summary>
+    /// The map's grid key (wave 3d): the backtick, TIC-80's own, one edge per press and dead
+    /// under Ctrl like every other bare editor key. Break recipe: drop the <c>!ctrl</c> guard
+    /// in <see cref="ShellCommandReader"/> and the last assertion goes red; point it at another
+    /// key and the first does.
+    /// </summary>
+    [Fact]
+    public void TheBacktickReportsTheGridToggleOncePerPress()
+    {
+        var reader = new ShellCommandReader();
+
+        Assert.True(reader.Read(new KeyboardState(Keys.OemTilde)).EditorGridToggle);
+        Assert.False(reader.Read(new KeyboardState(Keys.OemTilde)).EditorGridToggle);   // held ≠ pressed again
+        Assert.False(reader.Read(new KeyboardState()).EditorGridToggle);
+        Assert.False(reader.Read(new KeyboardState(Keys.LeftControl, Keys.OemTilde)).EditorGridToggle);
+    }
+
+    /// <summary>
+    /// The map's pan modifier (wave 3d): Space as a LEVEL, not an edge, because the drag it
+    /// modifies lasts as long as the button is down. Space is still half of
+    /// <see cref="ShellCommands.EditorPaintDown"/> — the reader reports both and the map router
+    /// is where the modifier wins, which is exactly the split this pins.
+    /// </summary>
+    [Fact]
+    public void SpaceReportsThePanModifierAsALevelWhileStillOpeningThePencil()
+    {
+        var reader = new ShellCommandReader();
+
+        ShellCommands down = reader.Read(new KeyboardState(Keys.Space));
+        ShellCommands held = reader.Read(new KeyboardState(Keys.Space));
+
+        Assert.True(down.EditorPanModifier);
+        Assert.True(down.EditorPaintPressed);       // both facts are reported; the router chooses
+        Assert.True(held.EditorPanModifier);        // a level: still held, still true
+        Assert.False(held.EditorPaintPressed);
+        Assert.False(reader.Read(new KeyboardState()).EditorPanModifier);
+        // Bare Z is not the modifier — that is what keeps the map's keyboard pencil alive.
+        Assert.False(reader.Read(new KeyboardState(Keys.Z)).EditorPanModifier);
+    }
+
     // ---- the shape tool's filled modifier ----
 
     /// <summary>Ctrl is the shape's "filled" flag — a level, not an edge, so the preview flips the moment it changes.</summary>

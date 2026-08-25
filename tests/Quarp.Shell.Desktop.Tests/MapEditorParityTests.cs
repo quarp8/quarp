@@ -169,7 +169,7 @@ public class MapEditorParityTests : IDisposable
         {
             if (!EditorIcons.IsStub(pressed) && EditorIcons.TabTarget(pressed) is null)
             {
-                EditorIcons.ClickMapButton(map, pressed);   // the exit tab's bool is the machine's job
+                EditorIcons.ClickMapButton(map, view, pressed);   // the exit tab's bool is the machine's job
             }
             return;
         }
@@ -333,8 +333,14 @@ public class MapEditorParityTests : IDisposable
         {
             [EditorButton.ExitTab] = "ESC",
             [EditorButton.SpritesTab] = "HOME",
-            [EditorButton.ToolPencil] = "Z/SPACE",
+            // The four tools carry their digits (TIC-80's own numbering); the map's keyboard
+            // pencil is bare Z since wave 3d, because Space became the pan modifier there.
+            [EditorButton.ToolPencil] = "Z DRAWS",
+            [EditorButton.ToolHand] = "SPACE+DRAG",
+            [EditorButton.ToolSelect] = "DEL",
+            [EditorButton.ToolFill] = "Z FILLS",
             [EditorButton.ToolEraser] = "DEL",
+            [EditorButton.GridToggle] = "`",
             [EditorButton.Save] = "CTRL+S",
             [EditorButton.Undo] = "CTRL+Z",
             [EditorButton.Redo] = "CTRL+Y",

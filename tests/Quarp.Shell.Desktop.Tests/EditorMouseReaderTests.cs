@@ -53,8 +53,39 @@ public class EditorMouseReaderTests
         EditorMouse heldPick = reader.Read(State(5, 5, ButtonState.Released, ButtonState.Pressed));
 
         Assert.True(pick.RightPressed);
+        Assert.True(pick.RightDown);
         Assert.False(pick.LeftPressed);
-        Assert.False(heldPick.RightPressed);    // the eyedropper samples on the press, not per frame
+        Assert.False(heldPick.RightPressed);    // one press, one gesture — not one per frame
+        Assert.True(heldPick.RightDown);        // but the hold is reported: the map's erase drag rides it
+
+        EditorMouse up = reader.Read(State(5, 5, ButtonState.Released, ButtonState.Released));
+        Assert.True(up.RightReleased);          // and its release commits the erase as one undo step
+        Assert.False(up.RightDown);
+        Assert.False(reader.Read(State(5, 5, ButtonState.Released, ButtonState.Released)).RightReleased);
+    }
+
+    /// <summary>
+    /// The middle button, added in wave 3d for the map's tile eyedropper (TIC-80
+    /// <c>processMouseDrawMode</c>): one edge per physical press, and independent of the other
+    /// two. Break recipe: report it from <c>LeftButton</c> in <see cref="EditorMouseReader"/>
+    /// and the independence assertions go red.
+    /// </summary>
+    [Fact]
+    public void TheMiddleButtonEdgesIndependently()
+    {
+        var reader = new EditorMouseReader();
+        static MouseState Middle(ButtonState middle) =>
+            new(7, 8, 0, ButtonState.Released, middle, ButtonState.Released,
+                ButtonState.Released, ButtonState.Released);
+
+        EditorMouse sample = reader.Read(Middle(ButtonState.Pressed));
+        EditorMouse held = reader.Read(Middle(ButtonState.Pressed));
+
+        Assert.True(sample.MiddlePressed);
+        Assert.False(sample.LeftPressed);
+        Assert.False(sample.RightPressed);
+        Assert.False(held.MiddlePressed);       // sampling happens once, on the press
+        Assert.False(reader.Read(Middle(ButtonState.Released)).MiddlePressed);
     }
 
     [Fact]

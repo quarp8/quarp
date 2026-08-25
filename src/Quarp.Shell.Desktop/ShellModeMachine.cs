@@ -37,6 +37,7 @@ public sealed class ShellModeMachine
     /// <summary>Where CREATE GAME scaffolds — the cwd-relative carts root by default, injectable for tests.</summary>
     private readonly string _createRoot;
 
+
     /// <summary>
     /// Library entry when <paramref name="directSession"/> is null; game entry around an
     /// already-running session otherwise. The direct session is created by the caller (the CLI
@@ -57,7 +58,8 @@ public sealed class ShellModeMachine
         Func<string, CartSession> startSession,
         Action drainAudio,
         CartSession? directSession = null,
-        string? createRoot = null)
+        string? createRoot = null,
+        ITextClipboard? textClipboard = null)
     {
         ArgumentNullException.ThrowIfNull(library);
         ArgumentNullException.ThrowIfNull(startSession);
@@ -68,6 +70,7 @@ public sealed class ShellModeMachine
         // The same cwd-relative root the library's default scan reads: a cart born in the
         // menu must appear in the library the moment the author comes back to it.
         _createRoot = createRoot ?? Path.Combine(Environment.CurrentDirectory, CartLibrary.FolderName);
+        TextClipboard = textClipboard ?? new InMemoryTextClipboard();
         if (directSession is not null)
         {
             Session = directSession;
@@ -81,6 +84,26 @@ public sealed class ShellModeMachine
             Mode = ShellMode.Menu;
         }
     }
+
+    /// <summary>
+    /// The one clipboard of this process, behind <see cref="ITextClipboard"/>. The window hands
+    /// down a <see cref="SystemTextClipboard"/> (the machine's own, through SDL); a headless
+    /// test passes nothing and gets an <see cref="InMemoryTextClipboard"/>, which is why every
+    /// claim about Ctrl+C and Ctrl+V below is a plain unit test with no operating system in it.
+    ///
+    /// <para><b>Why one, and why it is public now.</b> Until this wave only the code editor had
+    /// a clipboard and the machine merely carried the instance into
+    /// <see cref="CodeEditorView"/>'s constructor. REFERENCES-EDITORS §8 item 2 asks for the
+    /// other four screens as well, and it asks for them to share: "всё межредакторное
+    /// копирование идёт через системный буфер" (§1) — one buffer, or copying a piece of a level
+    /// out of one cartridge and into another does not work. The five input routers are layer 4
+    /// like this machine, so they read it from here; the sessions and views below never see it
+    /// and go on taking and returning plain strings.</para>
+    ///
+    /// <para>One instance per process, constructed by <c>QuarpGame</c> and nowhere else: it is a
+    /// host device, and a second one would mean a second answer to "what is on the clipboard".</para>
+    /// </summary>
+    public ITextClipboard TextClipboard { get; }
 
     /// <summary>The list the library screen shows; scanned on every entry into the library.</summary>
     public CartLibrary Library { get; }
@@ -459,7 +482,7 @@ public sealed class ShellModeMachine
                     // src/main.cs reports the way a failed launch does and leaves the tab the
                     // author is standing on exactly where it was.
                     CodeEditor = new CodeEditorSession(_editorFolder!);
-                    CodeView = new CodeEditorView();
+                    CodeView = new CodeEditorView(TextClipboard);
                 }
                 catch (Exception e) when (e is CartLoadException or IOException or UnauthorizedAccessException)
                 {

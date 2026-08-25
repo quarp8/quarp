@@ -19,7 +19,8 @@ namespace Quarp.Shell.Desktop;
 /// <see cref="ShellModeMachine"/>, editor policy in <see cref="SpriteEditorSession"/>; this
 /// class owns only what needs a graphics device, plus the routing of raw input to whichever
 /// mode is on screen. The mouse (new in M9 stage 2) is polled every frame; the editors act on
-/// it, and since wave R1 so does the library, which now has a console grid to point at.
+/// it, and since waves R1 and R6 so do the library and the boot menu, which now have a console
+/// grid to point at.
 /// Polling always keeps the reader's previous-state true across mode switches, so a button held
 /// into another screen produces no phantom press.
 ///
@@ -28,10 +29,12 @@ namespace Quarp.Shell.Desktop;
 /// run. A running cart is presented as the core's indexed framebuffer scaled by whole integers
 /// (ARCHITECTURE §5); the library is now drawn <em>into a framebuffer of its own</em>
 /// (<see cref="ShellScreen"/>) with the same core calls a cartridge uses, and both go to the
-/// window through the one <see cref="ConsolePresenter"/>. Waves R2, R3 and R5 brought the
-/// sprite, map and sound editors onto the same road; the one remaining editor screen (code) and
-/// the boot menu still paint at the window's native resolution and are scheduled to follow, and
-/// while they do, this class is the one place where both roads are visible.</para>
+/// window through the one <see cref="ConsolePresenter"/>. Waves R2-R5 brought the five editor
+/// screens onto the same road and wave R6 brought the boot menu, which was the last tenant of
+/// the host font path; the host frame, its renderer and both host atlases left the tree with it.
+/// There is no second road for this class to be the junction of any more: every mode either
+/// presents the cartridge's framebuffer or the shell's, and both go through one presenter at one
+/// whole-integer scale.</para>
 ///
 /// <para><b>Time (M2).</b> MonoGame's <c>IsFixedTimeStep</c> is off and replaced by
 /// <see cref="TickAccumulator"/>: real time is banked, whole ticks come out, at most five
@@ -73,7 +76,6 @@ public sealed class QuarpGame : Game
     private SpriteBatch _spriteBatch = null!;
     private ConsolePresenter _presenter = null!;
     private ShellOverlay _overlay = null!;
-    private MainMenuRenderer _menuUi = null!;
     private AudioOutput? _audio;
 
     private TimeSpeed _lastSpeed = TimeSpeed.At(TimeSpeed.NormalIndex);
@@ -153,7 +155,15 @@ public sealed class QuarpGame : Game
             new CartLibrary(CartLibrary.DefaultRoots()),
             StartSessionFromLibrary,
             DrainAudio,
-            directSession);
+            directSession,
+            // The machine's own clipboard, for the Ctrl+X/C/V of all FIVE editor screens —
+            // code, sprites, map, sound and music (REFERENCES-EDITORS §8 item 2). ONE instance,
+            // constructed HERE and nowhere else: it is a host device (SDL2), host devices belong
+            // to the window exactly as the keyboard and mouse readers do, and a second one would
+            // mean a second answer to "what is on the clipboard" — which is precisely what would
+            // break copying a block out of one screen and into another. Everything above it sees
+            // only ITextClipboard, which is what keeps all five screens headless-testable.
+            textClipboard: new SystemTextClipboard());
 
         // The shell's drawing surface. Palette unpacking and the frame's placement moved with
         // it into ConsolePresenter, which now owns both for the cart's frame and for this one.
@@ -241,7 +251,6 @@ public sealed class QuarpGame : Game
         _spriteBatch = new SpriteBatch(GraphicsDevice);
         _presenter = new ConsolePresenter(GraphicsDevice, _profile);
         _overlay = new ShellOverlay(GraphicsDevice, _profile.Width, _profile.Height);
-        _menuUi = new MainMenuRenderer(GraphicsDevice);
 
         // The two window events the boot screens live on. Characters buffer here and are
         // consumed by the menu's name field once per frame (edge-ordering with the same
@@ -274,6 +283,13 @@ public sealed class QuarpGame : Game
         ShellCommands commands = _commands.Read(keyboard);
         // Read every frame in every mode (see the type comment), consumed by the editor only.
         EditorMouse mouse = _mouse.Read(Mouse.GetState());
+
+        // Which screen this frame's pointer is being measured against. Remembered BEFORE the
+        // switch below, because the switch is where a tab key can move the shell to another
+        // screen, and the target this frame wrote would then be read by that other screen's
+        // Draw — the crash IconHoverTracker.Clear documents in full. Comparing after is the
+        // only place that sees both halves of that frame.
+        ShellMode screenOnEntry = _modes.Mode;
 
         switch (_modes.Mode)
         {
@@ -370,6 +386,16 @@ public sealed class QuarpGame : Game
         // and a file dropped on a screen that does not take drops (a running game, an open
         // editor) is discarded rather than parked — surfacing it minutes later on some other
         // screen would be a launch nobody just asked for.
+        if (_modes.Mode != screenOnEntry)
+        {
+            // The screen moved under the pointer during this very frame. What was under it
+            // belonged to the screen that has just left, and a target measured on one layout
+            // means nothing on another — see IconHoverTracker.Clear for the crash this line
+            // fixes. The flyout goes with it: an open list belongs to the button that opened
+            // it, and that button is on the screen we just walked off.
+            _hover.Clear();
+            _flyout.Close();
+        }
         _typedChars.Clear();
         _droppedFile = null;
 
@@ -575,6 +601,44 @@ public sealed class QuarpGame : Game
         {
             ActivateMenuItem(menu.Selected);
         }
+        else if (mouse.LeftPressed)
+        {
+            ClickMenu(menu, mouse);
+        }
+    }
+
+    /// <summary>
+    /// A click on a door. Two-step exactly like <see cref="ClickLibrary"/>, and for the same
+    /// reason: the first press moves the bar, a press on the door that already has the bar walks
+    /// through it. These rows are seven console pixels tall, and door 2 opens an OS dialog while
+    /// door 3 writes a folder — a misplaced click must not do either.
+    ///
+    /// <para><b>Why the menu can be clicked at all now.</b> It was keyboard-only for as long as
+    /// it was host UI, exactly as the library was before wave R1: there was no grid to point at,
+    /// only a <c>SpriteBatch</c>. Wave R6 gave it the console's grid, so the pointer reaches it
+    /// the one legal way — through <see cref="ShellScreen.Placement"/>, the single owner of
+    /// window-to-console coordinates. This method does no scale arithmetic of its own, and
+    /// neither may any other.</para>
+    /// </summary>
+    private void ClickMenu(MainMenuSession menu, in EditorMouse mouse)
+    {
+        FramePlacement placement = _shellScreen.Placement(
+            GraphicsDevice.PresentationParameters.BackBufferWidth,
+            GraphicsDevice.PresentationParameters.BackBufferHeight);
+        if (!placement.TryToCanvas(mouse.X, mouse.Y, out int consoleX, out int consoleY))
+        {
+            return;     // The letterbox. Not a click on the nearest door — see FramePlacement.
+        }
+        if (MainMenuRenderer.LayoutFor(_shellScreen).HitRow(consoleX, consoleY) is not int index)
+        {
+            return;
+        }
+        if (index != menu.SelectedIndex)
+        {
+            menu.MoveSelection(index - menu.SelectedIndex);
+            return;
+        }
+        ActivateMenuItem(menu.Selected);
     }
 
     /// <summary>The three doors. LOAD CART tries the OS picker and reports its refusal, if any, on the message line.</summary>
@@ -880,19 +944,15 @@ public sealed class QuarpGame : Game
             case ShellMode.CodeEditor:
             case ShellMode.SfxEditor:
             case ShellMode.MusicEditor:
-                // Every screen on one road since wave R5: all are drawn into the shell's own
-                // console and presented by the same presenter the cartridge's frame goes
-                // through. The draw clock feeds the sprite screen's marching ants and the code
-                // screen's caret blink — chrome animating in host time, like the tooltip delay;
-                // no simulation or hash sees it.
-                RenderShellScreen(gameTime.TotalGameTime.TotalSeconds);
-                break;
             case ShellMode.Menu:
-                _menuUi.Draw(
-                    _spriteBatch,
-                    GraphicsDevice.PresentationParameters.BackBufferWidth,
-                    GraphicsDevice.PresentationParameters.BackBufferHeight,
-                    _modes.Menu);
+                // Every screen on one road since wave R6 — the boot menu included: all are
+                // drawn into the shell's own console and presented by the same presenter the
+                // cartridge's frame goes through. The draw clock feeds the sprite screen's
+                // marching ants and the code screen's caret blink — chrome animating in host
+                // time, like the tooltip delay; no simulation or hash sees it. The menu's own
+                // animation is not on that clock: the intro is a pure function of the session's
+                // own, which is what lets a test pin a frame of it.
+                RenderShellScreen(gameTime.TotalGameTime.TotalSeconds);
                 break;
         }
         base.Draw(gameTime);        // the game loop presents for us
@@ -947,11 +1007,12 @@ public sealed class QuarpGame : Game
     /// this method and <see cref="RenderFrame"/> is which framebuffer is presented and whether
     /// the pause indicator has anything to say.
     ///
-    /// <para>As of wave R5 <b>every</b> screen lives here: the library (R1), the sprite editor
-    /// (R2), the map editor (R3), the code editor (R4) and the sound editor (R5). Which one is
-    /// drawn is the mode's business and nothing else changes — same console, same presenter,
-    /// same whole-integer scale. Nothing is left at the window's resolution but the boot menu,
-    /// so the host frame (<see cref="EditorChrome"/>) has no editor tenant any more.</para>
+    /// <para>As of wave R6 <b>every</b> screen lives here, with nothing left over: the boot
+    /// menu (R6), the library (R1), the sprite editor (R2), the map editor (R3), the code
+    /// editor (R4), the sound editor (R5) and the music editor. Which one is drawn is the
+    /// mode's business and nothing else changes — same console, same presenter, same
+    /// whole-integer scale. The host frame and the host font path left the tree with the menu:
+    /// there is no second resolution in this shell any more, which is the whole of ADR-029.</para>
     /// </summary>
     private void RenderShellScreen(double timeSeconds)
     {
@@ -988,6 +1049,10 @@ public sealed class QuarpGame : Game
             MusicEditorRenderer.Draw(
                 _shellScreen, _modes.MusicEditor!, _modes.MusicView!,
                 _hover.Target, _hover.TooltipVisible);
+        }
+        else if (_modes.Mode == ShellMode.Menu)
+        {
+            MainMenuRenderer.Draw(_shellScreen, _modes.Menu);
         }
         else
         {
@@ -1040,7 +1105,6 @@ public sealed class QuarpGame : Game
             _modes.Session?.Dispose();
             _overlay?.Dispose();
             _presenter?.Dispose();
-            _menuUi?.Dispose();
             _audio?.Dispose();
         }
         base.Dispose(disposing);

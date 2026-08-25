@@ -103,6 +103,31 @@ public sealed class CodeEditorSession
     /// <summary>The code limit in UTF-8 bytes, borrowed from its owner (ADR-024). Reported, never enforced.</summary>
     public const int MaxByteCount = CodeBudget.MaxBytes;
 
+    /// <summary>
+    /// How deep a line may be indented and still be read as a declaration — two steps of
+    /// <see cref="TabWidth"/>. With the file-scoped namespaces CODESTYLE mandates, a type sits at
+    /// column 0, its members at 4 and a nested type's members at 8; anything deeper is a
+    /// statement inside a body. <see cref="IsDeclarationLine"/> carries the whole rule.
+    /// </summary>
+    public const int MaxDeclarationIndent = 2 * TabWidth;
+
+    /// <summary>
+    /// The words a declaration line may start with. A fixed list and not "any identifier",
+    /// because the whole point is to tell <c>public void Update()</c> from <c>Update();</c> —
+    /// and the first word is the cheapest place where those two differ.
+    /// </summary>
+    private static readonly string[] DeclarationStarters =
+    {
+        "public", "private", "protected", "internal", "static", "sealed", "abstract", "virtual",
+        "override", "partial", "async", "class", "struct", "record", "interface", "enum", "void",
+    };
+
+    /// <summary>The five words that make a line a <em>type</em> declaration whatever else is on it.</summary>
+    private static readonly string[] TypeKeywords = { "class", "struct", "record", "interface", "enum" };
+
+    /// <summary>What must be absent from a bare header line whose opening brace is on the next line.</summary>
+    private static readonly char[] BodyPunctuation = { '{', '}', ';', '(', ')' };
+
     /// <summary>UTF-8 without BOM (SPEC-8: cartridge sources are plain UTF-8) — explicit, because a BOM would change the identity of every cart this editor touches.</summary>
     private static readonly UTF8Encoding Utf8NoBom = new(encoderShouldEmitUTF8Identifier: false);
 
@@ -532,6 +557,249 @@ public sealed class CodeEditorSession
         }
         SelectMatch(hit, needle.Length);
         return true;
+    }
+
+    // ---- navigation by declaration ----
+
+    /// <summary>
+    /// Whether a line <b>declares</b> something — the one fact behind Alt+Up / Alt+Down
+    /// (REFERENCES-EDITORS §8 item 14: LIKO-12's <c>searchPreviousFunction</c>/
+    /// <c>searchNextFunction</c> on <c>Alt+Up/Down</c>, PICO-8's "ALT-UP, DOWN to navigate to the
+    /// previous, next function"). It lives here, in the document, for the same reason the caret
+    /// and the search do: it is a statement about the text and about nothing on the screen.
+    ///
+    /// <para><b>A rule, not a parser.</b> LIKO-12's whole implementation is a search for the
+    /// string <c>function </c>; ours is the smallest thing that says the same about our C#
+    /// subset. Roslyn is next door in <c>Quarp.CartKit</c> and is deliberately not used: parsing
+    /// 256 KB to answer "where is the next method" would put a compiler on a keystroke, and a
+    /// half-typed buffer is exactly the state in which a parser stops answering at all.</para>
+    ///
+    /// <para><b>The rule, in words.</b> First the line is stripped of everything that is not
+    /// code: line comments, block comments (tracked from the top of the buffer, so a
+    /// <c>/* … */</c> spanning lines blanks all of them) and the insides of string and character
+    /// literals. What is left must then satisfy all of:</para>
+    /// <list type="number">
+    ///   <item>it is indented no deeper than <see cref="MaxDeclarationIndent"/>;</item>
+    ///   <item>its first character is a letter or <c>_</c> — which alone throws out <c>//</c>,
+    ///     <c>/*</c>, a continuation <c>*</c>, an attribute <c>[…]</c>, a preprocessor <c>#</c>,
+    ///     a lone brace and a line that begins inside a string;</item>
+    ///   <item>its first <em>word</em> is one of <see cref="DeclarationStarters"/> — the
+    ///     modifiers plus <c>class struct record interface enum void</c>. This is what makes
+    ///     <c>Update();</c> and <c>Player.Update();</c> ordinary statements: their first word is
+    ///     not on the list;</item>
+    ///   <item>and it carries the shape of a declaration rather than of a field, decided in this
+    ///     order: a type keyword as a whole word wins outright; then a <c>(</c> that comes
+    ///     <em>before</em> any <c>=</c> is a method or a constructor header (before, so that
+    ///     <c>void Move(bool extend = false)</c> is still one and <c>List&lt;int&gt; _x =
+    ///     new();</c> is not); then an <c>=</c> counts only when it is the <c>=&gt;</c> of an
+    ///     expression body, which is what tells <c>public int Health =&gt; 100;</c> (a property)
+    ///     from <c>public int Health = 100;</c> (a field); and with no <c>=</c> and no <c>(</c>
+    ///     at all, an opening brace at the end, a <c>{ get</c>/<c>{ set</c>, or no body
+    ///     punctuation whatsoever (the header whose brace is on the next line).</item>
+    /// </list>
+    ///
+    /// <para><b>What the rule knowingly misses</b>, said here rather than left to be
+    /// rediscovered: a member with no modifier and no <c>void</c> (<c>Vector2 Position { get;
+    /// set; }</c>), a fourth level of nesting, a verbatim or raw string literal that spans lines,
+    /// and fields — which are declarations in C# but not what Alt+Up is for in any of the three
+    /// references. A miss costs one extra keypress; a false hit would land the caret in the
+    /// middle of a body, which is why every doubtful shape above answers "no".</para>
+    /// </summary>
+    public bool IsDeclarationLine(int line)
+    {
+        if (line < 0 || line >= _lines.Count)
+        {
+            return false;
+        }
+        bool inBlockComment = false;
+        for (int i = 0; i < line; i++)
+        {
+            StripToCode(_lines[i], ref inBlockComment);     // only for the block-comment state
+        }
+        return IsDeclaration(StripToCode(_lines[line], ref inBlockComment));
+    }
+
+    /// <summary>Alt+Up: the caret to the start of the nearest declaration above it.</summary>
+    /// <returns>True when there was one and the caret moved.</returns>
+    public bool MoveToPreviousDeclaration() => JumpToDeclaration(-1);
+
+    /// <summary>Alt+Down: the same, downwards.</summary>
+    public bool MoveToNextDeclaration() => JumpToDeclaration(1);
+
+    /// <summary>
+    /// The two jumps, one body. <b>No wrapping</b>, unlike <see cref="FindNext"/>: a search asks
+    /// for a string and has an obvious answer at the other end of the file, while Alt+Down is a
+    /// walk through structure — a walk that silently teleports past the end costs the reader the
+    /// place they were reading. Both references stop at the ends too.
+    /// </summary>
+    private bool JumpToDeclaration(int direction)
+    {
+        int target = -1;
+        bool inBlockComment = false;
+        for (int i = 0; i < _lines.Count; i++)
+        {
+            if (direction < 0 && i >= CursorLine)
+            {
+                break;                  // everything below the caret is another key's business
+            }
+            string code = StripToCode(_lines[i], ref inBlockComment);
+            if (!IsDeclaration(code))
+            {
+                continue;
+            }
+            if (direction < 0)
+            {
+                target = i;             // keep the last one seen before the caret
+            }
+            else if (i > CursorLine)
+            {
+                target = i;
+                break;
+            }
+        }
+        if (target < 0)
+        {
+            return false;
+        }
+        PlaceCaret(target, 0, extend: false, keepDesired: false);
+        return true;
+    }
+
+    /// <summary>The four numbered clauses of <see cref="IsDeclarationLine"/>, applied to a line already stripped to code.</summary>
+    private static bool IsDeclaration(string code)
+    {
+        int indent = 0;
+        int column = 0;
+        while (indent < code.Length && (code[indent] == ' ' || code[indent] == '\t'))
+        {
+            column += code[indent] == '\t' ? TabWidth : 1;
+            indent++;
+        }
+        if (column > MaxDeclarationIndent)
+        {
+            return false;
+        }
+        string body = code[indent..].TrimEnd();
+        if (body.Length == 0 || !(char.IsLetter(body[0]) || body[0] == '_'))
+        {
+            return false;
+        }
+        int wordEnd = 0;
+        while (wordEnd < body.Length && IsWordChar(body[wordEnd]))
+        {
+            wordEnd++;
+        }
+        if (Array.IndexOf(DeclarationStarters, body[..wordEnd]) < 0)
+        {
+            return false;
+        }
+        for (int i = 0; i < TypeKeywords.Length; i++)
+        {
+            if (ContainsWord(body, TypeKeywords[i]))
+            {
+                return true;
+            }
+        }
+        int open = body.IndexOf('(');
+        int assign = body.IndexOf('=');
+        if (open >= 0 && (assign < 0 || open < assign))
+        {
+            // A parameter list before any '=': a method or a constructor header, block- or
+            // expression-bodied. "Before" is what keeps a default argument from turning
+            // `void Move(bool extend = false)` into a field.
+            return true;
+        }
+        if (assign >= 0)
+        {
+            // The only '=' a declaration may carry is the arrow of an expression body; every
+            // other one is an initialiser, and an initialiser means a field.
+            return assign + 1 < body.Length && body[assign + 1] == '>';
+        }
+        return body[^1] == '{'
+            || body.Contains("{ get", StringComparison.Ordinal)
+            || body.Contains("{ set", StringComparison.Ordinal)
+            || body.IndexOfAny(BodyPunctuation) < 0;
+    }
+
+    /// <summary>Whole-word containment — <c>class</c> must not be found inside <c>classic</c>.</summary>
+    private static bool ContainsWord(string text, string word)
+    {
+        int at = 0;
+        while ((at = text.IndexOf(word, at, StringComparison.Ordinal)) >= 0)
+        {
+            int after = at + word.Length;
+            if ((at == 0 || !IsWordChar(text[at - 1])) && (after >= text.Length || !IsWordChar(text[after])))
+            {
+                return true;
+            }
+            at = after;
+        }
+        return false;
+    }
+
+    /// <summary>
+    /// The line with every non-code region replaced by spaces, one character for one character so
+    /// columns keep meaning what they meant. <paramref name="inBlockComment"/> carries the
+    /// <c>/* … */</c> state from the previous line, which is the whole reason the callers walk the
+    /// buffer from the top instead of looking at one line in isolation.
+    ///
+    /// <para>Verbatim (<c>@"…"</c>) and raw (<c>"""…"""</c>) literals that span lines are not
+    /// tracked: they would need the same cross-line state, and a wrongly-guessed declaration
+    /// inside one costs a keypress while the state machine costs a class. Named in
+    /// <see cref="IsDeclarationLine"/>'s list of known misses.</para>
+    /// </summary>
+    private static string StripToCode(string line, ref bool inBlockComment)
+    {
+        var code = new StringBuilder(line.Length);
+        int i = 0;
+        while (i < line.Length)
+        {
+            if (inBlockComment)
+            {
+                if (line[i] == '*' && i + 1 < line.Length && line[i + 1] == '/')
+                {
+                    inBlockComment = false;
+                    code.Append("  ");
+                    i += 2;
+                    continue;
+                }
+                code.Append(' ');
+                i++;
+                continue;
+            }
+            if (line[i] == '/' && i + 1 < line.Length && line[i + 1] == '/')
+            {
+                break;                  // the rest of the line is a comment; TrimEnd eats the gap
+            }
+            if (line[i] == '/' && i + 1 < line.Length && line[i + 1] == '*')
+            {
+                inBlockComment = true;
+                code.Append("  ");
+                i += 2;
+                continue;
+            }
+            if (line[i] == '"' || line[i] == '\'')
+            {
+                char quote = line[i];
+                code.Append(' ');
+                i++;
+                while (i < line.Length)
+                {
+                    bool escaped = line[i] == '\\' && i + 1 < line.Length;
+                    bool closing = line[i] == quote;
+                    code.Append(escaped ? "  " : " ");
+                    i += escaped ? 2 : 1;
+                    if (closing)
+                    {
+                        break;
+                    }
+                }
+                continue;
+            }
+            code.Append(line[i]);
+            i++;
+        }
+        return code.ToString();
     }
 
     // ---- disk ----

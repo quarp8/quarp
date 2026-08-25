@@ -30,7 +30,15 @@ namespace Quarp.Shell.Desktop;
 /// column of palette / flags / layer tabs, and the remaining fifty-six — seven whole sprite
 /// cells — for the sheet window. Twenty plus sixty-four plus twenty plus fifty-six is one
 /// hundred and sixty, with nothing spare, which is why no panel here has a margin around it:
-/// the tool column's own button frames are what separate it from the canvas.</para>
+/// the tool column's own button frames are what separate it from the canvas.
+///
+/// <para><b>One pixel of that sum was, however, being wasted, and since 2026-08-25 it is not.</b>
+/// The middle column is twenty pixels because five layer tabs must fit two abreast, but the
+/// palette and the flag block are nineteen (four cells of four, three gaps of one). Their spare
+/// pixel used to sit on the right of the column doing nothing; the blocks are now flush against
+/// the column's right edge and the pixel sits on its left, where it is the canvas's border —
+/// see <see cref="CanvasFrame"/>, which is why the canvas had no visible edge at all until that
+/// day and has one now.</para>
 ///
 /// <para><b>What the move cost, named rather than hidden.</b> (1) The sheet window shows 7x8 =
 /// <b>56</b> of the 256 sprites at once and scrolls horizontally for the rest; the host screen
@@ -68,7 +76,7 @@ public readonly struct SpriteEditorLayout
 
     private const int CellPitch = CellSize + 1;
 
-    /// <summary>The tool column is two buttons wide; its twelve slots hold eleven buttons and one gap.</summary>
+    /// <summary>The tool column is two buttons wide; its twelve slots are now all twelve buttons — the last one was the brush toggle's.</summary>
     private const int ToolColumns = 2;
 
     /// <summary>The middle column is two buttons wide; the layer tabs use three of its rows.</summary>
@@ -79,7 +87,13 @@ public readonly struct SpriteEditorLayout
     // four buttons the host frame kept in its status bar — save, undo, redo, clear. They moved
     // because the console's status line is five pixels tall and an icon-button is ten: a band
     // that cannot hold a button cannot hold a button row. A null is an empty slot, not a
-    // shifted neighbour, exactly as EditorChrome's status slots work.
+    // shifted neighbour, exactly as the dead host frame's status slots worked.
+    //
+    // The twelfth slot was that empty one until the brush wave, and the brush toggle took it
+    // rather than pushing anything: TIC-80 stands its brush slider beside the canvas
+    // (drawBrushSlider) and this column is the console's answer to that side of the screen, so
+    // the control lands where the hand already goes for the size toggle. Nothing else moved by
+    // a pixel — which is the whole reason the gap was left holding a name-shaped hole.
     private static readonly EditorButton?[] _toolSlots =
     {
         EditorButton.ToolSelect, EditorButton.ToolPencil,
@@ -87,7 +101,7 @@ public readonly struct SpriteEditorLayout
         EditorButton.ToolShape, EditorButton.ToolTransform,
         EditorButton.SizeToggle, EditorButton.Clear,
         EditorButton.Save, EditorButton.Undo,
-        EditorButton.Redo, null,
+        EditorButton.Redo, EditorButton.BrushToggle,
     };
 
     /// <summary>The frame this screen stands in. See <see cref="ConsoleChrome"/>.</summary>
@@ -116,7 +130,7 @@ public readonly struct SpriteEditorLayout
     /// <summary>Glyph top of the single message line — the exit prompt, the save error or the standing notice.</summary>
     public int PromptY => Chrome.MessageY;
 
-    /// <summary>All 22 placed buttons — the frame's six, the tool column's eleven and the five layer tabs.</summary>
+    /// <summary>All 23 placed buttons — the frame's six, the tool column's twelve and the five layer tabs.</summary>
     public IReadOnlyList<EditorButtonPlace> Buttons { get; private init; }
 
     /// <summary>The zoomed region view — the surface the pencil paints on. Always 64x64.</summary>
@@ -124,6 +138,50 @@ public readonly struct SpriteEditorLayout
 
     /// <summary>Console pixels per region pixel on the canvas: 8, 4 or 2 for an 8, 16 or 32 px sprite.</summary>
     public int CanvasScale { get; private init; }
+
+    /// <summary>
+    /// The one-pixel ring immediately <b>outside</b> the canvas box — the surface's own border.
+    /// It exists because of a defect the owner found with his eyes on 2026-08-25: an empty
+    /// sprite is colour 0, the screen's ground is colour 0
+    /// (<see cref="ConsoleChromeRenderer.Ink"/>), so the canvas of a fresh cart was a black
+    /// square on black and an author could not see where the surface he draws on begins or ends.
+    ///
+    /// <para><b>The reference does exactly this, and it is worth being precise about how.</b>
+    /// TIC-80 (<c>src/studio/editors/sprite.c</c>) separates canvas from background twice over:
+    /// its editors clear the screen to a grey a black sprite pixel can never be mistaken for,
+    /// and <c>drawCanvas</c> then lays a one-pixel <c>rectb</c> around the 64x64 box — at
+    /// <c>x - 1, y - 1, CANVAS_SIZE + 2, CANVAS_SIZE + 2</c>, i.e. <em>around</em> it, never on
+    /// the sprite's own pixels. We take the second half exactly and cannot take the first: this
+    /// console has sixteen slots, the palette on this very screen must show all sixteen
+    /// truthfully, and repainting the ground would spend one of them (the argument is
+    /// <see cref="ConsoleChromeRenderer"/>'s). The ring is drawn in
+    /// <see cref="ConsoleChromeRenderer.Dim"/> and not in TIC-80's white, which is a named
+    /// divergence: on this chrome grey is the ink every structural rule is drawn in (the three
+    /// bands, the map screen's <c>DrawGrid</c>) and white already means "the cell the cursor is
+    /// on" — a white ring here would compete with the canvas cursor, and the order of
+    /// 2026-08-25 says the cursor is not to be touched. LIKO-12 and PICO-8 agree with TIC-80 on
+    /// the principle (a canvas that is a distinct plate, not the background) but neither's
+    /// mechanism is transferable at 160x90: LIKO-12 stands its canvas on a filled editor
+    /// background, PICO-8 offers grid lines <em>over</em> the zoomed pixels (<c>CTRL-G</c>,
+    /// REFERENCES-EDITORS §2.3) and lines over the art are exactly what this fix may not do.
+    /// Where they diverge, TIC-80 wins, per the order.</para>
+    ///
+    /// <para><b>Where the pixels come from, named because the order asked for it.</b> The
+    /// across-the-screen split is 20 + 64 + 20 + 56 = 160 with nothing spare, so the ring lands
+    /// on the ring of pixels just outside the box and each of its four sides is accounted for.
+    /// <b>Top:</b> the header rule, already drawn on that row — the frame coincides with it and
+    /// costs nothing. <b>Left:</b> the tool column's own button borders for the sixty rows the
+    /// twelve buttons cover, and free ground for the four rows below them. <b>Right:</b> the one
+    /// genuinely free pixel on this screen — the middle column is allotted twenty pixels and its
+    /// palette and flag blocks need nineteen, so <see cref="Compute"/> now right-aligns those
+    /// blocks and the spare pixel moves from the useless right side of the column to the useful
+    /// left side of it; below them the layer tabs' own left borders continue the line.
+    /// <b>Bottom:</b> free, because the three slider rows under the content are spanned only by
+    /// the sheet's columns. <b>Nothing was taken from the drawing surface</b>: the canvas is
+    /// still 64x64 at zoom 8, which is the 8x8 sprite the order says not to shrink.</para>
+    /// </summary>
+    public Rectangle CanvasFrame =>
+        new(Canvas.X - 1, Canvas.Y - 1, Canvas.Width + 2, Canvas.Height + 2);
 
     /// <summary>
     /// The sheet window: seven whole sprite columns wide and the strip's full
@@ -136,6 +194,28 @@ public readonly struct SpriteEditorLayout
     /// <summary>Console pixels per strip pixel — one, and one is the only value 64 rows allow.</summary>
     public int SheetScale { get; private init; }
 
+    /// <summary>
+    /// The same ring around the sheet window. TIC-80 frames its 128x128 sheet the same way
+    /// (<c>drawSheetVBank1</c>) and even hangs the neighbouring-page marks off that frame, which
+    /// is the one detail REFERENCES-EDITORS §2.1 records about it in so many words: "наличие
+    /// соседних страниц показано штрихами по бокам <b>рамки листа</b>". So the sheet has a
+    /// border in the reference and ours had none.
+    ///
+    /// <para><b>Three of the four sides are already paid for.</b> Above it is the header rule;
+    /// below it is the slider's own track, which spans exactly these columns; on the left is the
+    /// middle column's last pixel, which the palette and flag blocks now sit flush against. The
+    /// fourth side is off the screen and stays off it: TIC-80 buys its sheet's right border by
+    /// standing the sheet one pixel in from the screen edge (<c>SheetX = TIC80_WIDTH -
+    /// TIC_SPRITESHEET_SIZE - 1</c>) and we cannot follow it there — fifty-six columns is exactly
+    /// seven whole sprite cells, and a pixel taken from them costs a whole column of sprites,
+    /// which is the "useful area" the order forbids spending. The rectangle therefore names a
+    /// side at x = 160 and <c>VirtualConsole.Rect</c> clips it away, which is the honest outcome:
+    /// a border drawn one column in would sit on sprite art, and rule 3 of the order says
+    /// nothing may.</para>
+    /// </summary>
+    public Rectangle SheetFrame =>
+        new(Sheet.X - 1, Sheet.Y - 1, Sheet.Width + 2, Sheet.Height + 2);
+
     /// <summary>The horizontal scroll slider's track, directly under the sheet window.</summary>
     public Rectangle SheetSlider { get; private init; }
 
@@ -145,7 +225,7 @@ public readonly struct SpriteEditorLayout
     /// <summary>Bounding box of all 16 swatches — the renderer walks it, the hit test pre-filters with it.</summary>
     public Rectangle Swatches { get; private init; }
 
-    /// <summary>Side of one flag toggle's cell — a swatch, so the two blocks share one grid and one left edge.</summary>
+    /// <summary>Side of one flag toggle's cell — a swatch, so the two blocks share one grid and one edge (the column's right one; see <see cref="CanvasFrame"/>).</summary>
     public int FlagSize { get; private init; }
 
     /// <summary>Bounding box of the eight flag toggles, under the palette in the middle column.</summary>
@@ -161,7 +241,7 @@ public readonly struct SpriteEditorLayout
     /// </summary>
     public static SpriteEditorLayout Compute(int screenWidth, int screenHeight, int regionCells)
     {
-        var buttons = new EditorButtonPlace[22];
+        var buttons = new EditorButtonPlace[23];
         int placed = 0;
         ConsoleChrome chrome = ConsoleChrome.Compute(screenWidth, screenHeight, buttons, ref placed);
 
@@ -199,15 +279,30 @@ public readonly struct SpriteEditorLayout
         var canvas = new Rectangle(toolWidth, top, regionPixels * canvasScale, regionPixels * canvasScale);
 
         // The middle column: palette on top, the eight flag toggles under it, the five layer
-        // tabs under those — one left edge for all three, one clear row between them.
+        // tabs under those — one clear row between them, and all three flush against the
+        // column's RIGHT edge rather than its left one.
+        //
+        // The right edge, not the left, and this is the whole of the answer to "where did the
+        // border's pixel come from" (see CanvasFrame). The column is two buttons — twenty
+        // pixels — because the five layer tabs must fit two abreast, and twenty is what the
+        // 20 + 64 + 20 + 56 split leaves it. But the palette is four cells of four plus three
+        // gaps of one = NINETEEN, and so is the flag block; their twentieth pixel existed and
+        // was spent on nothing. Left-aligning the blocks parked that pixel on the right of the
+        // column, where it did nothing; right-aligning them parks it on the LEFT, where it is
+        // the one column of ground between the canvas and this panel — the canvas's own border.
+        // Nothing was taken from any control to get it: the palette cells, the flag cells, the
+        // layer tabs, the canvas and the sheet window are all exactly the size they were.
+        int middleWidth = MiddleColumns * button;
         int middleX = toolWidth + canvasBox;
         int swatchSize = CellSize;
+        int swatchesWidth = SwatchColumns * CellPitch - 1;
+        int flagsWidth = FlagColumns * CellPitch - 1;
         var swatches = new Rectangle(
-            middleX, top,
-            SwatchColumns * CellPitch - 1, SwatchRows * CellPitch - 1);
+            middleX + middleWidth - swatchesWidth, top,
+            swatchesWidth, SwatchRows * CellPitch - 1);
         var flagPanel = new Rectangle(
-            middleX, swatches.Bottom + 1,
-            FlagColumns * CellPitch - 1, FlagRows * CellPitch - 1);
+            middleX + middleWidth - flagsWidth, swatches.Bottom + 1,
+            flagsWidth, FlagRows * CellPitch - 1);
         int layerTabsY = flagPanel.Bottom + 1;
         for (int i = 0; i < SpriteEditorSession.LayerCount; i++)
         {
@@ -225,7 +320,7 @@ public readonly struct SpriteEditorLayout
         // The sheet window takes every column the other three panels left, trimmed to whole
         // sprite cells so its edge can never show a sliced sprite. Its height is the strip's own,
         // at the only scale sixty-four rows allow.
-        int sheetX = middleX + MiddleColumns * button;
+        int sheetX = middleX + middleWidth;
         int sheetScale = Math.Max(1, chrome.ContentHeight / SheetStrip.PixelHeight);
         int sheetCell = VirtualConsole.SpriteSize * sheetScale;
         int sheetWidth =

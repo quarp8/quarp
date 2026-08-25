@@ -31,7 +31,11 @@ namespace Quarp.Shell.Desktop;
 /// <c>Tab</c> or its button; a click on it travels. Block stamp: drag across the palette, or
 /// Ctrl+Shift+arrows. Clipboard: Ctrl+C / Ctrl+X / Ctrl+V. Save, undo, redo: buttons and their
 /// usual chords. Long-distance travel: arrows, <c>[</c> <c>]</c>, PgUp/PgDn, the wheel over the
-/// map, the position bar and the whole-map view.</para>
+/// map, the position bar and the whole-map view. Flip, flip and rotate the marked rectangle:
+/// <c>F</c>, <c>V</c>, <c>R</c> — keys only, deliberately (the tool block is two columns by six
+/// rows with one free slot, and three transform buttons do not fit without a flyout this screen
+/// does not have), which is exactly why the same wave gave the four buttonless controls their
+/// own hover labels: <see cref="TooltipText"/> is where those three keys are announced.</para>
 ///
 /// <para><b>Where the picture of a tile comes from.</b> A map cell is a sprite number
 /// (MAP-FORMAT §2), and the sprite sheet has exactly one owner —
@@ -113,11 +117,36 @@ public static class MapEditorRenderer
             console, layout.Chrome, view.ExitPromptShown, map.SaveError, StandingNotice(map));
         DrawTooltipField(
             console, layout.Chrome,
-            tooltipVisible && hover is HoverTarget target && target.Button is EditorButton button
-                ? EditorIcons.MapTooltip(button)
-                : null,
+            tooltipVisible && hover is HoverTarget target ? TooltipText(target) : null,
             ScreenName);
         return layout;
+    }
+
+    /// <summary>
+    /// The hover label for whichever kind of target is under the pointer: a button gets
+    /// <see cref="EditorIcons.MapTooltip"/>, and every control that is <em>not</em> a button —
+    /// the viewport, the tile palette, the whole-map view, the position bar — gets
+    /// <see cref="EditorIcons.MapRegionTooltip"/>, which is where this screen's least public
+    /// gestures are announced (REFERENCES-EDITORS §8 item 15). The cut to the field's width
+    /// belongs to <see cref="ConsoleChrome.FitTooltip"/>, the only thing that knows how wide the
+    /// field is.
+    ///
+    /// <para><b>A target this screen does not recognise means "no label", never an exception</b> —
+    /// the rule the sound and music renderers were given after the crash of 2026-08-25, and this
+    /// screen is built with it rather than repaired into it. A hover target is measured against
+    /// ONE screen's layout but the tracker outlives the screen (see
+    /// <see cref="IconHoverTracker.Clear"/>): a keyboard tab switch lands between a frame's input
+    /// and that frame's draw, so this method can be handed a sound-screen region with no button
+    /// and no map region. Returning null there costs a tooltip for one frame; throwing costs the
+    /// console, inside <c>Draw</c>, where nothing useful can catch it.</para>
+    /// </summary>
+    public static string? TooltipText(in HoverTarget target)
+    {
+        if (target.Button is EditorButton button)
+        {
+            return EditorIcons.MapTooltip(button);
+        }
+        return target.Map is MapRegion.None ? null : EditorIcons.MapRegionTooltip(target.Map);
     }
 
     /// <summary>
@@ -140,11 +169,14 @@ public static class MapEditorRenderer
     public static string? StandingNotice(MapEditorSession map)
     {
         ArgumentNullException.ThrowIfNull(map);
-        return map.MapReadOnly
-            ? $"READ-ONLY: {MapEditorSession.MapSourceFileName.ToUpperInvariant()} OWNS THIS MAP"
-            : map.SelectedSprite == MapEditorSession.EmptyTile
-                ? "TILE 000 IS EMPTY - IT ERASES CELLS"
-                : null;
+        // The clipboard's refusal wins — see SfxEditorRenderer.StandingNotice for why the
+        // transient answer to a keystroke outranks the two standing facts about the folder.
+        return map.ClipboardNotice
+            ?? (map.MapReadOnly
+                ? $"READ-ONLY: {MapEditorSession.MapSourceFileName.ToUpperInvariant()} OWNS THIS MAP"
+                : map.SelectedSprite == MapEditorSession.EmptyTile
+                    ? "TILE 000 IS EMPTY - IT ERASES CELLS"
+                    : null);
     }
 
     /// <summary>

@@ -40,8 +40,17 @@ namespace Quarp.Shell.Desktop;
 /// and redo; Ctrl+C / Ctrl+X / Ctrl+V through the view's clipboard; Ctrl+F opens the find line,
 /// Ctrl+G walks to the next occurrence, Ctrl+L opens go-to-line; Tab indents to the next stop,
 /// Enter breaks the line, Backspace and Delete eat a character or the selection; Ctrl+S saves;
-/// Esc drops a selection, then closes a field, then leaves. Alt+Left/Right walk the tab strip —
-/// the one key that cannot be Home here, because Home is the start of the line.</para>
+/// Esc drops a selection, then closes a field, then <b>brings the chrome back</b>, then leaves.
+/// Alt+Left/Right walk the tab strip and F1..F5 jump straight to a named editor (TIC-80's own
+/// five keys) — the tab strip cannot be Home here, because Home is the start of the line.
+/// Alt+Up/Down walk the buffer's declarations, the other two arrows of the same modifier.
+/// F11 takes the chrome off entirely (15x40 instead of 11x36 — see
+/// <see cref="ShellCommands.CodeFullscreen"/> for why it is TIC-80's key and not the TAB ADR-029
+/// cites) and Shift+F11 summons that mode's one status row.</para>
+///
+/// <para>Inside fullscreen the parity law's mouse half is suspended by construction — there is
+/// no chrome, so there is no button to click. <see cref="CodeEditorView.Fullscreen"/> carries
+/// that argument.</para>
 /// </summary>
 public static class CodeEditorInput
 {
@@ -76,8 +85,10 @@ public static class CodeEditorInput
         // wave R4 the two numbers are CONSOLE pixels (160x90), because the shell hands this
         // screen its own surface exactly as it hands the sprite and map screens theirs; the
         // router cannot tell the difference and must not. Sync re-clamps the scroll against it
-        // before any hit test below divides by it.
-        var layout = CodeEditorLayout.Compute(shell.BackBufferWidth, shell.BackBufferHeight);
+        // before any hit test below divides by it. Since the fullscreen wave Compute takes two
+        // more inputs; both are read from the view, which the renderer also asks.
+        var layout = CodeEditorLayout.Compute(
+            shell.BackBufferWidth, shell.BackBufferHeight, view.Fullscreen, view.StatusBandShown(session));
         view.Sync(layout, session);
 
         if (view.ExitPromptShown)
@@ -113,12 +124,46 @@ public static class CodeEditorInput
             return;
         }
 
+        // F1..F5 jump straight to a named editor — TIC-80's own five keys for exactly this
+        // (REFERENCES-EDITORS §8 item 16). Read beside the tab strip's Alt+arrows and before
+        // everything else for the same reason those are: travel is a question about WHICH SCREEN,
+        // and it must not be answered by a screen that is already being left. The return is what
+        // makes that true — the rest of this method may then assume the mode did not move.
+        if (EditorIcons.EditorTabForNumber(commands.EditorTabJump) is ShellMode named)
+        {
+            shell.Modes.SwitchEditorTab(named);
+            return;
+        }
+
         // Alt+Left/Right walk the tab strip on every editor screen (REFERENCES-EDITORS §8 item
         // 16: LIKO-12's and PICO-8's own key). Home cannot do that job here — it is the start of
         // the line — which is exactly why the shell has this key at all.
         if (commands.EditorTabPrev || commands.EditorTabNext)
         {
             shell.Modes.CycleEditorTab(commands.EditorTabNext ? 1 : -1);
+            return;
+        }
+
+        // F11 and Shift+F11 are about the SURFACE, not the text, so they are read before the
+        // fork below and work with a find line open — the reasoning that puts the tab strip
+        // above them. The layout is re-measured on the spot rather than next frame: a frame that
+        // drew fifteen lines while clicking as if there were eleven is the exact disagreement
+        // CodeEditorLayout exists to prevent.
+        if (commands.CodeFullscreen || commands.CodeFullscreenStatus)
+        {
+            if (commands.CodeFullscreen)
+            {
+                view.ToggleFullscreen();
+            }
+            if (commands.CodeFullscreenStatus)
+            {
+                view.ToggleStatusPeek();
+            }
+            layout = CodeEditorLayout.Compute(
+                shell.BackBufferWidth, shell.BackBufferHeight,
+                view.Fullscreen, view.StatusBandShown(session));
+            view.Sync(layout, session);
+            shell.Hover.Update(null, elapsedSeconds);   // the buttons just left the screen
             return;
         }
 
@@ -218,6 +263,12 @@ public static class CodeEditorInput
             if (session.HasSelection)
             {
                 session.ClearSelection();
+                return;
+            }
+            // The third rung: Esc brings the chrome back before it means "leave", or a dirty
+            // buffer would raise its prompt onto a message line that is not on the surface.
+            if (view.LeaveFullscreen())
+            {
                 return;
             }
             shell.Modes.HandleEscape();         // clean → the library; dirty → the prompt
@@ -336,11 +387,25 @@ public static class CodeEditorInput
         {
             session.Move(CodeMove.Right, extend);
         }
-        if (commands.MenuUp)
+        // Alt+Up/Down walk DECLARATIONS (REFERENCES-EDITORS §8 item 14: LIKO-12's
+        // searchPreviousFunction/searchNextFunction and PICO-8's "ALT-UP, DOWN to navigate to the
+        // previous, next function"). Checked before the bare arrow it shares a key with, exactly
+        // as Ctrl+Left is checked before Left three branches up — one physical press, one owner
+        // of what it means. Never extends the selection: a jump through structure is travel, and
+        // the two references that have it do not extend either.
+        if (commands.CodeDeclarationPrev)
+        {
+            session.MoveToPreviousDeclaration();
+        }
+        else if (commands.MenuUp)
         {
             session.Move(CodeMove.Up, extend);
         }
-        if (commands.MenuDown)
+        if (commands.CodeDeclarationNext)
+        {
+            session.MoveToNextDeclaration();
+        }
+        else if (commands.MenuDown)
         {
             session.Move(CodeMove.Down, extend);
         }

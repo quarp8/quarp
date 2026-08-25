@@ -14,7 +14,7 @@ namespace Quarp.Shell.Desktop;
 /// message line.
 ///
 /// <para><b>What this file used to be.</b> Until this wave it owned a <c>GraphicsDevice</c>, an
-/// <c>EditorChromeRenderer</c>, a font atlas and an icon atlas, and painted at the window's
+/// a host frame painter, a font atlas and an icon atlas, and painted at the window's
 /// native resolution through a <c>SpriteBatch</c>. All of that is gone. Every pixel now goes
 /// through <c>Cls</c>, <c>RectFill</c>, <c>Rect</c>, <c>Print</c> and <c>Pset</c> on a
 /// <see cref="ShellScreen"/> — the same calls a cartridge makes — and the result is presented by
@@ -186,9 +186,13 @@ public static class SfxEditorRenderer
     public static string? StandingNotice(SfxEditorSession session)
     {
         ArgumentNullException.ThrowIfNull(session);
-        return session.BankReadOnly
-            ? $"READ-ONLY: {SfxEditorSession.SfxSourceFileName.ToUpperInvariant()} OWNS THIS BANK"
-            : null;
+        // The clipboard's refusal wins, on all four screens, for the reason it is transient:
+        // it answers a key the author has just pressed, while the read-only line answers a fact
+        // about the folder that will still be true on the next frame.
+        return session.ClipboardNotice
+            ?? (session.BankReadOnly
+                ? $"READ-ONLY: {SfxEditorSession.SfxSourceFileName.ToUpperInvariant()} OWNS THIS BANK"
+                : null);
     }
 
     /// <summary>
@@ -198,11 +202,24 @@ public static class SfxEditorRenderer
     /// rows, the three fields — gets <see cref="EditorIcons.SfxRegionTooltip"/>, which is where
     /// this screen's keys are announced. The cut to the field's width belongs to
     /// <see cref="ConsoleChrome.FitTooltip"/>, the only thing that knows how wide the field is.
+    ///
+    /// <para><b>A target this screen does not recognise means "no label", never an exception.</b>
+    /// The tracker is cleared the moment the screen changes (<see cref="IconHoverTracker.Clear"/>
+    /// carries the crash this rule answers), so a foreign target should not arrive here at all —
+    /// this is the second lock on the same door. It is worth having because the caller is
+    /// <c>Draw</c>: an exception thrown while painting a frame reaches nothing that can recover,
+    /// and the console dies with the author's unsaved work still on screen. No tooltip is worth
+    /// that. Returning null is what the field already does when nothing is hovered, so the
+    /// degraded picture is one the eye has seen before.</para>
     /// </summary>
-    public static string TooltipText(in HoverTarget target) =>
-        target.Button is EditorButton button
-            ? EditorIcons.SfxTooltip(button)
-            : EditorIcons.SfxRegionTooltip(target.Sfx);
+    public static string? TooltipText(in HoverTarget target)
+    {
+        if (target.Button is EditorButton button)
+        {
+            return EditorIcons.SfxTooltip(button);
+        }
+        return target.Sfx is SfxRegion.None ? null : EditorIcons.SfxRegionTooltip(target.Sfx);
+    }
 
     /// <summary>The band of the step under the cursor, drawn under everything so the three grids read as one column.</summary>
     private static void DrawStepCursor(VirtualConsole console, in SfxEditorLayout layout, SfxEditorView view) =>

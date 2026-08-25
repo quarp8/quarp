@@ -540,10 +540,18 @@ public class SpriteFlagsPanelTests : IDisposable
     /// gap is here; <c>ui</c> does not exist on this screen and neither does anything to
     /// multiply by it.
     ///
-    /// <para>Break recipe: anchor <c>flagPanel</c> to anything but <c>middleX</c> in
-    /// <see cref="SpriteEditorLayout.Compute"/> — the shared-left-edge assertions go red; drop
+    /// <para>Wave 2026-08-25 turned "one left edge" into "one right edge" for the two
+    /// nineteen-pixel blocks: the column's twentieth pixel is now the canvas's border and stands
+    /// on the left of the column instead of idling on its right
+    /// (<see cref="SpriteEditorLayout.CanvasFrame"/>). The law itself — one edge, equal gaps —
+    /// is untouched, and the layer tabs, being genuinely twenty wide, still define the
+    /// column.</para>
+    ///
+    /// <para>Break recipe: anchor <c>flagPanel</c> to anything but the palette's own edge in
+    /// <see cref="SpriteEditorLayout.Compute"/> — the shared-edge assertions go red; drop
     /// the <c>+ 1</c> from <c>layerTabsY</c> and the flag row lands on the tabs, which the
-    /// overlap assertions catch.</para>
+    /// overlap assertions catch; left-align the two blocks on <c>middleX</c> again and the
+    /// canvas loses its border, which <c>SpriteEditorPanelEdgeTests</c> catches.</para>
     /// </summary>
     [Fact]
     public void TheFlagRowKeepsTheColumnsLeftEdgeAndSpacing()
@@ -553,7 +561,13 @@ public class SpriteFlagsPanelTests : IDisposable
         Rectangle lastTab = layout.ButtonRect(EditorButton.LayerTab5);
 
         Assert.Equal(layout.Swatches.X, layout.FlagPanel.X);
-        Assert.Equal(tabs.X, layout.FlagPanel.X);
+        // The flag block hangs on the same edge of the column as the palette, and since
+        // 2026-08-25 that edge is the RIGHT one: both blocks are nineteen pixels in a
+        // twenty-pixel column and the spare pixel now stands on the column's left as the
+        // canvas's border (SpriteEditorLayout.CanvasFrame). The layer tabs, which really are
+        // twenty wide, still start one pixel further left — that pixel IS the border.
+        Assert.Equal(layout.Swatches.Right, layout.FlagPanel.Right);
+        Assert.Equal(tabs.X + 1, layout.FlagPanel.X);
         Assert.Equal(layout.SwatchSize, layout.FlagSize);        // the palette's own cell
 
         // Under the palette, over the tabs, one clear pixel from each — the column's rhythm.

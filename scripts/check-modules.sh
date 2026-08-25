@@ -129,7 +129,10 @@ LAYERS=(
   "MusicEditorSession.cs|1"    # модель банка music.bin: 64 паттерна x 4 канала, флаги, undo (+IMusicClipboard, MusicMemoryClipboard)
   "CartLibrary.cs|1"           # какие картриджи есть на диске (+CartLibraryEntry)
   "ShellMode.cs|1"             # словарь режимов: четыре имени, ноль зависимостей
-  "PixelFontMetrics.cs|1"      # арифметика метрик текста, без устройства (хостовый путь)
+  # Формат текстового буфера обмена — чистая функция на строках и байтах: ни устройства, ни
+  # геометрии, ни сессии. Слой 1 по той же примете, что ShellMode и PaletteColors. Читают его
+  # четыре сессии (слой 1) и MapEditorPaint (слой 2) — все ссылки вниз или вбок.
+  "ClipboardFormat.cs|1"       # hex-текст четырёх банков: кодирование, разбор, отказ (+ClipboardKind, ClipboardBlock)
   "FramePlacement.cs|1"        # масштаб и центрирование кадра И обратный перевод окно->консоль
   "ShellScreen.cs|1"           # консоль оболочки: свой VirtualConsole профиля 8, без устройства
   "PaletteColors.cs|1"         # Master32 -> Color, три сдвига, один владелец
@@ -142,8 +145,7 @@ LAYERS=(
   "FilePicker.cs|1"            # системный диалог выбора папки: чистый P/Invoke, без устройства кадра
 
   # --- 2 «вид»: геометрия и состояние показа, headless ---
-  "EditorChrome.cs|2"          # рама обоих редакторов (+EditorButtonPlace, EditorPromptVerb)
-  "EditorButtonState.cs|2"     # пять булей о состоянии кнопки: читают оба художника рамы
+  "EditorButtonState.cs|2"     # пять булей о состоянии кнопки: читает художник рамы
   "SpriteEditorLayout.cs|2"    # раскладка экрана спрайтов
   "MapEditorLayout.cs|2"       # раскладка экрана карты
   "MapEditorView.cs|2"         # камера/курсор карты (+MapEditorTileStep, MapEditorPaint)
@@ -157,7 +159,6 @@ LAYERS=(
   "IconHoverTracker.cs|2"      # трёхсекундный контракт подсказки (+HoverTarget)
   "ToolbarFlyout.cs|2"         # состояние флаута группового слота
   "SelectionOutline.cs|2"      # геометрия бегущих муравьёв (+AntDash)
-  "MainMenuLayout.cs|2"        # раскладка экрана главного меню
   "ConsoleIcons.cs|2"          # маски EditorIcons на консоли: Pset по маске, без текстуры
   "LibraryLayout.cs|2"         # раскладка библиотеки в пикселях консоли (160x90)
   # LibraryRenderer переехал сюда из «рендера» в волне R1. Причина ровно та, по которой слой
@@ -169,7 +170,7 @@ LAYERS=(
   # Волна R2 положила рядом со старой рамой вторую — консольную. Оба файла в слое 2 по тому же
   # признаку: устройства не держат, конструируются в headless-тесте. ConsoleChromeRenderer —
   # не «рендер», хотя и рисует: он пишет в кадровый буфер вызовами ядра, как LibraryRenderer.
-  "ConsoleChrome.cs|2"         # рама экрана инструмента в пикселях консоли (160x90)
+  "ConsoleChrome.cs|2"         # рама экрана инструмента в пикселях консоли (160x90) (+EditorButtonPlace, EditorPromptVerb)
   "ConsoleChromeRenderer.cs|2" # пиксели этой рамы — полосы, кнопки, статус, строка сообщения
   # SpriteEditorRenderer переехал сюда из «рендера» в волне R2, ровно как LibraryRenderer в R1:
   # ни GraphicsDevice, ни Texture2D, ни SpriteBatch — только ShellScreen и вызовы ядра.
@@ -193,20 +194,30 @@ LAYERS=(
   "MusicEditorLayout.cs|2"     # раскладка экрана музыки: сетка песни, флаги, mute/solo, обзор (+MusicFlagColumn)
   "MusicEditorView.cs|2"       # окно прокрутки, mute/solo, запрос воспроизведения, полунабранная цифра
   "MusicEditorRenderer.cs|2"   # пиксели экрана музыки — в консоли, не в окне
+  # MainMenuRenderer переехал сюда из «рендера» в волне R6 — последним из семи экранов, по тому
+  # же признаку, что LibraryRenderer в R1 и четыре редактора в R2-R5: ни GraphicsDevice, ни
+  # Texture2D, ни SpriteBatch, ни атласа шрифта — только ShellScreen и вызовы ядра. Вместе с
+  # устройством ушли IDisposable и текстура логотипа (MenuArt рисуется Pset'ом по маске, как
+  # иконки), поэтому класс стал статическим: владеть нечем. Голден-тест строит экран без
+  # графического устройства. После R6 в «рендере» не осталось ни одного экрана оболочки —
+  # только дорога кадра, слой поверх него и звук.
+  "MainMenuLayout.cs|2"        # раскладка загрузочного экрана в пикселях консоли (160x90)
+  "MainMenuRenderer.cs|2"      # пиксели заставки и главного меню — в консоли, не в окне
 
   # --- 3 «рендер»: владеет ресурсом устройства ---
-  "PixelFontAtlas.cs|3"        # текстурная полоса глифов
-  "EditorIconAtlas.cs|3"       # текстурная полоса иконок
-  "EditorChromeRenderer.cs|3"  # пиксели общей рамы (хостовой)
   "ConsolePresenter.cs|3"      # единственная дорога кадра: буфер -> текстура -> окно
-  "ShellOverlay.cs|3"          # текстовый слой поверх кадра
-  "MainMenuRenderer.cs|3"      # пиксели главного меню
+  "ShellOverlay.cs|3"          # текстовый слой поверх кадра картриджа (индикатор паузы/скорости)
   "AudioOutput.cs|3"           # OpenAL-устройство
 
   # --- 4 «проводка»: цикл, режимы, ввод, точка входа ---
   "InputMapper.cs|4"           # физические устройства -> InputState картриджа
   "ShellCommands.cs|4"         # кадр клавиш управления временем (+ShellCommandReader)
   "EditorMouse.cs|4"           # кадр мыши редактора (+EditorMouseReader)
+  # Системный буфер обмена — устройство хоста (SDL2 через P/Invoke), как FilePicker — comdlg32.
+  # Слой 4 по определению «читает устройства»: сам ITextClipboard живёт в слое 2 (CodeEditorView),
+  # и ссылка идёт вниз — 4 -> 2. Обратной ссылки нет: редактор знает только интерфейс, поэтому
+  # остаётся headless-тестируемым.
+  "SystemTextClipboard.cs|4"   # текстовый буфер обмена машины за ITextClipboard
   "CartSession.cs|4"           # хозяин запущенного картриджа: тики, реплеи, save.dat
   "ShellModeMachine.cs|4"      # переходы между режимами и жизнь сессии
   "SpriteEditorInput.cs|4"     # роутер ввода экрана спрайтов (+EditorShell)

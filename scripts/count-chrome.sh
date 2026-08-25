@@ -93,6 +93,22 @@
 # QuarpGame.UpdateEditor и записана выше). В QuarpGame из старого списка остался один Draw;
 # новые методы меню этой же волны добавлены по правилу «новый метод — новая строка».
 #
+# ВОЛНА R6 (2026-08-25, ADR-029 закончен). Хостовой рамы больше нет: EditorChrome.cs,
+# EditorChromeRenderer.cs, EditorIconAtlas.cs, PixelFontAtlas.cs и PixelFontMetrics.cs удалены
+# вместе с последним их читателем — бут-экраном. В списке ниже три первых заменены своими
+# консольными преемниками (ConsoleChrome.cs, ConsoleChromeRenderer.cs, ConsoleIcons.cs): вопрос
+# прибора — «сколько стоят СВОИ виджеты», а виджеты никуда не делись, они переехали на консоль.
+# Таблица методов MainMenuRenderer.cs пересобрана под новый файл (класс стал статическим,
+# текстуры логотипа больше нет — маска рисуется Pset'ом).
+#
+# ПРИБОР ПРИ ЭТОМ ОСТАЁТСЯ КРАСНЫМ, И ЭТО НЕ ВОЛНА R6 ЕГО СЛОМАЛА. На дереве ДО этой волны он
+# уже падал с exit 2 на маркере `MapEditorInput.HandleMapButton` — сигнатура сменилась в одной
+# из волн R2-R5, а список здесь не обновили. Стали стары и таблицы SpriteEditorRenderer.cs
+# (класс перестал быть IDisposable в R2 — маркеров конструктора и Dispose в файле нет). Волна R6
+# правит здесь только то, чего касалась сама: свой список файлов и своё меню. Пересбор остальных
+# таблиц — отдельная карточка: это перевыведение чисел, которое нечем проверить, а прибор,
+# посчитавший молча неправильно, — ровно тот дефект 2g/2h, ради которого он и писался.
+#
 # ГРАНИЦА, НА КОТОРОЙ ВИСИТ ВЕРДИКТ: SpriteEditorLayout.cs считается ЦЕЛИКОМ
 # (434 строки после волны), хотя часть его методов (TryCanvasPixel, TrySheetCell и подобные)
 # это координатная математика холста/листа, а не кнопок. Считаю их хромом
@@ -115,9 +131,9 @@ SHELL_DIR="src/Quarp.Shell.Desktop"
 
 # --- файлы, которые целиком — хром (виджеты/раскладка/иконки/подсказки/скролл) ---
 FILES_CHROME_WHOLE=(
-  "$SHELL_DIR/EditorChrome.cs"         # ОБЩЕЕ: рама обоих редакторов (волна упрощения)
-  "$SHELL_DIR/EditorChromeRenderer.cs" # ОБЩЕЕ: пиксели этой рамы (волна упрощения)
-  "$SHELL_DIR/EditorIconAtlas.cs"   # иконки: атлас, тот же приём, что PixelFontAtlas
+  "$SHELL_DIR/ConsoleChrome.cs"        # ОБЩЕЕ: рама всех экранов инструмента на консоли (R6: единственная)
+  "$SHELL_DIR/ConsoleChromeRenderer.cs" # ОБЩЕЕ: пиксели этой рамы
+  "$SHELL_DIR/ConsoleIcons.cs"      # иконки: маски Pset'ом (преемник атласа, удалённого в R6)
   "$SHELL_DIR/IconHoverTracker.cs"  # подсказки по наведению (3-секундный контракт)
   "$SHELL_DIR/ToolbarFlyout.cs"     # флаут группового слота тулбара
   "$SHELL_DIR/SheetScroll.cs"       # владелец страничной раскладки листа + слайдер
@@ -128,8 +144,9 @@ FILES_CHROME_WHOLE=(
 # --- Бут-экран (M9 этап 4). Что хром, а что нет — решено здесь, а не по памяти:
 #   MainMenuLayout.cs    — целиком хром (раскладка, как обе Layout выше).
 #   MainMenuRenderer.cs  — по методам ниже: меню и его виджеты — хром; интро-анимация —
-#                          контент (рисунок, не виджет, как холст редактора); подъём
-#                          текстуры логотипа — контент по прецеденту UploadSheetIfChanged.
+#                          контент (рисунок, не виджет, как холст редактора); отрисовка
+#                          логотипа-маски — контент по тому же прецеденту, что раньше её подъём
+#                          в текстуру (UploadSheetIfChanged).
 #   MenuArt.cs           — код (два аксессора) — хром; блок строк Rows — ДАННЫЕ, исключены
 #                          маркерами ровно как _masks у EditorIcons.
 #   MainMenuSession.cs   — модель (слой «документ»), в хром не входит, как CartLibrary.
@@ -141,15 +158,16 @@ MENUART_DATA_START_SIG='private static readonly string[] Rows'
 MENUART_DATA_END_SIG='public static int Width'
 MENU_RENDERER_FILE="$SHELL_DIR/MainMenuRenderer.cs"
 MENU_RENDERER_METHODS=(
-  "public MainMenuRenderer(GraphicsDevice device)|infra"
-  "private static Texture2D BuildLogo(GraphicsDevice device)|content"
-  "public void Draw(SpriteBatch batch, int width, int height, MainMenuSession session)|infra"
-  "public void Dispose()|infra"
-  "private void Cell(|chrome"
-  "private void Print(|chrome"
-  "private void DrawIntro(|content"
-  "private void DrawMenu(|chrome"
-  "private void DrawSpecLine(|chrome"
+  # Пересобрано волной R6: класс стал статическим, Texture2D логотипа больше нет — маска
+  # рисуется Pset'ом, поэтому конструктор, BuildLogo, Dispose и помощники Cell/Print ушли.
+  # LayoutFor — форвардер к раскладке, отнесён к хрому по той же букве, что и целиком
+  # посчитанный MainMenuLayout.cs. DrawWordmark — логотип, это контент, а не виджет.
+  "public static MainMenuLayout Draw(|infra"
+  "public static MainMenuLayout LayoutFor(|chrome"
+  "private static void DrawIntro(|content"
+  "private static void DrawMenu(|chrome"
+  "private static void DrawWordmark(|content"
+  "private static void DrawSpecLine(|chrome"
 )
 
 # --- Роутеры ввода редакторов (волна 3c; списки — починка волны меню, см. шапку) ---
@@ -165,7 +183,7 @@ SPRITE_INPUT_METHODS=(
 MAP_INPUT_FILE="$SHELL_DIR/MapEditorInput.cs"
 MAP_INPUT_METHODS=(
   "public static void Update(|content"
-  "private static bool HandleMapButton(in EditorShell shell, MapEditorSession map, EditorButton button)|chrome"
+  "private static bool HandleMapButton(|chrome"
 )
 
 # --- EditorIcons.cs: код хром, но внутри лежит блок битовых масок — данные ---
@@ -180,25 +198,35 @@ ICONS_MASK_END_SIG='public static int IconCount => _masks.Length;'
 #           отдельная строка учёта, чтобы сумма по файлу сходилась без остатка
 RENDERER_FILE="$SHELL_DIR/SpriteEditorRenderer.cs"
 RENDERER_METHODS=(
-  "public SpriteEditorRenderer(GraphicsDevice device)|infra"
-  "public void Draw(|infra"
-  "public void Dispose()|infra"
-  "private static string SheetCoordinates(SpriteEditorSession editor)|chrome"
-  "private static string? StandingNotice(SpriteEditorSession editor) =>|chrome"
-  "private void UploadSheetIfChanged(SpriteEditorSession editor)|content"
-  "private void DrawButtons(SpriteBatch batch, in SpriteEditorLayout layout, SpriteEditorSession editor, HoverTarget? hover)|chrome"
-  # CurrentVariant переехал в EditorIcons (починка крэша кнопок: у лица кнопки один владелец,
-  # достижимый headless-тестом) — маркера в этом файле больше нет.
-  "private void DrawGroupMarker(SpriteBatch batch, in SpriteEditorLayout layout, Rectangle slot, Color color)|chrome"
-  "private void DrawFlyout(|chrome"
-  "private void DrawCanvas(SpriteBatch batch, in SpriteEditorLayout layout, SpriteEditorSession editor, double timeSeconds)|content"
-  "private static Rectangle PixelRect(in SpriteEditorLayout layout, int x, int y) =>|content"
-  "private void DrawSelection(SpriteBatch batch, in SpriteEditorLayout layout, SpriteEditorSession editor, double timeSeconds)|content"
-  "private void DrawStampGhost(SpriteBatch batch, in SpriteEditorLayout layout, SpriteEditorSession editor)|content"
-  "private void DrawSwatches(SpriteBatch batch, in SpriteEditorLayout layout, SpriteEditorSession editor)|chrome"
-  "private void DrawSheet(SpriteBatch batch, in SpriteEditorLayout layout, SpriteEditorSession editor, int scroll)|content"
-  "private void DrawSlider(SpriteBatch batch, in SpriteEditorLayout layout, SheetScroll scroll, HoverTarget? hover)|chrome"
-  "private void DrawTooltip(|chrome"
+  # ТАБЛИЦА ПЕРЕСОБРАНА ВОЛНОЙ R6 (2026-08-25). Она стала стара ещё в R2, когда класс перестал
+  # быть IDisposable: конструктор, Dispose и UploadSheetIfChanged (аплоуд Texture2D) исчезли
+  # вместе с текстурой — экран рисуется Pset'ом в консольный буфер. Прибор с тех пор падал
+  # exit 2 на первом же маркере и НИЧЕГО не считал по этому файлу. Пересбор — не перевыведение
+  # чисел: числа прибор считает сам по номерам строк, здесь я лишь заново отношу существующие
+  # методы к хрому/контенту по той же букве определения, что и раньше. Поимённо:
+  #   ушли:   конструктор, Dispose, UploadSheetIfChanged (аплоуд), PixelRect (свёрнут в DrawCanvas)
+  #   пришли: LayoutFor (форвардер к раскладке — хром, по той же букве, что и целиком
+  #           посчитанный SpriteEditorLayout.cs, и так же, как LayoutFor у меню),
+  #           TooltipText (текст подсказки — хром), DrawFlags (панель флагов — виджет, хром),
+  #           Outline (помощник рамки; зовётся ТОЛЬКО из DrawSheet — записан контентом).
+  #   маркеры обрезаны по "(": многострочные сигнатуры иначе не находятся вовсе — ровно этот
+  #           дефект держал прибор красным на MapEditorInput.HandleMapButton.
+  "public static SpriteEditorLayout LayoutFor(|chrome"
+  "public static SpriteEditorLayout Draw(|infra"
+  "private static string SheetCoordinates(|chrome"
+  "public static string? StandingNotice(|chrome"
+  "public static string TooltipText(|chrome"
+  "private static void DrawButtons(|chrome"
+  "private static void DrawGroupMarker(|chrome"
+  "private static void DrawFlyout(|chrome"
+  "private static void DrawCanvas(|content"
+  "private static void DrawSelection(|content"
+  "private static void DrawStampGhost(|content"
+  "private static void DrawSwatches(|chrome"
+  "private static void DrawFlags(|chrome"
+  "private static void DrawSheet(|content"
+  "private static void DrawSlider(|chrome"
+  "private static void Outline(|content"
 )
 
 # --- QuarpGame.cs: весь файл — игровой цикл оболочки (не предмет этого фальсификатора),
@@ -232,18 +260,33 @@ MAPUI_FILES_WHOLE=(
 )
 MAP_RENDERER_FILE="$SHELL_DIR/MapEditorRenderer.cs"
 MAP_RENDERER_METHODS=(
-  "public MapEditorRenderer(GraphicsDevice device)|infra"
-  "public void Draw(|infra"
-  "public void Dispose()|infra"
-  "private static string MapCoordinates(MapEditorView view) =>|chrome"
-  "private static string? StandingNotice(MapEditorSession map) =>|chrome"
-  "private void UploadSheetIfChanged(SpriteEditorSession sheet)|content"
-  "private void UploadMinimapIfChanged(MapEditorSession map)|content"
-  "private void DrawCanvas(SpriteBatch batch, in MapEditorLayout layout, MapEditorSession map, MapEditorView view)|content"
-  "private void DrawButtons(SpriteBatch batch, in MapEditorLayout layout, MapEditorSession map, HoverTarget? hover)|chrome"
-  "private void DrawPicker(SpriteBatch batch, in MapEditorLayout layout, MapEditorSession map)|content"
-  "private void DrawMinimap(SpriteBatch batch, in MapEditorLayout layout, MapEditorView view)|chrome"
-  "private void DrawTooltip(|chrome"
+  # ТАБЛИЦА ПЕРЕСОБРАНА ВОЛНОЙ R6 (2026-08-25) по той же причине, что и у спрайтового рендерера:
+  # класс стал статическим, Texture2D листа и мини-карты больше нет, а вместе с ними ушли
+  # конструктор, Dispose, UploadSheetIfChanged и UploadMinimapIfChanged. Классы наследованы
+  # поимённо: DrawPicker был контентом — его преемник DrawPalette тоже контент; DrawMinimap был
+  # хромом — остался хромом. MapCoordinates свёрнут в ConsoleChrome (позиционная строка теперь
+  # общая для экранов), маркера в этом файле нет.
+  # ПРАВИЛО ДЛЯ ПОМОЩНИКОВ, введено здесь и применено также в SpriteEditorRenderer: помощник с
+  # ОДНИМ вызывающим наследует его класс (BlockOccupied зовётся только из DrawMinimap — хром;
+  # DrawGrid только из DrawCanvas — контент), помощник, общий для хрома И контента, — инфра
+  # (Fill: сетка, вставка и ползунок; Outline: холст, вставка, палитра, мини-карта, ползунок).
+  # Иначе один и тот же примитив пришлось бы записать в обе колонки, и сумма перестала бы
+  # сходиться без остатка — та самая молчаливая неправда, ради которой прибор и остановлен.
+  "public static MapEditorLayout LayoutFor(|chrome"
+  "public static MapEditorLayout Draw(|infra"
+  "public static string? StandingNotice(|chrome"
+  "private static void DrawButtons(|chrome"
+  "private static void DrawCanvas(|content"
+  "private static void DrawGrid(|content"
+  "private static void DrawFloatingPaste(|content"
+  "private static void DrawPalette(|content"
+  "private static void DrawMinimap(|chrome"
+  "private static bool BlockOccupied(|chrome"
+  "private static void DrawSlider(|chrome"
+  "private static void BlitSprite(|content"
+  "private static void BlitSheetCell(|content"
+  "private static void Fill(|infra"
+  "private static void Outline(|infra"
 )
 
 fail_env=0

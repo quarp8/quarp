@@ -111,6 +111,19 @@ public static class SfxEditorInput
         // 16). Home is deliberately unbound here: it flips two graphics faces on the sprite and
         // map screens, and a third stop cannot be reached by a two-way toggle — the ring is what
         // Alt is for.
+        // F1..F5 jump straight to a named editor — TIC-80's own five keys for exactly this
+        // (REFERENCES-EDITORS §8 item 16). Read beside the tab strip's Alt+arrows and before
+        // everything else for the same reason those are: travel is a question about WHICH
+        // SCREEN, and it must not be answered by a screen that is already being left. The five
+        // routers carry the same four lines because Alt+Left/Right is routed the same way — one
+        // line per screen — and a key that worked on one editor and not on its neighbour is
+        // worse than a key that does not exist. <see cref="EditorIcons.EditorTabForNumber"/> is
+        // the single owner of "which number is which tab"; nothing here counts tabs.
+        if (EditorIcons.EditorTabForNumber(commands.EditorTabJump) is ShellMode named)
+        {
+            shell.Modes.SwitchEditorTab(named);
+            return;
+        }
         if (commands.EditorTabPrev || commands.EditorTabNext)
         {
             shell.Modes.CycleEditorTab(commands.EditorTabNext ? 1 : -1);
@@ -123,7 +136,7 @@ public static class SfxEditorInput
             return;
         }
 
-        Keys(session, view, commands);
+        Keys(shell, session, view, commands);
 
         Pointer(shell, session, view, layout, mouse, elapsedSeconds);
     }
@@ -134,8 +147,27 @@ public static class SfxEditorInput
     /// and it is the piano: <see cref="ShellCommands.SfxPianoKey"/> is already Ctrl- and
     /// Shift-guarded by the reader, so a chord and a note can never arrive on the same frame.
     /// </summary>
-    private static void Keys(SfxEditorSession session, SfxEditorView view, in ShellCommands commands)
+    private static void Keys(
+        in EditorShell shell, SfxEditorSession session, SfxEditorView view, in ShellCommands commands)
     {
+        // The clipboard chords, on TIC-80's own three keys for this screen (REFERENCES-EDITORS
+        // §5.1 "Ctrl+X/C/V | буфер"). The unit is the WHOLE SLOT the author is standing on —
+        // TIC-80's toClipboard(effect, sizeof(tic_sample)), "весь сэмпл целиком" — and the slot
+        // is the selection this screen already has (SfxEditorView.SelectedSlot). This router is
+        // the only piece of the sound screen that knows a clipboard exists; the session takes
+        // and returns a plain string and stays headless.
+        if (commands.EditorCopy)
+        {
+            shell.CopyText(session.CopySlotToText(view.SelectedSlot));
+        }
+        if (commands.EditorCut)
+        {
+            shell.CopyText(session.CutSlotToText(view.SelectedSlot));
+        }
+        if (commands.EditorPaste)
+        {
+            session.PasteSlotFromText(view.SelectedSlot, shell.PasteText());
+        }
         if (commands.EditorUndo)
         {
             session.Undo();

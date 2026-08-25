@@ -55,15 +55,17 @@ public enum MapEditorOverlay
 /// shell and never touches the machine's clipboard — and that is the whole point of it existing
 /// rather than three fields on the view.
 ///
-/// <para><b>Why not the system clipboard yet.</b> TIC-80 puts the block into the operating
-/// system's clipboard as a hex string with a two-byte <c>[w][h]</c> header
-/// (REFERENCES-EDITORS §3.1, <c>copySelectionToClipboard</c>), which is what lets an author
-/// paste a piece of map into a forum post. That is a decision with a format in it, and it has
-/// to be taken once for the sprite editor and the map editor together (§8 item 2) — not
-/// smuggled in behind a map wave. Until it is taken, this seam is where it lands: an
-/// implementation that reads and writes the OS clipboard replaces the one below, the view is
-/// handed it in its constructor, and not one caller of <see cref="MapEditorPaint.CopySelection"/>
-/// or <see cref="MapEditorPaint.PasteAt"/> changes.</para>
+/// <para><b>And what happened to the system clipboard, now that the question is settled.</b>
+/// It did <em>not</em> replace this interface, and the wave that wired it up says why. The
+/// format decision (§8 item 2, taken for all four banks at once in
+/// <see cref="ClipboardFormat"/> and written down in docs/CLIPBOARD-FORMAT.md) makes the
+/// machine's clipboard a <b>string</b>, and a string is not what a floating paste needs: the
+/// renderer draws the ghost under the cursor from <see cref="Width"/>, <see cref="Height"/> and
+/// <see cref="Tiles"/>, frame after frame, and re-parsing hex sixty times a second to answer
+/// "what is in hand" would be both slower and a second owner of the same fact. So the two live
+/// side by side and <see cref="MapEditorPaint.CopySelectionToText"/> fills both in one breath:
+/// this one is what is in hand, the machine's is how it leaves the process. Only the input
+/// router — layer 4, like the device — ever touches the second one.</para>
 /// </summary>
 public interface IMapClipboard
 {
@@ -142,8 +144,11 @@ public sealed class MapMemoryClipboard : IMapClipboard
 public sealed class MapEditorView
 {
     /// <summary>
-    /// The screen opens with the internal clipboard. The overload below is the seam the system
-    /// clipboard will arrive through (see <see cref="IMapClipboard"/>).
+    /// The screen opens with the internal clipboard — which is still the right default now that
+    /// the machine's clipboard exists, because the machine's is a <em>string</em> and reaches
+    /// this screen through <see cref="MapEditorPaint.PasteText"/> rather than through a
+    /// constructor (see <see cref="IMapClipboard"/> for the argument). The overload below stays
+    /// for the tests that want to watch what is in hand.
     /// </summary>
     public MapEditorView()
         : this(new MapMemoryClipboard())
@@ -756,6 +761,96 @@ public static class MapEditorPaint
     }
 
     /// <summary>
+    /// Ctrl over the bucket — <b>replace this tile everywhere</b> (REFERENCES-EDITORS §8 item 6).
+    /// The half of the tool that decides <em>where</em> "everywhere" is, because that answer is
+    /// the marked rectangle and the mark lives on the view: TIC-80's <c>replaceTile</c> works
+    /// «по всей карте/выделению» (§3.1), so a marked rectangle bounds it and an unmarked screen
+    /// means the whole 256x72 map. Same door and same guard as the fill's — the read-only map is
+    /// refused here once rather than at every call site — and the session owns everything else,
+    /// including that replacing a value with itself is not an undo step.
+    /// </summary>
+    public static void ReplaceTile(
+        MapEditorSession session, MapEditorView view, int cellX, int cellY, int tile)
+    {
+        ArgumentNullException.ThrowIfNull(session);
+        ArgumentNullException.ThrowIfNull(view);
+        if (session.MapReadOnly)
+        {
+            session.ReportReadOnly("REPLACE");
+            return;
+        }
+        if (view.HasSelection)
+        {
+            session.ReplaceTile(
+                cellX, cellY, tile,
+                view.SelectionX, view.SelectionY, view.SelectionWidth, view.SelectionHeight);
+            return;
+        }
+        session.ReplaceTile(cellX, cellY, tile);
+    }
+
+    // ---- flip and rotate the marked block (REFERENCES-EDITORS §8 item 10) ----
+
+    /// <summary>
+    /// <c>F</c>: mirror the marked rectangle left↔right, one undo step. Reads the mark from the
+    /// view, which owns it, and writes through the session, which owns the bytes — exactly
+    /// <see cref="ClearSelection"/>'s shape, because both are "the thing on screen, transformed".
+    ///
+    /// <para>Nothing marked is <b>not</b> an error: it is a refusal in words on the message line
+    /// (the order's rule, and the one <c>Ctrl+C</c> already follows for the same situation). A
+    /// read-only map is refused the same way, since a transform writes.</para>
+    /// </summary>
+    /// <returns>True when the map changed hands; false when the verb was refused.</returns>
+    public static bool FlipSelectionHorizontal(MapEditorSession session, MapEditorView view) =>
+        TransformSelection(session, view, "FLIP", static (s, x, y, w, h) =>
+        {
+            s.FlipAreaHorizontal(x, y, w, h);
+            return true;
+        });
+
+    /// <summary><c>V</c>: mirror the marked rectangle top↔bottom. <see cref="FlipSelectionHorizontal"/>'s twin.</summary>
+    public static bool FlipSelectionVertical(MapEditorSession session, MapEditorView view) =>
+        TransformSelection(session, view, "FLIP", static (s, x, y, w, h) =>
+        {
+            s.FlipAreaVertical(x, y, w, h);
+            return true;
+        });
+
+    /// <summary>
+    /// <c>R</c>: rotate the marked rectangle 90° clockwise. A non-square mark is refused by the
+    /// session, which owns that rule and the sentence that explains it — see
+    /// <see cref="MapEditorSession.RotateAreaClockwise"/> for why refusing beats cropping or
+    /// growing the block.
+    /// </summary>
+    public static bool RotateSelectionClockwise(MapEditorSession session, MapEditorView view) =>
+        TransformSelection(session, view, "ROTATE", static (s, x, y, w, h) => s.RotateAreaClockwise(x, y, w, h));
+
+    /// <summary>
+    /// The one gate all three transforms pass: is there a rectangle, and may this map be written.
+    /// Written once rather than three times because "F did nothing and said nothing" is exactly
+    /// the bug three copies of a guard produce when one of them is edited.
+    /// </summary>
+    private static bool TransformSelection(
+        MapEditorSession session, MapEditorView view, string verb,
+        Func<MapEditorSession, int, int, int, int, bool> apply)
+    {
+        ArgumentNullException.ThrowIfNull(session);
+        ArgumentNullException.ThrowIfNull(view);
+        if (!view.HasSelection)
+        {
+            session.ReportNoSelection(verb);
+            return false;
+        }
+        if (session.MapReadOnly)
+        {
+            session.ReportReadOnly(verb);
+            return false;
+        }
+        return apply(
+            session, view.SelectionX, view.SelectionY, view.SelectionWidth, view.SelectionHeight);
+    }
+
+    /// <summary>
     /// The pencil carrying a block (wave 3e): the press stamps the whole
     /// <see cref="MapEditorSession.BlockWidth"/>x<see cref="MapEditorSession.BlockHeight"/>
     /// rectangle instead of one cell. Same door and same guard as <see cref="Begin(MapEditorSession, int, int)"/>,
@@ -923,5 +1018,78 @@ public static class MapEditorPaint
         }
         session.PasteBlock(cellX, cellY, clipboard.Width, clipboard.Height, clipboard.Tiles);
         return true;
+    }
+
+    // ---- the system clipboard's half: strings in, strings out (REFERENCES-EDITORS §8 item 2) ----
+
+    /// <summary>
+    /// <c>Ctrl+C</c> as the machine's clipboard sees it: the marked rectangle, encoded by
+    /// <see cref="ClipboardFormat"/>. The internal <see cref="IMapClipboard"/> is filled in the
+    /// same breath — deliberately, and not as a leftover. Two things read it that the text
+    /// cannot serve: the floating ghost the renderer draws under the cursor, and a paste that
+    /// happens after the author has copied something else in another program. Keeping both means
+    /// "what is in hand" survives a trip through a browser, which is the whole promise of the
+    /// system clipboard.
+    /// </summary>
+    /// <returns>The block's text, or the empty string when nothing is marked.</returns>
+    public static string CopySelectionToText(MapEditorSession session, MapEditorView view)
+    {
+        ArgumentNullException.ThrowIfNull(session);
+        ArgumentNullException.ThrowIfNull(view);
+        if (!view.HasSelection)
+        {
+            return session.CopyAreaToText(0, 0, 0, 0);      // one owner of the "nothing selected" sentence
+        }
+        CopySelection(session, view);
+        return session.CopyAreaToText(
+            view.SelectionX, view.SelectionY, view.SelectionWidth, view.SelectionHeight);
+    }
+
+    /// <summary>
+    /// <c>Ctrl+X</c> as text: copy first, then empty — TIC-80's own composition, and the copy is
+    /// what happens even when the emptying cannot (a read-only map). One undo step, because the
+    /// emptying is <see cref="ClearSelection"/>'s single one.
+    /// </summary>
+    public static string CutSelectionToText(MapEditorSession session, MapEditorView view)
+    {
+        string text = CopySelectionToText(session, view);
+        if (text.Length == 0)
+        {
+            return text;
+        }
+        if (session.MapReadOnly)
+        {
+            // The copy stood; only the emptying is refused, and the author is told which half
+            // did not happen instead of watching a Ctrl+X leave the level untouched in silence.
+            session.ReportReadOnly("CUT");
+            return text;
+        }
+        ClearSelection(session, view);
+        return text;
+    }
+
+    /// <summary>
+    /// <c>Ctrl+V</c> as text: decode, load the view's clipboard with what came back, and start
+    /// the float that the next paint press lands. A refusal (another bank's block, damaged text,
+    /// an empty clipboard) leaves the view's clipboard <b>untouched</b> and puts the sentence on
+    /// the session's message line — a failed paste must not throw away the block the author
+    /// already had in hand.
+    /// </summary>
+    /// <returns>True when a block is now floating.</returns>
+    public static bool PasteText(MapEditorSession session, MapEditorView view, string? text)
+    {
+        ArgumentNullException.ThrowIfNull(session);
+        ArgumentNullException.ThrowIfNull(view);
+        if (session.MapReadOnly)
+        {
+            session.ReportReadOnly("PASTE");
+            return false;
+        }
+        if (!session.TryDecodeMapText(text, out int width, out int height, out byte[] tiles))
+        {
+            return false;
+        }
+        view.Clipboard.Write(width, height, tiles);
+        return view.BeginPaste();
     }
 }

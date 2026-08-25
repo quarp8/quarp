@@ -14,7 +14,7 @@ public class ConsoleIconsTests
 {
     /// <summary>
     /// Every icon in the table, plotted and read back. This is the assertion the host path
-    /// never had: <see cref="EditorIconAtlas"/> writes into a <c>Texture2D</c> that no headless
+    /// never had: the host icon atlas (deleted in wave R6) wrote into a <c>Texture2D</c> that no headless
     /// runner can read, so "the icon on screen is the icon in the table" was, until now, a
     /// claim rather than a check.
     /// </summary>

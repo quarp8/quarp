@@ -6,9 +6,9 @@ namespace Quarp.Shell.Desktop;
 /// <summary>
 /// The pixels of the console-scale editor frame, drawn with the same core calls a cartridge
 /// makes — <c>RectFill</c>, <c>Rect</c>, <c>Print</c>, and <see cref="ConsoleIcons"/>'
-/// <c>Pset</c> loop for the 8x8 masks. The console twin of
-/// <see cref="EditorChromeRenderer"/>, and deliberately not a replacement for it: three screens
-/// still stand in the host frame (see <see cref="ConsoleChrome"/>'s type comment).
+/// <c>Pset</c> loop for the 8x8 masks. It was born as the console twin of a host-resolution
+/// painter; that painter died with the boot menu in wave R6, so this is now the only frame
+/// painter in the tree (see <see cref="ConsoleChrome"/>'s type comment).
 ///
 /// <para><b>It owns no device, so it is not a renderer in the layering sense</b> — the same
 /// move <see cref="LibraryRenderer"/> made in wave R1. Everything here writes into a
@@ -48,11 +48,11 @@ public static class ConsoleChromeRenderer
     public const byte Error = 10;
 
     /// <summary>
-    /// What colour a button's face is, in the same precedence order the host painter uses
-    /// (<see cref="EditorChromeRenderer.ButtonInk"/>): an unsaved save is warn yellow, a dead
-    /// undo/redo is dim, a stub is dim, an active button is bright, everything else is text ink.
-    /// Two copies of this ladder exist for exactly as long as two frames do, and this one
-    /// returns a palette slot instead of an unpacked colour.
+    /// What colour a button's face is, in precedence order: an unsaved save is warn yellow, a
+    /// dead undo/redo is dim, a stub is dim, an active button is bright, everything else is text
+    /// ink. There were two copies of this ladder for exactly as long as there were two frames;
+    /// wave R6 took the host one, and what is left is this one, which answers a palette slot
+    /// rather than an unpacked colour.
     /// </summary>
     public static byte ButtonInk(EditorButton id, in EditorButtonState state) =>
         id == EditorButton.Save && state.Dirty ? Warn
@@ -136,9 +136,27 @@ public static class ConsoleChromeRenderer
     /// The status line: the cursor's coordinates at the left, one number at the right. Both
     /// halves are the order's, and the number is right-aligned to the screen's edge so it
     /// stops jumping when it gains a digit.
+    ///
+    /// <para><b>Why the right half takes a colour and the left one does not.</b> TIC-80's
+    /// <c>drawStatus</c> paints the size readout red past the limit
+    /// (<c>code->status.color = codeLen > MAX_CODE ? tic_color_red : tic_color_white</c>,
+    /// REFERENCES-EDITORS §8 item 13) — that is the one thing on this line any screen has ever
+    /// wanted to say in a hue. The parameter is <b>optional and defaults to the colour this
+    /// painter always used</b>, which is the shape <see cref="DrawTooltipField"/>'s fallback and
+    /// <see cref="DrawButton"/>'s <c>text</c> already have: the four screens that have no opinion
+    /// say nothing and keep the picture they had, and the colour therefore still has one owner
+    /// per screen rather than five screens each inventing a palette. The one caller that does
+    /// pass something owns the choice in exactly one expression
+    /// (<see cref="CodeEditorRenderer.BudgetInk"/>), used by both of that screen's surfaces.</para>
+    ///
+    /// <para>The left half stays <see cref="Text"/> on purpose: "which line am I on" cannot be
+    /// wrong, so there is nothing for a colour to mean there, and a second optional parameter
+    /// would be an invitation to find one.</para>
     /// </summary>
+    /// <param name="numberColor">Ink for the right-hand readout; omit for the plain bright it has always been.</param>
     public static void DrawStatusText(
-        VirtualConsole console, in ConsoleChrome chrome, string coords, string number)
+        VirtualConsole console, in ConsoleChrome chrome, string coords, string number,
+        byte numberColor = Bright)
     {
         ArgumentNullException.ThrowIfNull(console);
         ArgumentNullException.ThrowIfNull(coords);
@@ -148,7 +166,7 @@ public static class ConsoleChromeRenderer
             number,
             chrome.ScreenWidth - ConsoleChrome.Margin - number.Length * SystemFont.CellWidth,
             chrome.StatusTextY,
-            Bright);
+            numberColor);
     }
 
     /// <summary>

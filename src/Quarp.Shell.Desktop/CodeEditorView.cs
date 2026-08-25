@@ -3,17 +3,19 @@ using System.Globalization;
 namespace Quarp.Shell.Desktop;
 
 /// <summary>
-/// Who holds cut text between a Ctrl+X and a Ctrl+V. An interface with exactly two verbs
-/// because this wave deliberately ships the <b>internal</b> buffer only: touching the system
-/// clipboard means SDL calls, a permission surface on some desktops, and a fact shared with
-/// every other program on the machine — all of which deserve their own wave (REFERENCES-EDITORS
-/// §8, item 2: "системный буфер обмена" is on the missing list for every editor at once, not
-/// for the code editor alone).
+/// Who holds cut text between a Ctrl+X and a Ctrl+V. An interface with exactly two verbs, and
+/// the seam that keeps the whole clipboard story out of layers 1 and 2: the session takes a
+/// string and gives a string back, and <em>who took it from the operating system</em> is not its
+/// business (REFERENCES-EDITORS §8 item 2 — "системный буфер обмена" — is a fact about the host,
+/// and the host lives in the wiring layer).
 ///
-/// <para>The seam is the point: when that wave lands, a <c>SystemTextClipboard</c> implementing
-/// these two methods is handed to <see cref="CodeEditorView"/>'s constructor and not one line of
-/// the router, the session or the renderer changes. Until then <see cref="InMemoryTextClipboard"/>
-/// is the one owner of "what was copied".</para>
+/// <para><b>Two implementations, and the seam is exactly why that costs nothing.</b>
+/// <see cref="InMemoryTextClipboard"/> is a string in this process — the default, and what every
+/// headless test gets. <see cref="SystemTextClipboard"/> is the machine's own clipboard through
+/// SDL2, constructed by the window and handed down through
+/// <see cref="ShellModeMachine"/> into this view's constructor; not one line of the router, the
+/// session or the renderer knows which of the two it is talking to. That is what lets the same
+/// Ctrl+C be a real system copy in the shell and a deterministic string in a test.</para>
 /// </summary>
 public interface ITextClipboard
 {
@@ -99,6 +101,107 @@ public sealed class CodeEditorView
 
     /// <summary>True while either footer field is up — the one question the router asks before letting a character reach the buffer.</summary>
     public bool FieldShown => FindShown || GoToShown;
+
+    /// <summary>
+    /// True while the chrome is off and the whole console is the page — ADR-029's own
+    /// mitigation for the tightest code screen in the niche ("полноэкранный режим без хрома
+    /// возвращает все 15 строк"), reached with F11 (<see cref="ShellCommands.CodeFullscreen"/>
+    /// carries the key argument).
+    ///
+    /// <para><b>Why the fact lives here and not in <see cref="CodeEditorSession"/>.</b> It is a
+    /// fact of the <em>view</em>, in the tree's own sense of the word: the buffer is the same
+    /// text whether the chrome is up or down, nothing on disk changes, and a headless test can
+    /// flip it without a screen existing. Putting it in the session would have made "how the
+    /// author likes to look at this file" part of the document — the same mistake
+    /// <see cref="FirstLine"/> would be if it lived there.</para>
+    ///
+    /// <para><b>Not the window's fullscreen.</b> Nothing here touches the host window; the
+    /// console is still 160x90 and still presented by <see cref="FramePlacement"/> at its whole
+    /// integer scale. What goes away is <see cref="ConsoleChrome"/> — the tab strip, the tool
+    /// column, the scrollbar, the message line and the status band — which is what buys the
+    /// four extra lines and the four extra columns.</para>
+    ///
+    /// <para><b>What the mode gives up, named rather than hidden.</b> This shell's law is that
+    /// every live action has a key path and a click path. Fullscreen suspends the mouse half by
+    /// construction: with no chrome there is no button to click, so inside the mode every
+    /// control is a key and the mode's own key is how the buttons come back. The references
+    /// answer it the same way — PICO-8's fullscreen view is a bare <c>TAB</c> with no on-screen
+    /// control at all — and the alternative, a button floated over the text, would spend the
+    /// pixels the mode exists to win back.</para>
+    /// </summary>
+    public bool Fullscreen { get; private set; }
+
+    /// <summary>
+    /// True while the author has asked, with Shift+F11, to see the status row inside fullscreen.
+    /// Reset every time fullscreen is left, so it can never quietly become the permanent state
+    /// the mode exists to get rid of.
+    /// </summary>
+    public bool StatusPeek { get; private set; }
+
+    /// <summary>
+    /// F11: chrome off, chrome on. Leaving takes the peek with it (see
+    /// <see cref="StatusPeek"/>); entering does <b>not</b> clear an open find or go-to field,
+    /// because the field survives as the fullscreen band's tenant and losing a half-typed search
+    /// term to a keystroke that was about screen space would be a plain data loss.
+    /// </summary>
+    public void ToggleFullscreen()
+    {
+        Fullscreen = !Fullscreen;
+        if (!Fullscreen)
+        {
+            StatusPeek = false;
+        }
+    }
+
+    /// <summary>
+    /// Esc's fullscreen rung. Returns true when it consumed the key, so the router can spend Esc
+    /// on the chrome before it spends it on leaving the screen: with no tab strip and no message
+    /// line on the surface, the exit prompt would have nowhere to be drawn and no verb to be
+    /// clicked, and an editor that asks an invisible question about unsaved text is the one
+    /// failure this rung exists to make impossible.
+    /// </summary>
+    public bool LeaveFullscreen()
+    {
+        if (!Fullscreen)
+        {
+            return false;
+        }
+        ToggleFullscreen();
+        return true;
+    }
+
+    /// <summary>Shift+F11: summon or dismiss the status row. A no-op outside fullscreen, where the chrome always carries one.</summary>
+    public void ToggleStatusPeek()
+    {
+        if (Fullscreen)
+        {
+            StatusPeek = !StatusPeek;
+        }
+    }
+
+    /// <summary>
+    /// Whether fullscreen is currently carrying its one bottom row, and <b>the whole rule for
+    /// when it is</b>: the band is a summoned tenant, never a standing fixture. It appears while
+    /// the author has peeked at it (Shift+F11), while a find or go-to field is up, and while the
+    /// buffer is over the byte budget — and at no other time, which is what keeps the default
+    /// page fifteen lines instead of fourteen. The exit question is not on this list because it
+    /// cannot happen here: <see cref="RequestClose"/> puts the chrome back before it raises one.
+    ///
+    /// <para><b>Whose behaviour this is: LIKO-12's.</b> Its code editor draws a permanent status
+    /// strip (<c>ce:drawLineNum</c>, <c>LINE y/n CHAR x/len</c>) and <em>replaces</em> it with
+    /// <c>ISRCH: &lt;текст&gt;</c> the moment incremental search is on (REFERENCES-EDITORS §4.2)
+    /// — one strip, whoever has called for it. We keep the tenancy and drop the default tenant,
+    /// because on a 90-row console the default tenant costs a line of code and LIKO-12's screen
+    /// is 128 rows tall. TIC-80's <c>drawStatus</c> is the other reading and it is permanent; it
+    /// is what our <em>windowed</em> chrome already does, so both readings are in the tree and
+    /// each is where it pays.</para>
+    /// </summary>
+    public bool StatusBandShown(CodeEditorSession session)
+    {
+        ArgumentNullException.ThrowIfNull(session);
+        return Fullscreen
+            && (StatusPeek || FieldShown || session.ByteCount > CodeEditorSession.MaxByteCount);
+    }
 
     /// <summary>True while the dirty-exit question is on the footer line; the shell then gives it the input.</summary>
     public bool ExitPromptShown { get; private set; }
@@ -332,6 +435,15 @@ public sealed class CodeEditorView
         }
         if (session.IsDirty)
         {
+            // The prompt is drawn on the chrome's message line and answered with three
+            // clickable verbs, neither of which exists while the chrome is off — so raising it
+            // brings the chrome back, unconditionally and in the one place that raises it. This
+            // path matters even though Esc leaves fullscreen first
+            // (<see cref="LeaveFullscreen"/>): the mode machine also raises this prompt from
+            // OUTSIDE the code screen, when the author tries to leave the editor with unsaved
+            // text on a tab they are not standing on.
+            Fullscreen = false;
+            StatusPeek = false;
             ExitPromptShown = true;
             return false;
         }

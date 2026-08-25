@@ -537,6 +537,10 @@ public class InputParityInstrumentTests : IDisposable
             [EditorButton.Undo] = "CTRL+Z",
             [EditorButton.Redo] = "CTRL+Y",
             [EditorButton.SizeToggle] = "TAB",
+            // The brush ladder's keys are TIC-80's minus and equals; the tooltip has to name at
+            // least one of them or the control is a mouse-only feature, which the parity law
+            // forbids (REFERENCES-EDITORS §2.1).
+            [EditorButton.BrushToggle] = "=",
             [EditorButton.LayerTab1] = "PGUP",
             [EditorButton.LayerTab2] = "PGUP",
             [EditorButton.LayerTab3] = "PGUP",

@@ -13,6 +13,17 @@ namespace Quarp.Shell.Desktop.Tests;
 /// blocking OS call nothing headless can drive); door 3 scaffolding a cart with the very
 /// template <c>quarp new</c> writes and landing in the editor, from which Esc lands the
 /// library's bar on the newborn.
+///
+/// <para><b>What wave R6 changed here, and what it did not.</b> The order for that wave said to
+/// re-pin the menu tests that pinned host pixels. None of them did — this file drives the
+/// <em>machine</em>, never a surface, which is why it could be written before the menu had a
+/// framebuffer at all, and why moving the screen onto the console did not touch a line of it.
+/// The host-shaped fact about the boot menu lived in one place only, <c>FramePlacementTests</c>,
+/// and it is re-pinned there with its own paragraph. What R6 <em>adds</em> here is the half of
+/// the stage-2.5 parity law the boot menu never had: it was keyboard-only for as long as it was
+/// host UI, because there was no grid to point at. Now there is, and
+/// <see cref="EveryDoorOpensByPointerExactlyAsItOpensByKey"/> walks all three doors both ways
+/// against the same machine.</para>
 /// </summary>
 public sealed class MenuModeTests : IDisposable
 {
@@ -191,6 +202,137 @@ public sealed class MenuModeTests : IDisposable
         Assert.Equal(ShellMode.Library, machine.Mode);
         Assert.Contains("still-missing", machine.LibraryMessage);
         Assert.Null(machine.Menu.Message);      // the menu's line was cleared on the way in
+    }
+
+    /// <summary>
+    /// <b>Input parity for the boot menu, both ways.</b> Every door is reachable by keyboard
+    /// alone (arrows, the 1-2-3 hotkeys, Z/Enter) and by pointer alone, and the two channels
+    /// differ exactly where a human's hands differ — how "which door" is computed, never in what
+    /// is called once it is.
+    ///
+    /// <para>The pointer half goes through the real hit test the renderer's own layout answers
+    /// (<see cref="MainMenuRenderer.LayoutFor"/> then <see cref="MainMenuLayout.HitRow"/>), and
+    /// through the same two-step rule the window applies: the first press moves the bar, a press
+    /// on the door that already has it walks through. That rule is four lines of
+    /// <c>QuarpGame.ClickMenu</c> and is mirrored below rather than driven, for the reason
+    /// <see cref="EditorButtonContractTests.RouteClick"/> already mirrors the editor's press
+    /// dispatch: <c>QuarpGame</c> needs a <c>GraphicsDevice</c> and cannot be constructed in this
+    /// process. Nothing about menu policy is duplicated — every verb the mirror calls is
+    /// <see cref="MainMenuSession"/>'s or <see cref="ShellModeMachine"/>'s own public method.</para>
+    ///
+    /// <para>Break recipe: delete the <c>index != SelectedIndex</c> arm from
+    /// <c>QuarpGame.ClickMenu</c> and the mirror below stops matching the window, which the
+    /// second half of this test catches as a door that opened on its first click. Delete the
+    /// gutter guard from <see cref="MainMenuLayout.HitRow"/> and the "between two doors" negative
+    /// control goes red.</para>
+    /// </summary>
+    [Fact]
+    public void EveryDoorOpensByPointerExactlyAsItOpensByKey()
+    {
+        var screen = new ShellScreen();
+        MainMenuLayout layout = MainMenuRenderer.LayoutFor(screen);
+
+        for (int door = 0; door < MainMenuSession.ItemCount; door++)
+        {
+            // --- keyboard alone: arrows from the top, then "go".
+            var byKey = Machine();
+            byKey.Menu.SkipIntro();
+            for (int i = 0; i < door; i++)
+            {
+                byKey.Menu.MoveSelection(+1);
+            }
+
+            // --- pointer alone: two presses in the middle of that door's bar.
+            // The bar starts on door 0, and a press on the door that ALREADY has the bar is the
+            // opening press, not the moving one (that is the whole two-step rule). So for door 0
+            // the bar is first parked on its neighbour: otherwise this loop would be asserting
+            // that the rule does not hold for the one door it starts on. The neighbour case is
+            // pinned on its own below, in APressOnTheDoorThatAlreadyHasTheBarOpensItAtOnce.
+            var byMouse = Machine();
+            byMouse.Menu.SkipIntro();
+            if (byMouse.Menu.SelectedIndex == door)
+            {
+                byMouse.Menu.MoveSelection(door == 0 ? +1 : -1);
+                Assert.NotEqual(door, byMouse.Menu.SelectedIndex);
+            }
+            Microsoft.Xna.Framework.Rectangle bar = layout.Row(door);
+            int x = bar.X + bar.Width / 2;
+            int y = bar.Y + MainMenuLayout.RowHeight / 2;
+            Assert.Equal(door, layout.HitRow(x, y));
+            bool opened = ClickMirror(byMouse.Menu, layout, x, y);
+            Assert.False(opened);                       // the first press only moves the bar
+            opened = ClickMirror(byMouse.Menu, layout, x, y);
+            Assert.True(opened);                        // the second press on the same door goes
+
+            Assert.Equal(byKey.Menu.Selected, byMouse.Menu.Selected);
+            Assert.Equal((MenuItem)door, byMouse.Menu.Selected);
+        }
+
+        // The negative controls: the gutter between two doors, and the reserved lines below them.
+        var machine = Machine();
+        machine.Menu.SkipIntro();
+        machine.Menu.MoveSelection(+2);
+        Microsoft.Xna.Framework.Rectangle first = layout.Row(0);
+        Assert.False(ClickMirror(machine.Menu, layout, first.X + 10, first.Bottom));
+        Assert.False(ClickMirror(machine.Menu, layout, first.X + 10, layout.MessageY));
+        Assert.False(ClickMirror(machine.Menu, layout, 0, first.Y));
+        Assert.Equal(MenuItem.CreateGame, machine.Menu.Selected);   // nothing moved the bar
+    }
+
+    /// <summary>
+    /// The other half of the two-step, stated on its own so the rule cannot be read out of the
+    /// loop above by accident: a press on the door that ALREADY carries the bar walks through it
+    /// on that very press. The menu is born with the bar on door 0, so a pointer that arrives
+    /// there and clicks once opens the library — one press, not two. This is
+    /// <c>QuarpGame.ClickMenu</c>'s last line, and it is the same rule
+    /// <c>QuarpGame.ClickLibrary</c> applies to a row that already has the bar.
+    ///
+    /// <para>Break recipe: make <c>ClickMenu</c> demand a second press even on the selected door
+    /// (an "armed" flag, say) and this goes red while the loop above stays green — which is
+    /// exactly why the two halves are written apart.</para>
+    /// </summary>
+    [Fact]
+    public void APressOnTheDoorThatAlreadyHasTheBarOpensItAtOnce()
+    {
+        var screen = new ShellScreen();
+        MainMenuLayout layout = MainMenuRenderer.LayoutFor(screen);
+
+        var machine = Machine();
+        machine.Menu.SkipIntro();
+        Assert.Equal(0, machine.Menu.SelectedIndex);         // born on door 0
+
+        Microsoft.Xna.Framework.Rectangle bar = layout.Row(0);
+        int x = bar.X + bar.Width / 2;
+        int y = bar.Y + MainMenuLayout.RowHeight / 2;
+
+        Assert.True(ClickMirror(machine.Menu, layout, x, y));
+        Assert.Equal(MenuItem.Library, machine.Menu.Selected);
+
+        // The negative control: the same press one door down does NOT open, it only moves the
+        // bar — so the True above is the rule speaking and not the mirror answering True always.
+        Microsoft.Xna.Framework.Rectangle next = layout.Row(1);
+        Assert.False(ClickMirror(machine.Menu, layout, next.X + next.Width / 2,
+            next.Y + MainMenuLayout.RowHeight / 2));
+        Assert.Equal(1, machine.Menu.SelectedIndex);
+    }
+
+    /// <summary>
+    /// The four lines of <c>QuarpGame.ClickMenu</c> that survive after subtracting the window:
+    /// window-to-console is <see cref="FramePlacement"/>'s and is tested there, so what is left
+    /// is the two-step. Returns true when this press would have opened the door.
+    /// </summary>
+    private static bool ClickMirror(MainMenuSession menu, in MainMenuLayout layout, int x, int y)
+    {
+        if (layout.HitRow(x, y) is not int index)
+        {
+            return false;
+        }
+        if (index != menu.SelectedIndex)
+        {
+            menu.MoveSelection(index - menu.SelectedIndex);
+            return false;
+        }
+        return true;
     }
 
     [Fact]

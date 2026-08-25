@@ -387,7 +387,7 @@ public class CodeEditorScreenTests : IDisposable
         }
         // The sound screen was the last host-frame tenant and it moved in wave R5, so it belongs
         // in the agreement now rather than opposite it. That the console frame is a different
-        // frame from the host one is pinned once, where it belongs: EditorChromeTests.
+        // frame from the host one is pinned once, where it belongs: ConsoleChromeTests.
         var sound = SfxEditorLayout.Compute(ConsoleWidth, ConsoleHeight);
         Assert.Equal(sound.ButtonRect(EditorButton.ExitTab), code.ButtonRect(EditorButton.ExitTab));
     }
@@ -677,7 +677,7 @@ public class CodeEditorScreenTests : IDisposable
         Assert.True(code.IsDirty);
 
         // The mouse path: the sprites tab, then the code tab again. Both screens place the six
-        // tabs on the same pixels (EditorChromeTests pins that), so one rectangle serves both.
+        // tabs on the same pixels (ConsoleChromeTests pins that), so one rectangle serves both.
         harness.ClickButton(EditorButton.SpritesTab);
         Assert.Equal(ShellMode.Editor, harness.Modes.Mode);
         harness.ClickButton(EditorButton.CodeTab);

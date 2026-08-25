@@ -80,6 +80,7 @@ quarp replay record|play  # запись и воспроизведение ре�
 - [RESEARCH.md](docs/RESEARCH.md) — сводка исследования ниши (август 2026), на которую опираются решения
 - [REPLAY-FORMAT.md](docs/REPLAY-FORMAT.md) — формат реплея `.qrpr` и то, что сравнивает CI между архитектурами
 - [AUDIO-FORMAT.md](docs/AUDIO-FORMAT.md) — формат банков `sfx.bin`/`music.bin` и авторский текст `sfx.txt`/`music.txt`
+- [CLIPBOARD-FORMAT.md](docs/CLIPBOARD-FORMAT.md) — hex-текст буфера обмена: спрайты, карта, SFX, музыка одной строкой
 - [DEBUGGING.md](docs/DEBUGGING.md) — отладка картриджа: точки останова прямо в коде игры по F5, остановка на нужном тике и перемотка к багу
 
 ## Чем проект НЕ является

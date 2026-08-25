@@ -287,9 +287,12 @@ public class MapEditorToolsTests : IDisposable
     /// <para>Break recipe: drop the <c>_map[offset - 1] == target</c> guard from any one
     /// direction of <c>MapEditorSession.FloodFill</c> — the fill then overwrites the wall and
     /// pours into the far side, and both the wall assertion and the far-side one go red.
-    /// Replace the flood with "set every cell holding <c>target</c>" (TIC-80's <c>Ctrl</c>
-    /// variant, which we did not build) and the far-side assertion alone goes red, which is
-    /// exactly the difference between the two operations.</para>
+    /// Replace the flood with "set every cell holding <c>target</c>" and the far-side assertion
+    /// alone goes red, which is exactly the difference between the two operations — and that
+    /// other operation now exists as the tool's second half, <c>MapEditorSession.ReplaceTile</c>
+    /// under Ctrl (REFERENCES-EDITORS §8 item 6). The two are pinned against each other in
+    /// <c>MapEditorTransformsTests.ReplaceCrossesEveryWallThatTheFloodFillStopsAt</c>, on this
+    /// very fixture.</para>
     /// </summary>
     [Fact]
     public void FillChangesTheConnectedRunAndStopsAtEveryOtherValue()

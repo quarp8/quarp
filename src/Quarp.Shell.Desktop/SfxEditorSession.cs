@@ -168,6 +168,14 @@ public sealed class SfxEditorSession
     /// <summary>Why the last save failed, or null. A save the author believes happened but did not is data loss, so it has to be sayable.</summary>
     public string? SaveError { get; private set; }
 
+    /// <summary>
+    /// What the last clipboard verb refused to do, or null — the sentence
+    /// <see cref="SfxEditorRenderer.StandingNotice"/> puts on the message line, the same road
+    /// <see cref="SaveError"/> travels. Cleared by every clipboard verb on the way in, so it
+    /// always describes the last Ctrl+C/X/V and never a stale one.
+    /// </summary>
+    public string? ClipboardNotice { get; private set; }
+
     // ---- reads: every one of them through the format's owner ----
 
     /// <summary>Console ticks per step of a slot, 1-255; 0 exactly when the slot is empty.</summary>
@@ -433,6 +441,127 @@ public sealed class SfxEditorSession
 
     /// <summary>Empties a slot back to the zero record, header and all 32 steps — <see cref="SetLength"/> with 0, named for what it is.</summary>
     public void ClearSlot(int slot) => SetLength(slot, 0);
+
+    // ---- the clipboard, as text (REFERENCES-EDITORS §8 item 2) ----
+
+    /// <summary>
+    /// <c>Ctrl+C</c>: <b>one whole slot</b> as a line of <see cref="ClipboardFormat"/> text —
+    /// the four header bytes and all 32 step words, exactly the unit TIC-80 copies
+    /// (<c>toClipboard(effect, sizeof(tic_sample), true)</c>, "весь сэмпл целиком",
+    /// REFERENCES-EDITORS §5.1). Which slot is not a new selection model: it is the slot the
+    /// author is standing on, which <see cref="SfxEditorView.SelectedSlot"/> has owned since the
+    /// screen was built, and the router hands it in.
+    ///
+    /// <para><b>The header travels with the notes</b> and that is the point of copying a slot
+    /// rather than a run of steps: a sound pasted without its speed and its loop is not the sound
+    /// that was copied, it is a sound at somebody else's tempo. Copying is legal on a read-only
+    /// bank — reading takes nothing from the text source that owns it.</para>
+    /// </summary>
+    public string CopySlotToText(int slot)
+    {
+        ValidateSlot(slot);
+        ClipboardNotice = null;
+        var record = new byte[ClipboardFormat.SfxRecordSize];
+        ReadSlotRecord(slot, record);
+        return ClipboardFormat.EncodeSfx(record);
+    }
+
+    /// <summary>
+    /// <c>Ctrl+X</c>: the same text, then the slot emptied to the zero record —
+    /// <see cref="ClearSlot"/>, so it is one undo step and the emptying goes through the one
+    /// door that keeps the bank canonical. A read-only bank copies and refuses the emptying,
+    /// which is the door <see cref="RequireWritableBank"/> already keeps; the refusal is reported
+    /// rather than thrown, because a Ctrl+X must never reach a renderer as an exception.
+    /// </summary>
+    public string CutSlotToText(int slot)
+    {
+        string text = CopySlotToText(slot);
+        if (BankReadOnly)
+        {
+            ClipboardNotice = $"CUT: {SfxSourceFileName.ToUpperInvariant()} OWNS THIS BANK";
+            return text;
+        }
+        ClearSlot(slot);
+        return text;
+    }
+
+    /// <summary>
+    /// <c>Ctrl+V</c>: a slot block replaces the slot the author is standing on, as <b>one</b>
+    /// undo step. Any slot may receive any slot — that is the whole of the cross-slot and
+    /// cross-cartridge exchange §8 item 2 asks for, and it is the one place in this editor where
+    /// a sound can move.
+    ///
+    /// <para><b>The bank stays canonical, and this is where it is proved rather than hoped.</b>
+    /// Clipboard text comes from outside the process, so a pasted record could carry a wave of 6,
+    /// a rest that is not the zero word, or a loop outside its length — every one of which
+    /// AUDIO-FORMAT §5 forbids and every one of which would be handed straight to a live
+    /// <c>Apu</c> for the preview. So the record is written into a <em>copy</em> of the bank and
+    /// that copy is put through <see cref="AudioFormat.ValidateSfxPayload"/> — the very validator
+    /// the loader uses on a file — before a single live byte moves. The one owner of the format
+    /// decides, this class does not re-derive the rules, and an illegal block is refused with a
+    /// sentence instead of quietly making a bank that will not load back.</para>
+    /// </summary>
+    /// <returns>True when the slot was written; false with <see cref="ClipboardNotice"/> set otherwise.</returns>
+    public bool PasteSlotFromText(int slot, string? text)
+    {
+        ValidateSlot(slot);
+        ClipboardNotice = null;
+        if (BankReadOnly)
+        {
+            ClipboardNotice = $"PASTE: {SfxSourceFileName.ToUpperInvariant()} OWNS THIS BANK";
+            return false;
+        }
+        if (!ClipboardFormat.TryDecode(text, ClipboardKind.Sfx, out ClipboardBlock? block, out string reason))
+        {
+            ClipboardNotice = $"PASTE: {reason}";
+            return false;
+        }
+        var candidate = (byte[])_bank.Clone();
+        WriteSlotRecord(candidate, slot, block!.Bytes);
+        try
+        {
+            AudioFormat.ValidateSfxPayload(candidate, SfxFileName);
+        }
+        catch (CartLoadException)
+        {
+            ClipboardNotice = "PASTE: SLOT DATA IS NOT LEGAL";
+            return false;
+        }
+        bool own = OpenOwnStroke();
+        for (int i = 0; i < ClipboardFormat.SfxRecordSize; i++)
+        {
+            WriteByte(RecordByteOffset(slot, i), candidate[RecordByteOffset(slot, i)]);
+        }
+        CloseOwnStroke(own);
+        return true;
+    }
+
+    /// <summary>
+    /// Where byte <paramref name="index"/> of a slot record lives in the payload: the four
+    /// header bytes first, then the slot's 64 step bytes, which the layout keeps contiguous
+    /// (AUDIO-FORMAT §2 — the step table is 32 words per slot, in slot order). Named once here
+    /// so the copy, the paste and the validation copy cannot disagree about it.
+    /// </summary>
+    private static int RecordByteOffset(int slot, int index) =>
+        index < AudioFormat.SfxSlotHeaderSize
+            ? AudioFormat.SlotHeaderOffset(slot) + index
+            : AudioFormat.StepOffset(slot, 0) + index - AudioFormat.SfxSlotHeaderSize;
+
+    private void ReadSlotRecord(int slot, Span<byte> record)
+    {
+        for (int i = 0; i < ClipboardFormat.SfxRecordSize; i++)
+        {
+            record[i] = _bank[RecordByteOffset(slot, i)];
+        }
+    }
+
+    private static void WriteSlotRecord(Span<byte> bank, int slot, ReadOnlySpan<byte> record)
+    {
+        for (int i = 0; i < ClipboardFormat.SfxRecordSize; i++)
+        {
+            bank[RecordByteOffset(slot, i)] = record[i];
+        }
+    }
 
     // ---- undo / redo / save ----
 

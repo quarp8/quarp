@@ -465,6 +465,110 @@ public class SfxEditorTests : IDisposable
         Assert.Equal(0, harness.View.CursorStep);
     }
 
+    /// <summary>
+    /// <b>All twenty-five keys, by name, one row per key.</b> REFERENCES-EDITORS §8 item 17 calls
+    /// the layout a de-facto standard shared by TIC-80 and PICO-8 and says in as many words that
+    /// drifting from it is not allowed — so the layout is not a thing to spot-check. The test
+    /// above strikes four of the twenty-five (<c>z s x</c> and <c>q</c>); with only those four
+    /// pinned, <c>g</c> and <c>b</c> could swap places in the middle of the lower row, or
+    /// <c>6</c> and <c>y</c> in the upper, and every assertion in this file would stay green.
+    /// This one nails each key to its semitone, so <b>any</b> permutation of either row turns at
+    /// least two rows red and names both of them.
+    ///
+    /// <para>The two rows, spelled out: <c>z s x d c v g b h n j m</c> is C..B of the current
+    /// octave (semitones 0-11) and <c>q 2 w 3 e r 5 t 6 y 7 u i</c> is C..C an octave above
+    /// (semitones 12-24). The gaps are the black keys that are not there —
+    /// <c>4</c> between <c>3</c> and <c>5</c>, <c>8</c> between <c>7</c> and <c>u</c> — and
+    /// <see cref="NoKeyOffThePianoRowsEverWritesANote"/> is where they are held open.</para>
+    ///
+    /// <para>Driven end to end through the production <see cref="ShellCommandReader"/> and
+    /// <see cref="SfxEditorInput"/>, so what is pinned is the whole road from a key edge to a
+    /// semitone in the bank — not the reader's private array, which a router could still read
+    /// with an off-by-one.</para>
+    ///
+    /// <para>Break recipe: swap any two entries of <c>ShellCommandReader.PianoRows</c> — say
+    /// <c>Keys.G</c> and <c>Keys.B</c>, the pair a human eye slides over — and exactly those two
+    /// rows go red with the semitones they were given. Add a key anywhere in the array and every
+    /// row after it goes red.</para>
+    /// </summary>
+    [Theory]
+    // The lower row: z s x d c v g b h n j m — C, C#, D, D#, E, F, F#, G, G#, A, A#, B.
+    [InlineData(Keys.Z, 0)]
+    [InlineData(Keys.S, 1)]
+    [InlineData(Keys.X, 2)]
+    [InlineData(Keys.D, 3)]
+    [InlineData(Keys.C, 4)]
+    [InlineData(Keys.V, 5)]
+    [InlineData(Keys.G, 6)]
+    [InlineData(Keys.B, 7)]
+    [InlineData(Keys.H, 8)]
+    [InlineData(Keys.N, 9)]
+    [InlineData(Keys.J, 10)]
+    [InlineData(Keys.M, 11)]
+    // The upper row: q 2 w 3 e r 5 t 6 y 7 u i — the same twelve an octave up, plus the C on top.
+    [InlineData(Keys.Q, 12)]
+    [InlineData(Keys.D2, 13)]
+    [InlineData(Keys.W, 14)]
+    [InlineData(Keys.D3, 15)]
+    [InlineData(Keys.E, 16)]
+    [InlineData(Keys.R, 17)]
+    [InlineData(Keys.D5, 18)]
+    [InlineData(Keys.T, 19)]
+    [InlineData(Keys.D6, 20)]
+    [InlineData(Keys.Y, 21)]
+    [InlineData(Keys.D7, 22)]
+    [InlineData(Keys.U, 23)]
+    [InlineData(Keys.I, 24)]
+    public void EveryOneOfTheTwentyFivePianoKeysMeansItsOwnSemitone(Keys key, int semitone)
+    {
+        Harness harness = OpenSoundEditor(out _);
+        int root = harness.View.Octave * SfxEditorLayout.OctaveRows;
+
+        harness.Tap(key);
+
+        Assert.Equal(root + semitone, harness.Session.StepNote(0, 0));
+        Assert.Equal(1, harness.View.CursorStep);
+        // And the reader's own half of the road, pinned separately so a router that wrote the
+        // right note off the wrong index cannot hide behind it: the key's 1-based number is its
+        // semitone plus one, straight out of the production edge detector.
+        var reader = new ShellCommandReader();
+        reader.Read(new KeyboardState(NoKeys));      // one quiet frame, so the next one is an edge
+        Assert.Equal(semitone + 1, reader.Read(new KeyboardState(new[] { key })).SfxPianoKey);
+    }
+
+    /// <summary>
+    /// The negative control for the row above, and the half a table of twenty-five cannot state:
+    /// <b>the keys that are NOT on the piano must stay silent</b>. Two rows of a keyboard have
+    /// gaps in them precisely because a piano does — <c>4</c>, <c>8</c>, <c>9</c> and <c>0</c>
+    /// are the missing black keys of the upper row, and <c>a k l o p</c> sit beside the two rows
+    /// without belonging to either. A reader that "helpfully" filled the gaps would move every
+    /// key after the gap by one semitone; the table above would catch that, and this catches the
+    /// subtler version where the gaps are filled at the <em>ends</em> instead.
+    ///
+    /// <para>Break recipe: append <c>Keys.O</c> to <c>ShellCommandReader.PianoRows</c> and this
+    /// goes red on the <c>o</c> row while the whole twenty-five-row table stays green.</para>
+    /// </summary>
+    [Theory]
+    [InlineData(Keys.A)]
+    [InlineData(Keys.K)]
+    [InlineData(Keys.L)]
+    [InlineData(Keys.O)]
+    [InlineData(Keys.P)]
+    [InlineData(Keys.D1)]
+    [InlineData(Keys.D4)]
+    [InlineData(Keys.D8)]
+    [InlineData(Keys.D9)]
+    [InlineData(Keys.D0)]
+    public void NoKeyOffThePianoRowsEverWritesANote(Keys key)
+    {
+        Harness harness = OpenSoundEditor(out _);
+
+        harness.Tap(key);
+
+        Assert.True(harness.Session.SlotIsEmpty(0), $"{key} wrote a note it has no business writing");
+        Assert.Equal(0, harness.View.CursorStep);
+    }
+
     // ==================================================================================
     // 4. Speed, length and the loop — changed, and surviving a save.
     // ==================================================================================
@@ -843,7 +947,7 @@ public class SfxEditorTests : IDisposable
 
         // The code screen moved in wave R4, so it agrees with this one rather than differing
         // from it — the host frame has no editor tenant left at all. That the two frames are
-        // different frames is pinned once, where it belongs: EditorChromeTests.
+        // different frames is pinned once, where it belongs: ConsoleChromeTests.
         var code = CodeEditorLayout.Compute(ConsoleWidth, ConsoleHeight);
         Assert.Equal(code.ButtonRect(EditorButton.ExitTab), sfx.ButtonRect(EditorButton.ExitTab));
     }

@@ -70,6 +70,13 @@ public sealed class EditorButtonFaceTests : IDisposable
                 _session.SelectTransform((TransformVariant)transform);
                 AssertEveryButtonWearsOneFace(_session);
             }
+            // Every step of the brush ladder, for the same reason as the sizes above: the brush
+            // toggle is text-faced, and its face is the one that changes here.
+            for (int brush = 0; brush < SpriteEditorSession.BrushSizeCount; brush++)
+            {
+                _session.SelectBrushSize(SpriteEditorSession.BrushSizeAt(brush));
+                AssertEveryButtonWearsOneFace(_session);
+            }
         }
     }
 
@@ -106,9 +113,12 @@ public sealed class EditorButtonFaceTests : IDisposable
             }
             for (int variant = 0; variant < EditorIcons.GroupVariantCount(place.Id); variant++)
             {
-                if (place.Id == EditorButton.SizeToggle)
+                // Text or glyph, exactly one — the same law AssertEveryButtonWearsOneFace pins
+                // for the slots themselves, asked of their list entries. VariantText is the one
+                // owner of which it is, so the brush list joined this sweep by existing.
+                if (EditorIcons.VariantText(place.Id, variant) is string label)
                 {
-                    Assert.False(string.IsNullOrEmpty(EditorIcons.SizeLabel(EditorIcons.SizeVariantCells(variant))));
+                    Assert.False(string.IsNullOrEmpty(label));
                 }
                 else
                 {

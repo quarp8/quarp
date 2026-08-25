@@ -3,25 +3,43 @@ using Quarp.Core;
 
 namespace Quarp.Shell.Desktop;
 
+/// <summary>One placed icon-button: identity plus rectangle. Enabled-ness is not stored — <see cref="EditorIcons.IsStub"/> owns it.</summary>
+public readonly struct EditorButtonPlace
+{
+    public EditorButton Id { get; init; }
+
+    public Rectangle Rect { get; init; }
+}
+
+/// <summary>The three clickable verbs of the dirty-exit prompt line — mouse parity for Z / X / Esc.</summary>
+public enum EditorPromptVerb
+{
+    SaveAndExit,
+    Discard,
+    Stay,
+}
+
 /// <summary>
 /// The frame a tool screen stands in when it is drawn <b>on the console itself</b> — 160x90
 /// pixels, 40 columns by 15 rows of the 4x6 system font (SPEC-8 §1). Wave R2's new road, laid
 /// beside the old one rather than over it.
 ///
-/// <para><b>Why a second chrome and not a rewrite of the first.</b> <see cref="EditorChrome"/>
-/// measures in window pixels through <see cref="PixelFontMetrics.UiScale"/>, and four screens
-/// stand in it — sprites, tilemap, code, sound. ADR-029 moves all four onto the console, but it
-/// cannot move them in one commit: rewriting <see cref="EditorChrome"/> in place would break
-/// the three that have not moved yet, all on the same afternoon. So this type is the console's
-/// frame, the sprite editor is its first and (this wave) only inhabitant, and
-/// <see cref="EditorChrome"/> keeps the other three exactly as they were. The old frame dies
-/// when the last screen leaves it, which is a later wave's work and not a promise this file
-/// makes.</para>
+/// <para><b>It was the second chrome; as of wave R6 it is the only one.</b> This type was born
+/// beside a host frame that measured in window pixels through a 320x180 text anchor, because
+/// ADR-029 could not move five screens in one afternoon. The last of them moved in R5 and the
+/// boot menu — the host font path's last tenant of any kind — in R6, so <c>EditorChrome</c>,
+/// <c>EditorChromeRenderer</c>, <c>EditorIconAtlas</c>, <c>PixelFontAtlas</c> and
+/// <c>PixelFontMetrics</c> left the tree. Three facts that lived in the old frame because it
+/// was the older of the two came here rather than dying with it, and this is the whole list:
+/// <see cref="EditorButtonPlace"/>, <see cref="EditorPromptVerb"/> and
+/// <see cref="RightTabs"/>. Nothing was copied — <c>ButtonRect</c> and <c>TryButton</c> used to
+/// be forwarders from here into there and are now the implementations themselves, so the count
+/// of owners went down by the move and not up.</para>
 ///
-/// <para><b>What is NOT duplicated.</b> The order of the five editor tabs has one owner and
-/// keeps it: <see cref="EditorChrome.RightTabs"/>. This file reads that list; it does not
-/// restate it. The same discipline the sheet strip already lives under
-/// (<see cref="SheetStrip"/>) and the frame placement (<see cref="FramePlacement"/>).</para>
+/// <para><b>The tab order has one owner and it is now here.</b> <see cref="RightTabs"/> is that
+/// owner; every screen places its tabs by walking it, and no screen restates the order. The
+/// same discipline the sheet strip already lives under (<see cref="SheetStrip"/>) and the frame
+/// placement (<see cref="FramePlacement"/>).</para>
 ///
 /// <para><b>The vertical budget, in full, because on a 90-row screen every row is an
 /// argument.</b> Ten rows of top bar (a 10x10 button is an 8x8 icon plus a one-pixel frame on
@@ -65,10 +83,14 @@ public readonly struct ConsoleChrome
     /// <summary>Gap between a prompt verb and the next, in pixels — two character cells.</summary>
     private const int VerbGap = 2 * SystemFont.CellWidth;
 
-    // The prompt's texts, owned here and not shared with EditorChrome: the host frame's
-    // "UNSAVED CHANGES: Z SAVE+EXIT X DISCARD ESC STAY" is 47 characters, and the console's
-    // line is 39. Re-cutting it is the same move LibraryRenderer's footer hint made in wave R1,
-    // and for the same reason — the line is the screen's real width now.
+    // The prompt's texts. They were re-cut when this frame was built: the dead host frame's
+    // "UNSAVED CHANGES: Z SAVE+EXIT X DISCARD ESC STAY" was 47 characters and the console's line
+    // is 39. The same move LibraryRenderer's footer hint made in wave R1, and for the same
+    // reason — the line is the screen's real width now.
+
+    // The right-edge tab group in the owner's dictated order: from the right corner leftwards
+    // music, sounds, tilemaps, sprites, code. One list, so no two screens can present the tabs
+    // in different orders.
 
     /// <summary>The prompt's heading when nothing has failed yet.</summary>
     public const string PromptHeading = "UNSAVED.";
@@ -85,6 +107,22 @@ public readonly struct ConsoleChrome
     public const string PromptStayVerb = "ESC STAY";
 
     private static readonly string[] _promptVerbs = { PromptSaveVerb, PromptDiscardVerb, PromptStayVerb };
+
+    private static readonly EditorButton[] _rightTabs =
+    {
+        EditorButton.MusicTab, EditorButton.SoundTab, EditorButton.TilemapTab,
+        EditorButton.SpritesTab, EditorButton.CodeTab,
+    };
+
+    /// <summary>
+    /// The right-edge tab group, index 0 hugging the right corner — <b>the one owner of the tab
+    /// order</b>. It was published by the host frame in wave R2 because a second frame existed
+    /// then; wave R6 killed that frame and the list moved here with its reader, exactly as that
+    /// file's own comment said it would ("the day the last screen leaves this frame, this list
+    /// goes with the reader and not with the file"). Moved, not copied: there is still one
+    /// array and one order.
+    /// </summary>
+    public static IReadOnlyList<EditorButton> RightTabs => _rightTabs;
 
     /// <summary>Screen width this frame was measured for — 160 on profile 8.</summary>
     public int ScreenWidth { get; private init; }
@@ -152,14 +190,14 @@ public readonly struct ConsoleChrome
     /// printed here at all and not under the pointer.
     /// </summary>
     public Rectangle TooltipField =>
-        new(ButtonSize, 0, ScreenWidth - ButtonSize * (1 + EditorChrome.RightTabs.Count), TopBarHeight);
+        new(ButtonSize, 0, ScreenWidth - ButtonSize * (1 + _rightTabs.Length), TopBarHeight);
 
     /// <summary>
     /// How many characters the tooltip field holds — 25 on a 160 px console.
     ///
     /// <para><b>This is a deliberate divergence from what this editor did yesterday.</b> The
-    /// host-resolution screen popped a bordered box under the pointer
-    /// (<c>EditorChromeRenderer.DrawTooltip</c>), which is fine when the window is 1280 px wide
+    /// host-resolution screen popped a bordered box under the pointer (the dead host frame's
+    /// <c>DrawTooltip</c>), which is fine when the window is 1280 px wide
     /// and impossible when it is 160: a 40-character label in a box is 164 px, wider than the
     /// screen, and even a short one would cover the canvas the label is explaining. TIC-80 hit
     /// the same wall on 240x136 and answered it by printing the label into the toolbar's spare
@@ -177,8 +215,8 @@ public readonly struct ConsoleChrome
     /// Measures the console frame and places its six shared buttons into
     /// <paramref name="buttons"/> from <paramref name="placed"/> on: the exit button at the top
     /// left, then the five editor tabs from the right corner leftwards in
-    /// <see cref="EditorChrome.RightTabs"/>' order — the same list the host frame walks, so the
-    /// tabs cannot end up in two orders while two frames exist. The screen fills the rest of the
+    /// <see cref="RightTabs"/>' order — the one owner of that order, so no two screens can end
+    /// up presenting the tabs differently. The screen fills the rest of the
     /// array itself, which is why the index travels by reference.
     /// </summary>
     public static ConsoleChrome Compute(
@@ -189,11 +227,11 @@ public readonly struct ConsoleChrome
         {
             Id = EditorButton.ExitTab, Rect = new Rectangle(0, 0, ButtonSize, ButtonSize),
         };
-        for (int i = 0; i < EditorChrome.RightTabs.Count; i++)
+        for (int i = 0; i < _rightTabs.Length; i++)
         {
             buttons[placed++] = new EditorButtonPlace
             {
-                Id = EditorChrome.RightTabs[i],
+                Id = _rightTabs[i],
                 Rect = new Rectangle(screenWidth - (i + 1) * ButtonSize, 0, ButtonSize, ButtonSize),
             };
         }
@@ -256,14 +294,43 @@ public readonly struct ConsoleChrome
     public int PromptHeadingChars =>
         Math.Max(0, (ScreenWidth - 2 * Margin - PromptVerbsWidth() - SystemFont.CellWidth) / SystemFont.CellWidth);
 
-    /// <summary>The placed rectangle of one button. Throws when the screen does not place it.</summary>
-    public static Rectangle ButtonRect(IReadOnlyList<EditorButtonPlace> buttons, EditorButton id) =>
-        EditorChrome.ButtonRect(buttons, id);
+    /// <summary>
+    /// The placed rectangle of one button — the tooltip anchors to it. Throws when the screen
+    /// does not place it, rather than answering <c>default</c>: a button that silently lands at
+    /// 0,0 is a bug that draws itself in the top-left corner and looks deliberate.
+    ///
+    /// <para>Until wave R6 this was a forwarder into the host frame, which owned the loop. The
+    /// host frame is gone and the loop lives here; nothing about what it answers changed.</para>
+    /// </summary>
+    public static Rectangle ButtonRect(IReadOnlyList<EditorButtonPlace> buttons, EditorButton id)
+    {
+        ArgumentNullException.ThrowIfNull(buttons);
+        foreach (EditorButtonPlace place in buttons)
+        {
+            if (place.Id == id)
+            {
+                return place.Rect;
+            }
+        }
+        throw new ArgumentOutOfRangeException(nameof(id), id, "this button is not placed on this editor screen.");
+    }
 
-    /// <summary>Console point to the button under it, stubs included — hover needs the dead buttons too.</summary>
+    /// <summary>Console point to the button under it, stubs included — hover needs the dead buttons too; the click routing filters by <see cref="EditorIcons.IsStub"/> itself.</summary>
     public static bool TryButton(
-        IReadOnlyList<EditorButtonPlace> buttons, int x, int y, out EditorButton id) =>
-        EditorChrome.TryButton(buttons, x, y, out id);
+        IReadOnlyList<EditorButtonPlace> buttons, int x, int y, out EditorButton id)
+    {
+        ArgumentNullException.ThrowIfNull(buttons);
+        foreach (EditorButtonPlace place in buttons)
+        {
+            if (place.Rect.Contains(x, y))
+            {
+                id = place.Id;
+                return true;
+            }
+        }
+        id = default;
+        return false;
+    }
 
     /// <summary>Cuts a string to what one full-width console line holds.</summary>
     public string FitLine(string text)

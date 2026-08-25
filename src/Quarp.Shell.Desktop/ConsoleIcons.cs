@@ -3,9 +3,9 @@ using Quarp.Core;
 namespace Quarp.Shell.Desktop;
 
 /// <summary>
-/// <see cref="EditorIcons"/>' 8x8 masks, plotted straight onto the console — the console-side
-/// twin of <see cref="EditorIconAtlas"/>, and the only way an icon reaches a tool screen once
-/// that screen is drawn on the console's own framebuffer (wave R1).
+/// <see cref="EditorIcons"/>' 8x8 masks, plotted straight onto the console — born as the
+/// console-side twin of a host icon atlas (wave R1) and, since that atlas left the tree with
+/// the host font path in wave R6, the only way an icon reaches a tool screen at all.
 ///
 /// <para><b>Why Pset and not the shell's sprite sheet.</b> Both were on the table. A sheet
 /// would mean copying every mask into a 128x128 <c>_sheet</c> at boot and drawing with
@@ -14,7 +14,7 @@ namespace Quarp.Shell.Desktop;
 /// keep in step whenever <see cref="EditorIcons"/> gains a glyph: the sheet index becomes a
 /// fact somebody has to own, and the mask table stops being the whole truth about what an icon
 /// looks like. Plotting reads the mask directly, so <see cref="EditorIcons"/> stays the single
-/// owner of icon pixels, exactly as it is for the host atlas.</para>
+/// owner of icon pixels.</para>
 ///
 /// <para>The cost is the argument against it, so here it is measured rather than waved away:
 /// an icon is 64 <c>Pset</c> calls worst case, a tool screen shows on the order of twenty
@@ -23,7 +23,7 @@ namespace Quarp.Shell.Desktop;
 /// a tick, and no rewind ever replays it.</para>
 ///
 /// <para>The colour is a normal palette slot, so an icon's state (live, stubbed, active,
-/// warning) is an argument here just as it is a tint argument on the host path. Colour 0 is
+/// warning) is an argument here rather than a property of the picture. Colour 0 is
 /// not treated as transparent: mask bits that are clear simply are not plotted, which leaves
 /// whatever the screen drew underneath — the same result <c>Palt</c> would give, without
 /// touching a console-wide setting on the caller's behalf.</para>

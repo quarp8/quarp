@@ -4,10 +4,12 @@ namespace Quarp.Shell.Desktop;
 
 /// <summary>
 /// Who owns the fact "this block of the pattern list was copied" — the music editor's answer to
-/// <see cref="IMapClipboard"/>, and it exists for the same reason: one seam, one implementation
-/// today (<see cref="MusicMemoryClipboard"/>, bytes inside the shell, the machine's clipboard
-/// untouched), and the day the OS clipboard question is settled for the sprite and map editors
-/// together, an implementation swaps in behind this interface and not one caller changes.
+/// <see cref="IMapClipboard"/>, and it exists for the same reason and keeps the same job now
+/// that the OS clipboard question has been settled: the machine's clipboard carries a
+/// <b>string</b> (<see cref="ClipboardFormat"/>, docs/CLIPBOARD-FORMAT.md) and this carries the
+/// cells, and <see cref="MusicEditorSession.CopySelectionToText"/> fills both in one breath.
+/// <see cref="MusicEditorSession.PasteAt"/> still places from here, so the clipping rule at the
+/// grid's edges has exactly one owner whichever road the block arrived by.
 ///
 /// <para><b>A cell is an <c>int</c>, not a byte, and that is the point.</b> A map cell is a byte
 /// of <c>map.bin</c>, so the map's clipboard carries bytes. A music cell is "which SFX slot, or
@@ -276,6 +278,14 @@ public sealed class MusicEditorSession
 
     /// <summary>Why the last save failed, or null. A save the author believes happened but did not is data loss, so it has to be sayable.</summary>
     public string? SaveError { get; private set; }
+
+    /// <summary>
+    /// What the last clipboard verb refused to do, or null — the sentence
+    /// <see cref="MusicEditorRenderer.StandingNotice"/> puts on the message line, the same road
+    /// <see cref="SaveError"/> travels. Cleared by every clipboard verb on the way in, so it
+    /// always describes the last Ctrl+C/X/V.
+    /// </summary>
+    public string? ClipboardNotice { get; private set; }
 
     // ---- the cursor: a pattern and a channel, because that is all a cell has ----
 
@@ -739,6 +749,90 @@ public sealed class MusicEditorSession
         }
         EndStroke();
         return true;
+    }
+
+    // ---- the clipboard, as text (REFERENCES-EDITORS §8 item 2) ----
+
+    /// <summary>
+    /// <c>Ctrl+C</c> as the machine's clipboard sees it: the marked block of the pattern list,
+    /// encoded by <see cref="ClipboardFormat"/>. The internal <see cref="IMusicClipboard"/> is
+    /// filled in the same breath, deliberately — it is what <see cref="PasteAt"/> still places,
+    /// so "what is in hand" keeps working after a trip through another program.
+    ///
+    /// <para>The selection is the one this session already owns
+    /// (<see cref="SelectRange"/>/<see cref="SelectAll"/>); nothing new is invented. Flags still
+    /// do not travel, for the reason <see cref="CopySelection"/> gives: a flag belongs to a whole
+    /// bar and a two-channel block has none to speak of.</para>
+    /// </summary>
+    /// <returns>The block's text, or the empty string when nothing is marked.</returns>
+    public string CopySelectionToText()
+    {
+        ClipboardNotice = null;
+        if (!CopySelection())
+        {
+            ClipboardNotice = "COPY: NOTHING SELECTED";
+            return string.Empty;
+        }
+        return ClipboardFormat.EncodeMusic(Clipboard.Patterns, Clipboard.Channels, Clipboard.Cells);
+    }
+
+    /// <summary>
+    /// <c>Ctrl+X</c> as text: copy, then silence what was copied — one undo step, the emptying
+    /// being <see cref="ClearSelectedCells"/>'s. A read-only song copies and refuses the
+    /// emptying, and says so instead of throwing: a Ctrl+X must not reach a renderer as an
+    /// exception.
+    /// </summary>
+    public string CutSelectionToText()
+    {
+        string text = CopySelectionToText();
+        if (text.Length == 0)
+        {
+            return text;
+        }
+        if (BankReadOnly)
+        {
+            ClipboardNotice = $"CUT: {MusicSourceFileName.ToUpperInvariant()} OWNS THIS SONG";
+            return text;
+        }
+        ClearSelectedCells();
+        return text;
+    }
+
+    /// <summary>
+    /// <c>Ctrl+V</c> as text: decode a music block, load it into the clipboard this session owns
+    /// and land it with its top-left cell at the cursor — one undo step, through the very
+    /// <see cref="PasteAt"/> the internal clipboard already used, so the clipping rule at the
+    /// grid's edges has one owner and not two.
+    ///
+    /// <para>A refusal leaves the internal clipboard <b>untouched</b>: a paste that could not
+    /// happen must not throw away the block the author already had in hand. A block of another
+    /// bank is named in the refusal — an SFX slot is not a row of slot <em>references</em>, and
+    /// the two would otherwise be four hex digits that look alike.</para>
+    /// </summary>
+    /// <returns>True when the song was written; false with <see cref="ClipboardNotice"/> set otherwise.</returns>
+    public bool PasteFromText(int pattern, int channel, string? text)
+    {
+        ClipboardNotice = null;
+        if (BankReadOnly)
+        {
+            ClipboardNotice = $"PASTE: {MusicSourceFileName.ToUpperInvariant()} OWNS THIS SONG";
+            return false;
+        }
+        if (!ClipboardFormat.TryDecode(text, ClipboardKind.Music, out ClipboardBlock? block, out string reason))
+        {
+            ClipboardNotice = $"PASTE: {reason}";
+            return false;
+        }
+        var cells = new int[block!.Bytes.Length];
+        if (!ClipboardFormat.TryMusicCells(block, cells))
+        {
+            // A channel byte that is neither 0x00 nor "active bit over a slot" — the very
+            // spelling AUDIO-FORMAT §4 refuses in a file. The clipboard is not the softer door.
+            ClipboardNotice = "PASTE: CELL DATA IS NOT LEGAL";
+            return false;
+        }
+        Clipboard.Write(block.Height, block.Width, cells);   // height is patterns, width is channels
+        return PasteAt(pattern, channel);
     }
 
     // ---- undo / redo / save ----

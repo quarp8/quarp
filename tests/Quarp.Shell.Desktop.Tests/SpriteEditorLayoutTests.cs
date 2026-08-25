@@ -82,9 +82,20 @@ public class SpriteEditorLayoutTests
         // Across: tool column, canvas, middle column, sheet window.
         Assert.Equal(0, layout.ButtonRect(EditorButton.ToolSelect).X);
         Assert.Equal(2 * layout.ButtonSize, layout.Canvas.X);
-        Assert.Equal(layout.Canvas.Right, layout.Swatches.X);
-        Assert.Equal(layout.Swatches.X + 2 * layout.ButtonSize, layout.Sheet.X);
+        // The middle column starts where the canvas ends and is two buttons wide; its LEFT edge
+        // is the layer tabs', because the palette and the flag block are nineteen pixels in a
+        // twenty-pixel column and their spare one is spent on the canvas's border instead of
+        // being parked at the right of the column (SpriteEditorLayout.CanvasFrame).
+        Rectangle middleColumn = layout.ButtonRect(EditorButton.LayerTab1);
+        Assert.Equal(layout.Canvas.Right, middleColumn.X);
+        Assert.Equal(middleColumn.X + 2 * layout.ButtonSize, layout.Sheet.X);
         Assert.Equal(ScreenWidth, layout.Sheet.Right);
+        // ...and the border pixel is that column's, not the canvas's: the drawing surface is
+        // still the full sixty-four, which is the 8x8 sprite at zoom 8 the order protects.
+        Assert.Equal(64, layout.Canvas.Width);
+        Assert.Equal(layout.Canvas.X - 1, layout.CanvasFrame.X);
+        Assert.Equal(layout.Canvas.Right, layout.CanvasFrame.Right - 1);
+        Assert.Equal(middleColumn.X + 1, layout.Swatches.X);
 
         // Down: top band, rule, content, slider, rule, message, rule, status.
         Assert.Equal(0, layout.TabStrip.Y);
@@ -146,9 +157,14 @@ public class SpriteEditorLayoutTests
 
     /// <summary>
     /// The tab strip, literally: exit alone at the left corner; from the right corner leftwards
-    /// music, sounds, tilemaps, sprites, code. The order has one owner — the very list the host
-    /// frame walks (<see cref="EditorChrome.RightTabs"/>) — so this screen and the three that
-    /// have not moved yet cannot present the tabs differently.
+    /// music, sounds, tilemaps, sprites, code. The order has one owner —
+    /// <see cref="ConsoleChrome.RightTabs"/> — so no two screens can present the tabs
+    /// differently.
+    ///
+    /// <para>That owner moved house in wave R6 and this assertion moved with it. The list used
+    /// to live in the host frame, which published it in R2 because a second frame existed then;
+    /// R6 deleted the host frame and the list went to its reader, which is this one. The array
+    /// was moved, not copied — the assertion below still names exactly one list.</para>
     /// </summary>
     [Fact]
     public void TheTabStripFollowsTheOwnersOrder()
@@ -171,7 +187,7 @@ public class SpriteEditorLayoutTests
         Assert.Equal(
             new[] { EditorButton.MusicTab, EditorButton.SoundTab, EditorButton.TilemapTab,
                     EditorButton.SpritesTab, EditorButton.CodeTab },
-            EditorChrome.RightTabs);
+            ConsoleChrome.RightTabs);
     }
 
     /// <summary>
@@ -184,6 +200,11 @@ public class SpriteEditorLayoutTests
     /// button row. TIC-80 answers the same problem the same way — its cut/copy/paste/undo/redo
     /// live in the toolbar, not in <c>drawStatus</c>. What the status line keeps is what the
     /// order asks of it: coordinates at the left, the sprite number at the right.</para>
+    ///
+    /// <para>Break recipe: insert the brush toggle anywhere but the last entry of
+    /// <c>_toolSlots</c> — every position assertion below it shifts by a row or a column and
+    /// goes red, which is the guard that keeps a new control from silently rearranging a column
+    /// an author's hand has learned.</para>
     /// </summary>
     [Fact]
     public void TheToolColumnIsTwoWideAndCarriesTheStatusButtonsToo()
@@ -200,7 +221,11 @@ public class SpriteEditorLayoutTests
         Rectangle save = layout.ButtonRect(EditorButton.Save);
         Rectangle undo = layout.ButtonRect(EditorButton.Undo);
         Rectangle redo = layout.ButtonRect(EditorButton.Redo);
-        var column = new[] { select, pencil, fill, stamp, shape, transform, size, clear, save, undo, redo };
+        Rectangle brush = layout.ButtonRect(EditorButton.BrushToggle);
+        var column = new[]
+        {
+            select, pencil, fill, stamp, shape, transform, size, clear, save, undo, redo, brush,
+        };
 
         // Reading order, two per row: the six tools first, then the size toggle and clear, then
         // save, undo and redo.
@@ -215,6 +240,10 @@ public class SpriteEditorLayoutTests
         Assert.Equal(size.Y + layout.ButtonSize, save.Y);
         Assert.Equal(save.Y, undo.Y);
         Assert.Equal(save.Y + layout.ButtonSize, redo.Y);
+        // The brush toggle took the column's one empty slot — beside redo, on the last row, and
+        // it pushed nothing: every assertion above is the same number it was before it landed.
+        Assert.Equal(redo.Y, brush.Y);
+        Assert.Equal(redo.X + layout.ButtonSize, brush.X);
         // The whole column stands left of the canvas and inside the content band.
         Assert.All(column, button => Assert.True(button.Right <= layout.Canvas.Left));
         Assert.All(column, button => Assert.True(button.X == 0 || button.X == layout.ButtonSize));
@@ -257,8 +286,20 @@ public class SpriteEditorLayoutTests
 
     /// <summary>
     /// The middle column: palette on top, the eight flag toggles under it, the five layer tabs
-    /// under those — one left edge for all three, one clear pixel between them, and the whole
-    /// column two buttons wide so the tabs fit two abreast.
+    /// under those — one edge for all three, one clear pixel between them, and the whole column
+    /// two buttons wide so the tabs fit two abreast.
+    ///
+    /// <para><b>The shared edge is the right one since 2026-08-25.</b> The palette and the flag
+    /// block are nineteen pixels wide (four cells of four, three gaps of one) inside a column
+    /// that is twenty because the layer tabs need twenty; that twentieth pixel used to sit
+    /// unused at the right of the column and now sits at its left, where it is the canvas's
+    /// border — the only free pixel the 20 + 64 + 20 + 56 split had, and the reason the canvas
+    /// has a visible edge at all. See <see cref="SpriteEditorLayout.CanvasFrame"/>.</para>
+    ///
+    /// <para>Break recipe: left-align the two blocks on <c>middleX</c> again in
+    /// <see cref="SpriteEditorLayout.Compute"/> — these assertions go red, and so does
+    /// <c>SpriteEditorPanelEdgeTests.TheCanvasEdgeIsVisibleEvenWhenTheSpriteIsEmpty</c>, because
+    /// the palette then repaints the very column the border is drawn on.</para>
     /// </summary>
     [Fact]
     public void TheMiddleColumnStacksPaletteFlagsAndLayerTabsOnOneEdge()
@@ -268,8 +309,15 @@ public class SpriteEditorLayoutTests
         Rectangle lastTab = layout.ButtonRect(EditorButton.LayerTab5);
 
         Assert.Equal(layout.Swatches.X, layout.FlagPanel.X);
-        Assert.Equal(layout.Swatches.X, firstTab.X);
-        Assert.Equal(layout.Swatches.X, lastTab.X);
+        // One edge for all three, and since 2026-08-25 it is the RIGHT one: the palette and the
+        // flag block are nineteen pixels wide in a twenty-pixel column, and their spare pixel
+        // was moved from the right of the column (where it did nothing) to the left of it,
+        // where it is the canvas's border. See SpriteEditorLayout.CanvasFrame.
+        Assert.Equal(layout.Swatches.Right, layout.FlagPanel.Right);
+        Assert.Equal(firstTab.X + 2 * layout.ButtonSize, layout.Swatches.Right);
+        Assert.Equal(firstTab.X, lastTab.X);                     // five tabs, two abreast: 1 and 5 share a column
+        Assert.Equal(firstTab.X + 1, layout.Swatches.X);
+        Assert.Equal(firstTab.X + 1, layout.FlagPanel.X);
         Assert.Equal(layout.Chrome.ContentTop, layout.Swatches.Y);
         Assert.Equal(layout.Swatches.Bottom + 1, layout.FlagPanel.Y);
         Assert.Equal(layout.FlagPanel.Bottom + 1, firstTab.Y);
@@ -344,6 +392,10 @@ public class SpriteEditorLayoutTests
     [InlineData(EditorButton.ToolShape, 2)]
     [InlineData(EditorButton.ToolTransform, 3)]
     [InlineData(EditorButton.SizeToggle, 3)]
+    // The brush list is the longest flyout on this screen (four steps of TIC-80's BRUSH_SIZES)
+    // AND it hangs off the column's bottom row, so it is the one that would run off the screen
+    // first if the row ever grew — which is exactly why it is pinned here by name.
+    [InlineData(EditorButton.BrushToggle, 4)]
     public void FlyoutVariantsRoundTripThroughTheirRectangles(EditorButton slot, int count)
     {
         var layout = Default();

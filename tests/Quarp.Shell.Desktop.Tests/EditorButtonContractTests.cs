@@ -163,7 +163,9 @@ public class EditorButtonContractTests : IDisposable
     {
         // Console pixels since wave R2: the sprite screen is laid out on the console's own
         // 160x90 grid (ADR-029), not on a window. The button LIST is what this sweep needs and
-        // that list is the same twenty-two either way — only the rectangles moved.
+        // that list is the same one either way — only the rectangles moved. Its length is not
+        // written down here on purpose: the brush toggle joined it by being placed, and a sweep
+        // that counted would have needed an edit to accept a button it is meant to catch.
         foreach (EditorButtonPlace place in SpriteEditorLayout.Compute(160, 90, regionCells: 1).Buttons)
         {
             ShellModeMachine machine = MachineWithOpenEditor();
@@ -200,6 +202,30 @@ public class EditorButtonContractTests : IDisposable
         // Choosing from the open list applies the size — the whole mouse path to 16 px.
         EditorIcons.ChooseVariant(machine.Editor!, EditorButton.SizeToggle, 1);
         Assert.Equal(2, machine.Editor!.RegionCells);
+    }
+
+    /// <summary>
+    /// The brush toggle's wiring, pinned by name beside the size toggle's because it is the same
+    /// wiring: a click opens the list (<see cref="EditorIcons.ClickOpensFlyout"/>) and the pick
+    /// applies (<see cref="EditorIcons.ChooseVariant"/>). The sweep above already proves the
+    /// button is not dead; this says what it is alive for.
+    ///
+    /// <para>Break recipe: leave <see cref="EditorButton.BrushToggle"/> out of
+    /// <c>ClickOpensFlyout</c> and the first assertion goes red — and note the sweep above would
+    /// go red too, but with the useless message "unwired?", which is exactly why this test
+    /// exists next to it.</para>
+    /// </summary>
+    [Fact]
+    public void TheBrushToggleIsWired()
+    {
+        ShellModeMachine machine = MachineWithOpenEditor();
+        var flyout = new ToolbarFlyout();
+
+        RouteClick(machine, flyout, EditorButton.BrushToggle);
+        Assert.Equal(EditorButton.BrushToggle, flyout.OpenSlot);
+
+        EditorIcons.ChooseVariant(machine.Editor!, EditorButton.BrushToggle, 3);
+        Assert.Equal(SpriteEditorSession.BrushSizeAt(3), machine.Editor!.BrushSize);
     }
 
     /// <summary>The third review's bug 1, pinned by name: the stamp button's click selects the stamp tool.</summary>

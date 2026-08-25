@@ -208,11 +208,58 @@ public readonly struct ShellCommands
     /// </summary>
     public bool EditorShapeFill { get; init; }
 
+    /// <summary>
+    /// Map editor: Ctrl is held — the bucket's <b>replace</b> modifier. TIC-80 hangs
+    /// <c>replaceTile</c> on exactly this key over exactly this tool (REFERENCES-EDITORS §3.1,
+    /// §8 item 6), and the sprite screen one bank over already reads the same physical key for
+    /// the same verb, so the author learns one rule for both.
+    ///
+    /// <para><b>Why a second field carrying the same bit as <see cref="EditorShapeFill"/>.</b>
+    /// This struct already does that twice — <see cref="EditorTilesModifier"/> and
+    /// <see cref="EditorSecondaryInk"/> are both Shift — and for the reason that applies here: a
+    /// field is named for what a screen means by it, not for which key it came off, so a later
+    /// edit can move one screen's modifier without silently moving another's. The shape tool's
+    /// "filled" flag and the map bucket's "replace" flag are two meanings, on two screens,
+    /// sharing one key today.</para>
+    ///
+    /// <para>A level and not an edge, like its twin: the modifier is read at the press it
+    /// modifies, and the map router also reads it to decide that Ctrl+Space is the keyboard's
+    /// bucket press rather than a pan (<see cref="EditorPanModifier"/>).</para>
+    /// </summary>
+    public bool EditorReplaceModifier { get; init; }
+
     /// <summary>Editor: , — previous palette color (the keyboard's swatch hand; shown in the swatch tooltips).</summary>
     public bool EditorColorPrev { get; init; }
 
     /// <summary>Editor: . — next palette color, wrapping 15 → 0.</summary>
     public bool EditorColorNext { get; init; }
+
+    /// <summary>
+    /// Sprite editor: <c>-</c> — one step down the brush ladder, wrapping to the widest. TIC-80's
+    /// own key for its own <c>updateBrushSize(sprite, -1)</c> (REFERENCES-EDITORS §2.1). Not
+    /// Ctrl-guarded the way the editor letters are and for the same reason the brackets are not:
+    /// no chord lands on the minus key in this shell, and the letters' guard exists because a
+    /// letter is where a chord goes.
+    /// </summary>
+    public bool EditorBrushSmaller { get; init; }
+
+    /// <summary>Sprite editor: <c>=</c> — one step up the brush ladder, wrapping to the narrowest (TIC-80's <c>=</c>).</summary>
+    public bool EditorBrushBigger { get; init; }
+
+    /// <summary>
+    /// Sprite editor: Shift is held — the keyboard's <b>second ink</b>, which is LIKO-12's own
+    /// arrangement verbatim (<c>src/OS/DiskOS/Editors/sprite.lua</c>:
+    /// <c>if isKDown("lshift","rshift") or isMDown(2) then b = 2 end</c>, REFERENCES-EDITORS
+    /// §2.2). A level and not an edge, like <see cref="EditorShapeFill"/>: what matters is which
+    /// ink was in the hand at the press, and the press is an edge of another field.
+    ///
+    /// <para>It shares the physical key with <see cref="EditorSheetDx"/> and
+    /// <see cref="EditorFlagDigit"/>, which is the struct's rule (one field per key edge, per-mode
+    /// meanings in the comments) rather than a collision: those two are Shift+<em>arrow</em> and
+    /// Shift+<em>digit</em>, and this one only ever colours Shift+Z/Space and Shift+X, keys
+    /// neither of them reads.</para>
+    /// </summary>
+    public bool EditorSecondaryInk { get; init; }
 
     /// <summary>Editor: PageUp — one layer up the stack (toward the covering layers), clamped at 5. The layer tabs' keyboard half (wave 2h).</summary>
     public bool EditorLayerUp { get; init; }
@@ -263,6 +310,30 @@ public readonly struct ShellCommands
 
     /// <summary>Any editor screen: Alt+Right — one tab right along the strip.</summary>
     public bool EditorTabNext { get; init; }
+
+    /// <summary>
+    /// Any editor screen: which editor <b>F1..F5</b> asked for this frame as a <b>1-based</b>
+    /// number, 0 for none — the shape <see cref="EditorToolDigit"/>, <see cref="SfxPianoKey"/>
+    /// and <see cref="MusicSlotDigit"/> already use, so a default-constructed frame means
+    /// "nothing was asked for" rather than "the first editor". TIC-80's own keys for exactly this
+    /// (REFERENCES-EDITORS §8 item 16: "<c>F1..F5</c>, <c>Alt+1..5</c>, <c>Ctrl+PgUp/PgDn</c>"),
+    /// and the thing <see cref="EditorTabPrev"/>/<see cref="EditorTabNext"/> cannot do: a ring of
+    /// five costs up to two presses to cross and a named key costs one.
+    ///
+    /// <para><b>What the number means has exactly one owner</b> and it is not this struct:
+    /// <see cref="EditorIcons.EditorTabForNumber"/> turns it into a screen, off the same
+    /// <see cref="EditorIcons.LiveEditorTabs"/> list Alt+Left/Right walks, so the key and the
+    /// strip cannot come to disagree about which editor is the third one.</para>
+    ///
+    /// <para><b>F5 is shared with <see cref="SaveReplay"/>, and that is this struct's ordinary
+    /// arrangement rather than a clash</b> — the same shape <see cref="Slower"/> has carried
+    /// since the beginning. Replay saving is a GAME-mode verb and the editor tabs are an
+    /// EDITOR-mode verb; the modes never read each other's fields, and the gate belongs where
+    /// the meaning differs. Unmodified, like TIC-80's: no chord in this shell lands on F1..F5,
+    /// and <see cref="ShellModeMachine.SwitchEditorTab"/> is a no-op outside the five editor
+    /// screens anyway.</para>
+    /// </summary>
+    public int EditorTabJump { get; init; }
 
     // ---- the code editor's own keys ----
     //
@@ -336,6 +407,63 @@ public readonly struct ShellCommands
     /// only reference that has both.
     /// </summary>
     public bool CodeGoToLine { get; init; }
+
+    /// <summary>
+    /// Code editor: <b>F11</b> — drop the chrome and give the whole console to the text
+    /// (15 lines x 40 columns instead of 11 x 36). The mode ADR-029 named as the mitigation for
+    /// the tightest code page in the niche: "полноэкранный режим без хрома возвращает все 15
+    /// строк".
+    ///
+    /// <para><b>Why F11 and not the TAB that ADR-029 cites.</b> The ADR quotes PICO-8's
+    /// "TAB | Toggle fullscreen view" as the precedent, and it is the right precedent for the
+    /// verb — but PICO-8 spends TAB on that in the <em>sprite and map</em> editors only. In its
+    /// code editor TAB is the indent key ("TAB to indent a selection (shift to un-indent)",
+    /// REFERENCES-EDITORS §4.3), exactly as it is here (<see cref="EditorRegionCycle"/> →
+    /// <c>InsertTab</c>) and in LIKO-12 ("Tab вставляет один пробел", §4.2). So the one screen
+    /// that needs the mode is the one screen whose key is already taken, and the other
+    /// reference's key for the same verb is taken instead: TIC-80's <c>processShortcuts</c>
+    /// list ends "F6 CRT-шейдер, F8 скриншот, F9 видео, <b>F11 фуллскрин</b>"
+    /// (REFERENCES-EDITORS §1). F11 is free on every screen in this shell and reads as
+    /// "fullscreen" to anyone who has used a browser.</para>
+    ///
+    /// <para>Guarded on Shift so <see cref="CodeFullscreenStatus"/> can have the other half of
+    /// the key, the way PICO-8 itself splits <c>TAB</c> from <c>SHIFT-TAB</c>.</para>
+    /// </summary>
+    public bool CodeFullscreen { get; init; }
+
+    /// <summary>
+    /// Code editor: <b>Shift+F11</b> — summon or dismiss the single status row while the screen
+    /// is fullscreen. PICO-8's own two-step, one key apart: <c>TAB</c> is "Toggle fullscreen
+    /// view" and <c>SHIFT-TAB</c> is "full-fullscreen mode (with no red menu bars)"
+    /// (REFERENCES-EDITORS §2.3), i.e. the reference itself distinguishes "fullscreen that still
+    /// carries a bar" from "fullscreen carrying nothing". Ours reads the pair the other way round
+    /// — bare F11 gives the bar-less page, Shift+F11 puts the one bar back — because the whole
+    /// point of the mode here is the fifteenth line, and a mode whose default costs a line would
+    /// be the wrong default.
+    /// </summary>
+    public bool CodeFullscreenStatus { get; init; }
+
+    /// <summary>
+    /// Code editor: <b>Alt+Up</b> — the caret to the previous declaration in the buffer. Two of
+    /// the three references spell this key letter for letter (REFERENCES-EDITORS §8 item 14:
+    /// LIKO-12's <c>Alt+Up/Down</c> → <c>searchPreviousFunction</c>/<c>searchNextFunction</c>,
+    /// PICO-8's "ALT-UP, DOWN to navigate to the previous, next function"; TIC-80 spends
+    /// <c>Ctrl+O</c> on an outline list instead), so there was nothing left to choose.
+    ///
+    /// <para><b>It cannot collide with the tab strip.</b> <see cref="EditorTabPrev"/> and
+    /// <see cref="EditorTabNext"/> are Alt+<em>Left/Right</em>; this is Alt+<em>Up/Down</em>, and
+    /// the four arrows are four keys. The bare arrow still fires on the same frame — Alt is a
+    /// modifier and not a replacement — so the code screen's router checks the chord before the
+    /// bare key, exactly as it already has to for Ctrl+Left.</para>
+    ///
+    /// <para><b>What counts as a declaration is not decided here.</b> That is a fact about the
+    /// text, so it belongs to the document: <see cref="CodeEditorSession.IsDeclarationLine"/>
+    /// carries the whole rule in words, and this field is only the key edge.</para>
+    /// </summary>
+    public bool CodeDeclarationPrev { get; init; }
+
+    /// <summary>Code editor: <b>Alt+Down</b> — the caret to the next declaration; the exact mirror of <see cref="CodeDeclarationPrev"/>.</summary>
+    public bool CodeDeclarationNext { get; init; }
 
     // ---- the sound editor's own key ----
 
@@ -496,12 +624,26 @@ public sealed class ShellCommandReader
             EditorToolDigit = shift ? 0 : ToolDigit(keyboard),
             EditorFlagDigit = shift ? FlagDigit(keyboard) : 0,
             EditorShapeFill = ctrl,
+            EditorReplaceModifier = ctrl,
             EditorColorPrev = Pressed(keyboard, Keys.OemComma),
             EditorColorNext = Pressed(keyboard, Keys.OemPeriod),
+            // TIC-80's brush keys, on the physical keys TIC-80 names (REFERENCES-EDITORS §2.1).
+            EditorBrushSmaller = Pressed(keyboard, Keys.OemMinus),
+            EditorBrushBigger = Pressed(keyboard, Keys.OemPlus),
+            EditorSecondaryInk = shift,
             EditorLayerUp = Pressed(keyboard, Keys.PageUp),
             EditorLayerDown = Pressed(keyboard, Keys.PageDown),
             EditorTabPrev = alt && Pressed(keyboard, Keys.Left),
             EditorTabNext = alt && Pressed(keyboard, Keys.Right),
+            // TIC-80's five named tab keys (REFERENCES-EDITORS §8 item 16). Unmodified, the way
+            // the reference has them and the way F11 above is: no chord in this shell lands on
+            // F1..F5. F5 also fills SaveReplay two lines up — one key edge read by two fields
+            // whose modes never meet; see the field's own comment for the whole argument.
+            EditorTabJump = FunctionTab(keyboard),
+            // Alt+Up/Down: the code screen's declaration walk. Alt is already read above for the
+            // tab strip's Left/Right, and these are the OTHER two arrows, so nothing is shared.
+            CodeDeclarationPrev = alt && Pressed(keyboard, Keys.Up),
+            CodeDeclarationNext = alt && Pressed(keyboard, Keys.Down),
             // The code editor's block. Each of these is a key edge nothing else in the shell
             // reads; the keys it shares with its siblings are read through the shared fields
             // above (see the block comment in ShellCommands).
@@ -520,6 +662,11 @@ public sealed class ShellCommandReader
             CodeFind = ctrl && Pressed(keyboard, Keys.F),
             CodeFindNext = ctrl && Pressed(keyboard, Keys.G),
             CodeGoToLine = ctrl && Pressed(keyboard, Keys.L),
+            // TIC-80's own fullscreen key (REFERENCES-EDITORS §1, processShortcuts), split on
+            // Shift into PICO-8's own two steps. Nothing else in this shell reads F11, and no
+            // Ctrl guard is needed: Ctrl+F11 means nothing here either way.
+            CodeFullscreen = !shift && Pressed(keyboard, Keys.F11),
+            CodeFullscreenStatus = shift && Pressed(keyboard, Keys.F11),
             // The sound editor's piano. Guarded on both modifiers so the chords above keep
             // their keys; see the field's own comment for why the five digits and the five
             // letters it shares with other fields are gated in the router and not here.
@@ -538,6 +685,25 @@ public sealed class ShellCommandReader
         for (int i = 0; i < 6; i++)
         {
             if (Pressed(keyboard, Keys.D1 + i))
+            {
+                return i + 1;
+            }
+        }
+        return 0;
+    }
+
+    /// <summary>
+    /// First freshly pressed function key F1..F5 as a 1-based number, 0 for none — the same
+    /// one-key-per-frame rule the toolbar digits, the flag digits and the piano follow. Five and
+    /// not twelve: <see cref="EditorIcons.LiveEditorTabs"/> holds five stops, F8 is
+    /// <see cref="PlayReplay"/> and F11 is <see cref="CodeFullscreen"/>, so the range stops
+    /// exactly where the tab strip does.
+    /// </summary>
+    private int FunctionTab(KeyboardState keyboard)
+    {
+        for (int i = 0; i < EditorIcons.LiveEditorTabs.Count; i++)
+        {
+            if (Pressed(keyboard, Keys.F1 + i))
             {
                 return i + 1;
             }

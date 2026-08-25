@@ -68,6 +68,27 @@ public static class MapEditorInput
     /// layout answers <c>Rectangle.Empty</c> for a panel that is not up, so a lowered
     /// palette is deaf without a branch.</para>
     ///
+    /// <para><b>Transforms, replace and the mute controls (the tooltip wave).</b> Three keys and
+    /// one modifier, all four taken from the references and all four checked against this screen
+    /// before they were taken:
+    /// <list type="bullet">
+    ///   <item><description><b>F / V / R</b> — flip the marked rectangle across, flip it down,
+    ///   rotate it 90°. PICO-8's three keys for these three verbs (REFERENCES-EDITORS §2.3, §8
+    ///   item 10) and this shell's own sprite-editor keys for them. Free here: all three are
+    ///   read under a <c>!ctrl</c> guard, so Ctrl+V stays the paste, and nothing on the map
+    ///   screen read F, V or R before. A non-square rectangle refuses the rotate in words — see
+    ///   <see cref="MapEditorSession.RotateAreaClockwise"/> for why refusing is the answer.</description></item>
+    ///   <item><description><b>Ctrl over the bucket</b> — replace that tile everywhere
+    ///   (TIC-80 <c>replaceTile</c>, §3.1 and §8 item 6), bounded by the marked rectangle when
+    ///   there is one and by the whole map when there is not. Same key and same tool as the
+    ///   sprite editor's <c>ReplaceColor</c>. On the keyboard the chord is <b>Ctrl+Space</b>,
+    ///   because bare Z is this screen's paint key and Ctrl+Z is the shell's undo.</description></item>
+    /// </list>
+    /// The same wave gave the four buttonless controls a hover label of their own
+    /// (<see cref="MapRegion"/>), which is where the gestures that belong to no button — Shift
+    /// for the palette, Tab for the whole map, Ctrl+Shift+arrows for the block, the middle
+    /// button, Space+drag, <c>`</c> — are now announced.</para>
+    ///
     /// <para>While the exit prompt is up it owns the input — Z saves and leaves, X discards,
     /// Esc stays, and the same three verbs are clickable on the prompt line — and everything
     /// else, the pencil included, is deliberately deaf.</para>
@@ -124,6 +145,19 @@ public static class MapEditorInput
             return;
         }
 
+        // F1..F5 jump straight to a named editor — TIC-80's own five keys for exactly this
+        // (REFERENCES-EDITORS §8 item 16). Read beside the tab strip's Alt+arrows and before
+        // everything else for the same reason those are: travel is a question about WHICH
+        // SCREEN, and it must not be answered by a screen that is already being left. The five
+        // routers carry the same four lines because Alt+Left/Right is routed the same way — one
+        // line per screen — and a key that worked on one editor and not on its neighbour is
+        // worse than a key that does not exist. <see cref="EditorIcons.EditorTabForNumber"/> is
+        // the single owner of "which number is which tab"; nothing here counts tabs.
+        if (EditorIcons.EditorTabForNumber(commands.EditorTabJump) is ShellMode named)
+        {
+            shell.Modes.SwitchEditorTab(named);
+            return;
+        }
         if (commands.EditorTabPrev || commands.EditorTabNext)
         {
             // Alt+Left/Right walk the whole strip, code tab included (REFERENCES-EDITORS §8
@@ -187,20 +221,24 @@ public static class MapEditorInput
         {
             map.Save();
         }
-        // The clipboard chords (wave 3e). Copy and cut read the marked rectangle and do nothing
-        // without one; paste arms the float and does nothing with an empty clipboard. All three
-        // land in MapEditorPaint, the one owner both channels reach.
+        // The clipboard chords (wave 3e), now through the MACHINE's clipboard as hex text
+        // (REFERENCES-EDITORS §8 item 2). This router is the only piece of the map screen that
+        // knows a clipboard exists: it takes the string the paint verbs hand back and gives it
+        // to the device, and hands the device's string back on a paste. Everything below —
+        // session, view, paint — is still headless and still speaks in plain strings.
+        // A copy of nothing writes nothing: an empty string must not silently wipe whatever the
+        // author had on the clipboard from another program.
         if (commands.EditorCopy)
         {
-            MapEditorPaint.CopySelection(map, view);
+            shell.CopyText(MapEditorPaint.CopySelectionToText(map, view));
         }
         if (commands.EditorCut)
         {
-            MapEditorPaint.CutSelection(map, view);
+            shell.CopyText(MapEditorPaint.CutSelectionToText(map, view));
         }
         if (commands.EditorPaste)
         {
-            view.BeginPaste();
+            MapEditorPaint.PasteText(map, view, shell.PasteText());
         }
         if (commands.EditorBlockDx != 0 || commands.EditorBlockDy != 0)
         {
@@ -211,6 +249,26 @@ public static class MapEditorInput
         if (commands.EditorGridToggle)
         {
             view.ToggleGrid();              // ` — the grid button's keyboard twin (TIC-80's key)
+        }
+        // F / V / R over the marked rectangle (REFERENCES-EDITORS §8 item 10). The three keys
+        // PICO-8 spends on exactly these three verbs and the three this shell's sprite editor
+        // already spends on them — checked one by one against this screen before they were
+        // taken: F, V and R are read by ShellCommandReader under a !ctrl guard, and nothing on
+        // the map screen read any of the three (Ctrl+V is the paste and stays the paste, because
+        // the bare-V field is guarded against it at the reader). Refusals — nothing marked, a
+        // non-square rectangle under R — are sentences on the message line, not exceptions, and
+        // MapEditorPaint owns which one is said.
+        if (commands.EditorFlipH)
+        {
+            MapEditorPaint.FlipSelectionHorizontal(map, view);
+        }
+        if (commands.EditorFlipV)
+        {
+            MapEditorPaint.FlipSelectionVertical(map, view);
+        }
+        if (commands.EditorRotate)
+        {
+            MapEditorPaint.RotateSelectionClockwise(map, view);
         }
         if (commands.EditorToolDigit != 0)
         {
@@ -264,11 +322,24 @@ public static class MapEditorInput
             view.ScrollRows(layout, -mouse.WheelDelta / 120);
         }
 
+        // Ctrl over the bucket is "replace this tile" (REFERENCES-EDITORS §8 item 6) — the same
+        // key, the same tool and the same verb the sprite editor's bucket already carries, so
+        // the author learns one rule for both banks.
+        bool replacing = commands.EditorReplaceModifier;
+
         // Space is the pan modifier on this screen (TIC-80's map.c), and it is also half of
         // EditorPaintDown — so here it takes the key, the way Ctrl takes Z in the reader: no
         // paint gesture opens while it is held, and any gesture already open is closed rather
         // than smeared across the pan.
-        bool panning = commands.EditorPanModifier;
+        //
+        // ...unless Ctrl is down with it, and that exception is what gives the replace a
+        // KEYBOARD path at all. The map's paint key is bare Z, and Ctrl+Z is the undo on every
+        // screen in this shell, so "Ctrl + the paint key" can only be Ctrl+Space here — which is
+        // precisely the chord the sprite editor already documents for its own Ctrl-over-the-tool
+        // gesture (ShellCommands.EditorShapeFill: "the keyboard's filled-shape gesture is
+        // Space+Ctrl"). Nothing is lost: a pan is a drag, and holding Ctrl through a drag was
+        // never a gesture this screen defined.
+        bool panning = commands.EditorPanModifier && !replacing;
 
         // Shift+arrows pick the tile, bare arrows steer the map cursor: one frame means one of
         // the two, the same guard (and the same reason) as the sprite editor's.
@@ -305,7 +376,7 @@ public static class MapEditorInput
         {
             // Deaf while an overlay owns the screen, for the reason the mouse is (the layout's
             // CanvasLive): a stroke the author cannot see land is a stroke he did not aim.
-            KeyboardAct(map, view);
+            KeyboardAct(map, view, replacing);
         }
         if (commands.EditorPaintReleased || panning)
         {
@@ -317,13 +388,18 @@ public static class MapEditorInput
             map.PickTile(view.CursorX, view.CursorY);    // X — the keyboard eyedropper
         }
 
-        // Hover: buttons only on this screen. The picker and the minimap have no HoverTarget
-        // kind of their own — that type is shared chrome and grows by the organizer's hand,
-        // not by a fork here; their key paths are named on the pencil's tooltip meanwhile.
+        // Hover: buttons first, then this screen's four buttonless controls — the same order the
+        // press chain below tests them in, so the label and the click always name the same thing
+        // (SfxEditorInput.Pointer's rule, one screen over). Until the tooltip wave this screen
+        // could only build OfButton and the canvas, the palette, the whole-map view and the
+        // position bar were mute; MapRegion is what gave them a hover kind of their own
+        // (REFERENCES-EDITORS §8 item 15), and MapEditorLayout.RegionAt is the one hit test.
         shell.Hover.Update(
             layout.TryButton(mouse.X, mouse.Y, out EditorButton hovered)
                 ? HoverTarget.OfButton(hovered)
-                : null,
+                : layout.RegionAt(mouse.X, mouse.Y) is MapRegion region and not MapRegion.None
+                    ? HoverTarget.OfMapRegion(region)
+                    : null,
             elapsedSeconds);
 
         // The one cursor: the pointer over the canvas parks it, so the status bar reads the
@@ -368,7 +444,7 @@ public static class MapEditorInput
             }
             else if (layout.TryMapCell(mouse.X, mouse.Y, view.CameraX, view.CameraY, out int pressX, out int pressY))
             {
-                MousePressOnCanvas(map, view, layout, mouse, panning, pressX, pressY);
+                MousePressOnCanvas(map, view, layout, mouse, panning, replacing, pressX, pressY);
             }
         }
         else if (mouse.LeftDown && view.TileBlockGestureActive)
@@ -422,7 +498,17 @@ public static class MapEditorInput
         {
             if (view.Tool == MapEditorTool.Fill)
             {
-                MapEditorPaint.Fill(map, eraseX, eraseY, MapEditorSession.EmptyTile);
+                // Ctrl rides the right button too: "wipe every tile of this kind" is the erase
+                // and the replace composed, and refusing the pair here would make Ctrl mean
+                // something under one button of one tool and nothing under the other.
+                if (replacing)
+                {
+                    MapEditorPaint.ReplaceTile(map, view, eraseX, eraseY, MapEditorSession.EmptyTile);
+                }
+                else
+                {
+                    MapEditorPaint.Fill(map, eraseX, eraseY, MapEditorSession.EmptyTile);
+                }
             }
             else if (view.Tool == MapEditorTool.Pencil)
             {
@@ -451,7 +537,7 @@ public static class MapEditorInput
     /// law is only a law if the two channels reach the same verbs, and two switch statements in
     /// one method drift the moment a tool is added to one of them.
     /// </summary>
-    private static void KeyboardAct(MapEditorSession map, MapEditorView view)
+    private static void KeyboardAct(MapEditorSession map, MapEditorView view, bool replacing)
     {
         // A floating block outranks every tool, in both channels: the paste key and the paste
         // click mean "put it here" whatever is in hand, which is what makes Ctrl+V's promise
@@ -463,7 +549,14 @@ public static class MapEditorInput
         switch (view.Tool)
         {
             case MapEditorTool.Fill:
-                MapEditorPaint.Fill(map, view.CursorX, view.CursorY, map.SelectedSprite);
+                if (replacing)
+                {
+                    MapEditorPaint.ReplaceTile(map, view, view.CursorX, view.CursorY, map.SelectedSprite);
+                }
+                else
+                {
+                    MapEditorPaint.Fill(map, view.CursorX, view.CursorY, map.SelectedSprite);
+                }
                 break;
             case MapEditorTool.Select:
                 view.BeginSelection(view.CursorX, view.CursorY);
@@ -484,7 +577,7 @@ public static class MapEditorInput
     /// </summary>
     private static void MousePressOnCanvas(
         MapEditorSession map, MapEditorView view, in MapEditorLayout layout, in EditorMouse mouse,
-        bool panning, int cellX, int cellY)
+        bool panning, bool replacing, int cellX, int cellY)
     {
         if (MapEditorPaint.PasteAt(map, view, cellX, cellY))
         {
@@ -500,7 +593,14 @@ public static class MapEditorInput
         switch (view.Tool)
         {
             case MapEditorTool.Fill:
-                MapEditorPaint.Fill(map, cellX, cellY, map.SelectedSprite);
+                if (replacing)
+                {
+                    MapEditorPaint.ReplaceTile(map, view, cellX, cellY, map.SelectedSprite);
+                }
+                else
+                {
+                    MapEditorPaint.Fill(map, cellX, cellY, map.SelectedSprite);
+                }
                 break;
             case MapEditorTool.Select:
                 view.BeginSelection(cellX, cellY);

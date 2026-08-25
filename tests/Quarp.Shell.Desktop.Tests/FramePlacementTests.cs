@@ -181,21 +181,41 @@ public class FramePlacementTests
     }
 
     /// <summary>
-    /// The boot screen's placement is now the same object, not a second copy of the same three
-    /// lines. Pinned as a test because the copy is exactly what wave R1 removed, and a future
-    /// edit that quietly reintroduces it would otherwise go unnoticed until the two disagreed.
+    /// The boot screen's placement is the shell screen's placement, full stop.
+    ///
+    /// <para><b>Re-pinned in wave R6, and this paragraph is why.</b> The version this replaces
+    /// asserted that <c>MainMenuLayout.Compute(windowWidth, windowHeight)</c> agreed with
+    /// <see cref="FramePlacement"/> on scale, origin and two sample coordinates — a real claim
+    /// while the menu was host UI, because the menu then owned a <em>window</em> placement of
+    /// its own and the danger was a second copy of the same three lines drifting from the
+    /// first. Wave R6 removed the thing that claim was about: the menu is drawn into the
+    /// shell's framebuffer like every other screen, so it has no placement of its own to agree
+    /// or disagree with, and <c>MainMenuLayout</c> takes a screen size rather than a window
+    /// size. The claim that survives is the one that still has two sides — the boot screen and
+    /// a running cartridge land on the same glass, at the same scale, through the same owner —
+    /// and it is asserted here against <see cref="ShellScreen.Placement"/>, which is the object
+    /// the shell actually uses. The old assertion is not weakened, it is re-aimed: what it
+    /// guarded (one owner of "where the picture is") is exactly what is guarded below.</para>
     /// </summary>
     [Theory]
     [MemberData(nameof(Windows))]
-    public void TheBootMenuUsesTheSamePlacement(int windowWidth, int windowHeight)
+    public void TheBootMenuLandsOnTheGlassLikeEveryOtherScreen(int windowWidth, int windowHeight)
     {
+        var screen = new ShellScreen();
         FramePlacement placement = FramePlacement.Compute(
-            windowWidth, windowHeight, MainMenuLayout.CanvasWidth, MainMenuLayout.CanvasHeight);
-        MainMenuLayout menu = MainMenuLayout.Compute(windowWidth, windowHeight);
-        Assert.Equal(placement.Scale, menu.Scale);
-        Assert.Equal(placement.OriginX, menu.OriginX);
-        Assert.Equal(placement.OriginY, menu.OriginY);
-        Assert.Equal(placement.X(37), menu.X(37));
-        Assert.Equal(placement.Y(61), menu.Y(61));
+            windowWidth, windowHeight, screen.Width, screen.Height);
+        FramePlacement shell = screen.Placement(windowWidth, windowHeight);
+
+        Assert.Equal(placement.Scale, shell.Scale);
+        Assert.Equal(placement.OriginX, shell.OriginX);
+        Assert.Equal(placement.OriginY, shell.OriginY);
+        Assert.Equal(placement.X(37), shell.X(37));
+        Assert.Equal(placement.Y(61), shell.Y(61));
+
+        // And the menu's own geometry is measured against that screen, not against the window:
+        // the canvas the doors are laid out on is the console, whatever size the window is.
+        MainMenuLayout menu = MainMenuRenderer.LayoutFor(screen);
+        Assert.Equal(screen.Width, menu.ScreenWidth);
+        Assert.Equal(screen.Height, menu.ScreenHeight);
     }
 }

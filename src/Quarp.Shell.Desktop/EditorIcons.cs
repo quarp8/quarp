@@ -45,6 +45,18 @@ public enum EditorButton
     /// </summary>
     SizeToggle,
 
+    /// <summary>
+    /// The brush-size toggle, at the foot of the tool column: its face is the current brush
+    /// side as text ("1".."4"), a click opens the 1/2/3/4 list through the same flyout machinery
+    /// the size toggle uses, and <c>-</c>/<c>=</c> walk it. It is TIC-80's brush slider
+    /// (<c>drawBrushSlider</c>, tooltip <c>BRUSH SIZE</c>) and LIKO-12's Size slider
+    /// (REFERENCES-EDITORS §2.1, §2.2) in the shape this console can afford: a four-position
+    /// slider needs a track and a thumb, and the tool column's spare slot is ten pixels square,
+    /// so the control that already exists here for exactly this job — a text-faced group slot
+    /// with a list — is reused rather than a second kind of control invented.
+    /// </summary>
+    BrushToggle,
+
     // The five layer tabs above the sheet window (wave 2h, ADR-027): text-faced digits 1-5,
     // the active one highlighted; PgUp/PgDn are their keyboard half.
     LayerTab1,
@@ -582,6 +594,20 @@ public static class EditorIcons
     };
 
     /// <summary>
+    /// Which screen a numbered tab key means: 1 is the leftmost tab, 5 the rightmost — TIC-80's
+    /// <c>F1..F5</c> (REFERENCES-EDITORS §8 item 16), and the whole of what
+    /// <see cref="ShellCommands.EditorTabJump"/> means.
+    ///
+    /// <para>Answered off <see cref="LiveEditorTabs"/> and not off a second list, which is the
+    /// only reason this method exists at all: the named key and the Alt+Left/Right ring must
+    /// count the tabs in the same order, or F3 would land on one screen and two presses of
+    /// Alt+Right on another. A number outside the strip answers null rather than clamping — a
+    /// sixth key that means "the fifth editor" is a key that lies.</para>
+    /// </summary>
+    public static ShellMode? EditorTabForNumber(int number) =>
+        number >= 1 && number <= LiveEditorTabs.Count ? LiveEditorTabs[number - 1] : null;
+
+    /// <summary>
     /// Which of the two editor screens places a button. One owner, because a single enum now
     /// serves two layouts and "forgot to place it" must stay a red test rather than a missing
     /// button: <see cref="SpriteEditorLayout"/> places everything this answers true for, and
@@ -671,15 +697,17 @@ public static class EditorIcons
     /// </summary>
     public static bool IsGroupSlot(EditorButton button) => button is
         EditorButton.ToolSelect or EditorButton.ToolShape or EditorButton.ToolTransform
-        or EditorButton.SizeToggle;
+        or EditorButton.SizeToggle or EditorButton.BrushToggle;
 
     /// <summary>
-    /// The one group slot whose short click opens its flyout instead of acting (wave 2h):
-    /// the size toggle's only verb IS choosing from the list, so "click = list" (the owner's
-    /// card) and there is no separate click action to perform. The shell and the button
-    /// contract test both consult this, so the dispatch cannot drift between them.
+    /// The group slots whose short click opens the flyout instead of acting (wave 2h): the size
+    /// toggle's only verb IS choosing from the list, so "click = list" (the owner's card) and
+    /// there is no separate click action to perform. <see cref="EditorButton.BrushToggle"/>
+    /// joined it for the identical reason — a brush size is a choice, not an act. The shell and
+    /// the button contract test both consult this, so the dispatch cannot drift between them.
     /// </summary>
-    public static bool ClickOpensFlyout(EditorButton button) => button == EditorButton.SizeToggle;
+    public static bool ClickOpensFlyout(EditorButton button) =>
+        button is EditorButton.SizeToggle or EditorButton.BrushToggle;
 
     /// <summary>How many variants a group slot's flyout shows; 0 for everything that is not a group.</summary>
     public static int GroupVariantCount(EditorButton button) => button switch
@@ -688,8 +716,22 @@ public static class EditorIcons
         EditorButton.ToolShape => 2,        // ShapeVariant: oval, rectangle
         EditorButton.ToolTransform => 3,    // TransformVariant: flip H, flip V, rotate
         EditorButton.SizeToggle => 3,       // region sides: 1, 2, 4 cells — 8/16/32 px (2h)
+        // The brush ladder's length is the SESSION's fact, not a number repeated here: TIC-80's
+        // BRUSH_SIZES is what the flyout must be as long as, and one owner of it is what keeps
+        // a fifth step from shipping with a four-button list.
+        EditorButton.BrushToggle => SpriteEditorSession.BrushSizeCount,
         _ => 0,
     };
+
+    /// <summary>The brush list's variant → brush side in pixels; the session owns the ladder, this is only the index into it.</summary>
+    public static int BrushVariantSize(int variant) => SpriteEditorSession.BrushSizeAt(variant);
+
+    /// <summary>Brush side in pixels → the brush list's variant index. Inverse of <see cref="BrushVariantSize"/>.</summary>
+    public static int BrushVariantOf(int size) => SpriteEditorSession.BrushIndexOf(size);
+
+    /// <summary>The brush side a slot shows as text — "1".."4", the toggle's face and the list's labels alike.</summary>
+    public static string BrushLabel(int size) =>
+        size.ToString(System.Globalization.CultureInfo.InvariantCulture);
 
     /// <summary>
     /// The size list's variant → region side in cells (1, 2, 4) — with <see cref="SizeVariantOf"/>
@@ -718,6 +760,7 @@ public static class EditorIcons
         return button switch
         {
             EditorButton.SizeToggle => SizeLabel(session.RegionCells),
+            EditorButton.BrushToggle => BrushLabel(session.BrushSize),
             EditorButton.LayerTab1 or EditorButton.LayerTab2 or EditorButton.LayerTab3
                 or EditorButton.LayerTab4 or EditorButton.LayerTab5 =>
                 (button - EditorButton.LayerTab1 + 1).ToString(System.Globalization.CultureInfo.InvariantCulture),
@@ -740,6 +783,7 @@ public static class EditorIcons
             EditorButton.ToolSelect => (int)session.CurrentSelection,
             EditorButton.ToolShape => (int)session.CurrentShape,
             EditorButton.SizeToggle => SizeVariantOf(session.RegionCells),
+            EditorButton.BrushToggle => BrushVariantOf(session.BrushSize),
             _ => (int)session.CurrentTransform,
         };
     }
@@ -786,6 +830,21 @@ public static class EditorIcons
         _ => throw new ArgumentOutOfRangeException(nameof(variant), (slot, variant), "not a group slot variant."),
     };
 
+    /// <summary>
+    /// The text a flyout variant shows instead of a glyph, or null when the variant wears an
+    /// icon — <see cref="ButtonText"/>'s twin one level down, and there for the same reason:
+    /// the renderer must not carry a list of which slots are text-faced. Before this existed
+    /// <c>DrawFlyout</c> branched on <c>slot == SizeToggle</c> by name, which is exactly the
+    /// shape of the bug <see cref="Face"/> was written to end (a second text-faced slot lands
+    /// and the drawing code asks <see cref="VariantIcon"/> for a glyph that throws).
+    /// </summary>
+    public static string? VariantText(EditorButton slot, int variant) => slot switch
+    {
+        EditorButton.SizeToggle => SizeLabel(SizeVariantCells(variant)),
+        EditorButton.BrushToggle => BrushLabel(BrushVariantSize(variant)),
+        _ => null,
+    };
+
     /// <summary>Flyout variant tooltips — the 3-second hover contract extends to variants, and each names its key path.</summary>
     public static string VariantTooltip(EditorButton slot, int variant) => (slot, variant) switch
     {
@@ -799,6 +858,10 @@ public static class EditorIcons
         (EditorButton.ToolTransform, (int)TransformVariant.Rotate) => "ROTATE 90  R",
         (EditorButton.SizeToggle, 0 or 1 or 2) =>
             $"{SizeLabel(SizeVariantCells(variant))} PX SPRITE  TAB CYCLES",
+        // The brush list. Its bound is the session's ladder length, not a literal range like the
+        // size list's above: a fifth step must widen the list here without a second edit.
+        (EditorButton.BrushToggle, _) when variant >= 0 && variant < SpriteEditorSession.BrushSizeCount =>
+            $"{BrushLabel(BrushVariantSize(variant))} PX BRUSH  - AND = CYCLE",
         _ => throw new ArgumentOutOfRangeException(nameof(variant), (slot, variant), "not a group slot variant."),
     };
 
@@ -833,8 +896,9 @@ public static class EditorIcons
         // The clean face; the sound renderer swaps in EditorIcon.Stop while the slot sounds,
         // exactly as it swaps Save's two faces — one identity, two faces, one owner of the pick.
         EditorButton.ToolPlay => EditorIcon.Play,
-        // The text-faced buttons (size toggle, layer tabs) have no glyph on purpose — the
-        // renderer branches on ButtonText before ever asking here, so reaching this is a bug.
+        // The text-faced buttons (size toggle, brush toggle, layer tabs) have no glyph on
+        // purpose — the renderer branches on ButtonText before ever asking here, so reaching
+        // this is a bug.
         _ => throw new ArgumentOutOfRangeException(nameof(button), button, "a text-faced button has no icon (ButtonText owns its face)."),
     };
 
@@ -846,14 +910,18 @@ public static class EditorIcons
     public static string Tooltip(EditorButton button) => button switch
     {
         EditorButton.ExitTab => "EXIT  ESC",
-        EditorButton.CodeTab => "CODE  ALT+LEFT/RIGHT WALK THE TABS",
-        EditorButton.SpritesTab => "SPRITES  HOME SWITCHES   ALT+LEFT/RIGHT WALK THE TABS",
-        EditorButton.TilemapTab => "MAPS  HOME SWITCHES   ALT+LEFT/RIGHT WALK THE TABS",
-        EditorButton.SoundTab => "SOUNDS  ALT+LEFT/RIGHT WALK THE TABS",
-        EditorButton.MusicTab => "MUSIC  ALT+LEFT/RIGHT WALK THE TABS",
+        EditorButton.CodeTab => "CODE  F1-F5 JUMP, ALT+LEFT/RIGHT WALK THE TABS",
+        EditorButton.SpritesTab => "SPRITES  HOME SWITCHES   F1-F5 JUMP, ALT+LEFT/RIGHT WALK THE TABS",
+        EditorButton.TilemapTab => "MAPS  HOME SWITCHES   F1-F5 JUMP, ALT+LEFT/RIGHT WALK THE TABS",
+        EditorButton.SoundTab => "SOUNDS  F1-F5 JUMP, ALT+LEFT/RIGHT WALK THE TABS",
+        EditorButton.MusicTab => "MUSIC  F1-F5 JUMP, ALT+LEFT/RIGHT WALK THE TABS",
         EditorButton.ToolSelect => "SELECT  1 CYCLES   DRAG MARKS, GRAB INSIDE MOVES, ESC DROPS",
         EditorButton.ToolPencil => "PENCIL  2   ARROWS MOVE, Z/SPACE DRAW, X PICK, SHIFT+ARROWS SPRITE",
-        EditorButton.ToolFill => "FILL  3   Z/SPACE FILLS AT THE CURSOR",
+        // The Ctrl clause is TIC-80's replaceColor, hung where TIC-80 hangs it — on the bucket,
+        // not on the pencil where PICO-8's manual puts the same modifier (REFERENCES-EDITORS
+        // §8 item 6). One of the two had to be picked and the bucket is the tool whose whole
+        // subject is "this area", which is what the modifier widens.
+        EditorButton.ToolFill => "FILL  3   Z/SPACE FILLS AT THE CURSOR   CTRL REPLACES THE COLOR EVERYWHERE",
         EditorButton.ToolStamp => "STAMP  4   CLICK/Z PRINTS THE LAST SELECTION",
         EditorButton.ToolShape => "SHAPES  5 CYCLES   DRAG DRAWS, CTRL FILLS, HOLD/RCLICK VARIANTS",
         EditorButton.ToolTransform => "TRANSFORM  6 CYCLES, F/V/R APPLY   CLICK APPLIES, HOLD/RCLICK VARIANTS",
@@ -881,6 +949,10 @@ public static class EditorIcons
         EditorButton.Save => "SAVE  CTRL+S",
         EditorButton.Undo => "UNDO  CTRL+Z",
         EditorButton.SizeToggle => "SPRITE SIZE  TAB CYCLES, CLICK LISTS 8/16/32",
+        // TIC-80's BRUSH SIZE control, keys and all (REFERENCES-EDITORS §2.1). The last clause
+        // is the rule an author would otherwise have to discover by ruining a fill: the ladder
+        // is the pencil's alone.
+        EditorButton.BrushToggle => "BRUSH SIZE  - AND = CYCLE, CLICK LISTS 1-4   PENCIL ONLY",
         EditorButton.LayerTab1 => "LAYER 1  PGUP/PGDN",
         EditorButton.LayerTab2 => "LAYER 2  PGUP/PGDN",
         EditorButton.LayerTab3 => "LAYER 3  PGUP/PGDN",
@@ -911,12 +983,12 @@ public static class EditorIcons
     /// map-only buttons (the eraser, the hand, the grid switch) are in the base table, because
     /// their meaning does not differ between screens — only one screen places them.
     ///
-    /// <para>The two buttonless controls of that screen — the tile picker and the minimap —
-    /// have no <see cref="HoverTarget"/> kind of their own (that type is shared chrome and does
-    /// not fork for one editor), so their key paths are announced on the buttons next to them:
-    /// the picker's on the pencil, the view's travel keys on the tilemap tab. Every key on the
-    /// map screen is therefore reachable from some tooltip, which is what the parity sweep
-    /// checks.</para>
+    /// <para>The four buttonless controls of that screen — the canvas, the tile palette, the
+    /// whole-map view and the position bar — got a <see cref="HoverTarget"/> kind of their own in
+    /// the tooltip wave (<see cref="MapRegion"/>, the twin of <see cref="SfxRegion"/> and
+    /// <see cref="MusicRegion"/>), so their keys are now announced <b>on the control</b> rather
+    /// than borrowed onto a neighbouring button; see <see cref="MapRegionTooltip"/>. The buttons
+    /// below still name their own keys, which is what the live-button parity sweep checks.</para>
     /// </summary>
     public static string MapTooltip(EditorButton button) => button switch
     {
@@ -925,12 +997,57 @@ public static class EditorIcons
             + "   DRAG THE PICKER OR CTRL+SHIFT+ARROWS FOR A BLOCK",
         EditorButton.ToolSelect =>
             "SELECT  3   DRAG MARKS A RECTANGLE, DEL EMPTIES IT, ESC DROPS IT"
-            + "   CTRL+C/X/V COPY, CUT, PASTE",
+            + "   CTRL+C/X/V COPY, CUT, PASTE   F V R FLIP AND ROTATE IT",
         EditorButton.ToolFill =>
-            "FILL  4   Z FILLS THE AREA AT THE CURSOR   RCLICK FILLS WITH TILE 000",
+            "FILL  4   Z FILLS THE AREA AT THE CURSOR   RCLICK FILLS WITH TILE 000"
+            + "   CTRL+CLICK REPLACES THAT TILE EVERYWHERE",
         EditorButton.TilemapTab =>
             "MAPS - ACTIVE   [ ] PAGE ACROSS, PGUP/PGDN PAGE DOWN, HOME SWITCHES TAB",
         _ => Tooltip(button),
+    };
+
+    /// <summary>
+    /// The map viewport's label. It carries the gestures that live nowhere else on this screen —
+    /// the middle button's eyedropper (TIC-80 <c>processMouseDrawMode</c>), Space+drag panning,
+    /// the grid key and the three transform keys — because the viewport is the one control an
+    /// author's pointer is always on and the one that has no button of its own.
+    /// </summary>
+    public const string MapCanvasTooltip =
+        "MAP   Z DRAWS, X OR MCLICK PICKS A TILE, SPACE+DRAG PANS, ` GRID"
+        + "   DEL EMPTIES THE MARK, F V R FLIP AND ROTATE IT";
+
+    /// <summary>
+    /// The tile palette's label — the panel that is only up while Shift is held or its button is
+    /// latched, so the key that raises it has to be readable the moment it IS up.
+    /// </summary>
+    public const string MapTilesTooltip =
+        "TILES   HOLD SHIFT TO SHOW   DRAG PICKS A BLOCK, CTRL+SHIFT+ARROWS SIZE IT"
+        + "   WHEEL FLIPS THE PAGE";
+
+    /// <summary>The whole-map view's label — TIC-80's WORLD MODE, its key and its one gesture.</summary>
+    public const string MapMinimapTooltip =
+        "WHOLE MAP   TAB SHOWS AND HIDES IT   CLICK OR DRAG TRAVELS THERE";
+
+    /// <summary>The position bar's label — the mouse's short road across eighty screens of map.</summary>
+    public const string MapSliderTooltip =
+        "POSITION   CLICK OR DRAG TO TRAVEL   [ ] PAGE ACROSS, PGUP/PGDN PAGE DOWN";
+
+    /// <summary>
+    /// The label of one buttonless control of the map screen — the single lookup its renderer
+    /// hangs a tooltip on, so every key this screen owns is discoverable from the pointer and the
+    /// buttonless sweep has one place to check. <see cref="MapRegion.None"/> never reaches here:
+    /// the hover tracker is fed null instead, and <c>MapEditorRenderer.TooltipText</c> guards a
+    /// stale target from another screen besides — see <see cref="IconHoverTracker.Clear"/> for
+    /// the crash that rule was written on.
+    /// </summary>
+    public static string MapRegionTooltip(MapRegion region) => region switch
+    {
+        MapRegion.Canvas => MapCanvasTooltip,
+        MapRegion.Tiles => MapTilesTooltip,
+        MapRegion.Minimap => MapMinimapTooltip,
+        MapRegion.Slider => MapSliderTooltip,
+        _ => throw new ArgumentOutOfRangeException(
+            nameof(region), region, "MapRegion.None is not a control and has no label."),
     };
 
     /// <summary>
@@ -946,7 +1063,8 @@ public static class EditorIcons
     public static string CodeTooltip(EditorButton button) => button switch
     {
         EditorButton.CodeTab =>
-            "CODE - ACTIVE   ARROWS/HOME/END/PGUP/PGDN MOVE, SHIFT SELECTS, CTRL+ARROWS BY WORD",
+            "CODE - ACTIVE   ARROWS/HOME/END/PGUP/PGDN MOVE, SHIFT SELECTS, CTRL+ARROWS BY WORD, "
+            + "ALT+UP/DOWN BY DECLARATION",
         _ => Tooltip(button),
     };
 
@@ -1158,8 +1276,14 @@ public static class EditorIcons
         }
     }
 
-    /// <summary>Swatch tooltip: the keyboard color mechanism, discoverable where the colors are.</summary>
-    public static string SwatchTooltip(int color) => $"COLOR {color}   , PREV   . NEXT";
+    /// <summary>
+    /// Swatch tooltip: the keyboard color mechanism, discoverable where the colors are — and
+    /// since this screen holds two inks, which button loads which (TIC-80's <c>color</c> and
+    /// <c>color2</c>, REFERENCES-EDITORS §8 item 7). A palette that marks two swatches without
+    /// ever saying why is a puzzle, so the answer lives on the control itself.
+    /// </summary>
+    public static string SwatchTooltip(int color) =>
+        $"COLOR {color}   LCLICK LEFT INK, RCLICK RIGHT INK   , PREV   . NEXT";
 
     /// <summary>
     /// Flag toggle tooltip (wave 3b-2). The bit is 0-based (PICO-8: "indexed from 0 starting
@@ -1496,9 +1620,13 @@ public static class EditorIcons
         }
         else if (slot == EditorButton.SizeToggle)
         {
-            // The one flyout whose pick APPLIES: choosing a size IS the action (there is no
+            // The two flyouts whose pick APPLIES: choosing a size IS the action (there is no
             // "size tool" to arm), unlike the tool groups where the pick is remembered only.
             session.SelectRegionSize(SizeVariantCells(variant));
+        }
+        else if (slot == EditorButton.BrushToggle)
+        {
+            session.SelectBrushSize(BrushVariantSize(variant));
         }
     }
 }

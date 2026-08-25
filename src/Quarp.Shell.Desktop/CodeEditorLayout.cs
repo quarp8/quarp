@@ -62,8 +62,28 @@ namespace Quarp.Shell.Desktop;
 /// Eleven lines by thirty-six columns is 396 characters of code on screen. PICO-8 shows 21x32 =
 /// 672 on a 128x128 screen and TIC-80 about 17x30 = 510 on 240x136, so ours is the smallest page
 /// in the niche — ADR-029 named that as the price of a 90-row console and named the mitigation
-/// with it ("полноэкранный режим без хрома возвращает все 15 строк", PICO-8's own <c>TAB</c>).
-/// That mode is not in this wave; the report carries its numbers.</para>
+/// with it ("полноэкранный режим без хрома возвращает все 15 строк").</para>
+///
+/// <para><b>THE FULLSCREEN ARITHMETIC, and it comes out exact.</b> With the chrome gone the page
+/// is the console: 90 rows / 6 = <b>15 lines</b>, 160 px / 4 = <b>40 columns</b>, 600 characters
+/// — one and a half times the windowed page, and every figure a whole division with no remainder
+/// on either axis. Both numbers depend on there being nothing else on the surface, so fullscreen
+/// takes the scrollbar off too: keeping its three pixels and their gap would have cost the
+/// fortieth column (156 / 4 = 39), which is the one number ADR-029 uses to say we do not lose on
+/// width to anybody. The wheel and PageUp/PageDown are the roads that survive, and they were
+/// always the keyboard's roads anyway.</para>
+///
+/// <para>With the status row summoned (see <see cref="CodeEditorView.StatusBandShown"/>) the
+/// page gives back the six rows below <see cref="ConsoleChrome.StatusRuleY"/> — 84 rows / 6 =
+/// <b>14 lines</b> by the same 40 columns, 560 characters. The band lands on exactly the rows
+/// the chrome's own status band uses, so the readout does not move between the two modes.</para>
+///
+/// <para>ADR-029's own table predicted "12-13" lines for the windowed code screen and 15 for the
+/// fullscreen one. The 15 is exact. The 12-13 was measured against a hypothetical chrome of
+/// "верхняя панель + строка статуса" only; the frame this shell actually grew
+/// (<see cref="ConsoleChrome"/>: top band, three rules, a message line and a status line) costs
+/// more than that, and the windowed page is eleven. The report names the discrepancy rather than
+/// bending either number to meet the other.</para>
 ///
 /// <para><b>Every scale is one.</b> The text is drawn at the system font's own size and the
 /// scrollbar is three pixels wide. There is no fractional scale on this screen and no path that
@@ -104,6 +124,20 @@ public readonly struct CodeEditorLayout
 
     /// <summary>The frame this screen stands in. See <see cref="ConsoleChrome"/>.</summary>
     public ConsoleChrome Chrome { get; private init; }
+
+    /// <summary>
+    /// True when this layout was measured with the chrome off. Kept on the layout rather than
+    /// read off the view by every consumer for the reason the whole struct exists: the renderer
+    /// draws these rectangles and the router hit-tests the same ones, and a screen that was
+    /// <em>drawn</em> fullscreen must never be <em>clicked</em> as if it were not.
+    /// </summary>
+    public bool Fullscreen { get; private init; }
+
+    /// <summary>
+    /// True when fullscreen is carrying its one summoned status row. Always false outside
+    /// fullscreen, where <see cref="ConsoleChrome"/> owns a status band that is always there.
+    /// </summary>
+    public bool StatusBand { get; private init; }
 
     // Forwarded, not recomputed — ConsoleChrome is the only place these exist.
 
@@ -149,15 +183,33 @@ public readonly struct CodeEditorLayout
     /// <summary>How many columns the text field shows — thirty-six. Whole for the same reason.</summary>
     public int VisibleColumns => Text.Width / CharWidth;
 
+    /// <summary>Glyph top of the status readout in either mode — the chrome's own row, so the numbers do not jump between them.</summary>
+    public int StatusTextY => Chrome.StatusTextY;
+
     /// <summary>
     /// The screen's geometry for a console of the given size. The two numbers are <b>console</b>
     /// pixels — 160x90 on profile 8 — and never a window size.
     /// </summary>
-    public static CodeEditorLayout Compute(int screenWidth, int screenHeight)
+    /// <param name="fullscreen">
+    /// Chrome off: no tab strip, no tool column, no scrollbar, no message line — 15x40 instead
+    /// of 11x36 (the type note carries the arithmetic). The flag is a fact of
+    /// <see cref="CodeEditorView"/>; this method only measures what it asks for.
+    /// </param>
+    /// <param name="statusBand">
+    /// Only read when <paramref name="fullscreen"/> is set: keep the bottom six rows for the one
+    /// summoned status row, leaving fourteen lines instead of fifteen.
+    /// </param>
+    public static CodeEditorLayout Compute(
+        int screenWidth, int screenHeight, bool fullscreen = false, bool statusBand = false)
     {
         var buttons = new EditorButtonPlace[11];
         int placed = 0;
         ConsoleChrome chrome = ConsoleChrome.Compute(screenWidth, screenHeight, buttons, ref placed);
+
+        if (fullscreen)
+        {
+            return Full(chrome, screenWidth, screenHeight, statusBand);
+        }
 
         int button = ConsoleChrome.ButtonSize;
         int top = chrome.ContentTop;
@@ -195,6 +247,40 @@ public readonly struct CodeEditorLayout
             Buttons = buttons,
             Text = text,
             ScrollBar = new Rectangle(barX, text.Y, ScrollBarWidth, text.Height),
+        };
+    }
+
+    /// <summary>
+    /// The fullscreen measurement: the page is the console, and the only thing that can take a
+    /// row off it is the summoned status band. No button is placed — deliberately, and it is the
+    /// one thing this mode gives up: with no chrome there is nothing to click, so every control
+    /// in fullscreen is a key and the mode's own key (F11) is how the buttons come back. The
+    /// empty list is what makes <see cref="TryButton"/> answer false instead of hit-testing
+    /// rectangles that are not on the screen.
+    ///
+    /// <para>The floors are the windowed measurement's, for the same reason: a console too small
+    /// for one character is clipped rather than crashed.</para>
+    /// </summary>
+    private static CodeEditorLayout Full(
+        in ConsoleChrome chrome, int screenWidth, int screenHeight, bool statusBand)
+    {
+        // The band sits on the chrome's own status rows (the rule at StatusRuleY and the five
+        // glyph rows under it), so the readout does not move between windowed and fullscreen.
+        int bottom = statusBand ? chrome.StatusRuleY : screenHeight;
+        int roomWidth = Math.Max(SystemFont.CellWidth, screenWidth);
+        int roomHeight = Math.Max(SystemFont.CellHeight, bottom);
+        return new CodeEditorLayout
+        {
+            Chrome = chrome,
+            Fullscreen = true,
+            StatusBand = statusBand,
+            Buttons = Array.Empty<EditorButtonPlace>(),
+            Text = new Rectangle(
+                0,
+                0,
+                roomWidth / SystemFont.CellWidth * SystemFont.CellWidth,
+                roomHeight / SystemFont.CellHeight * SystemFont.CellHeight),
+            ScrollBar = Rectangle.Empty,
         };
     }
 

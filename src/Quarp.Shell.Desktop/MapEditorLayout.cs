@@ -510,4 +510,54 @@ public readonly struct MapEditorLayout
         column = Math.Clamp((x - Slider.X) * MapColumns / Slider.Width, 0, MapColumns - 1);
         return true;
     }
+
+    /// <summary>
+    /// Console point to which <b>buttonless</b> control of this screen is under it, or
+    /// <see cref="MapRegion.None"/> — the map's twin of <see cref="SfxEditorLayout.RegionAt"/>,
+    /// and it exists for the same reason (REFERENCES-EDITORS §8 item 15): the palette, the
+    /// whole-map view, the position bar and the canvas itself have no button to hang a hotkey
+    /// on, and on this screen those four carry the least public gestures in the shell.
+    ///
+    /// <para><b>The order is the press chain's order</b>, control for control
+    /// (<see cref="MapEditorInput"/> tests the strip, then the minimap, then the bar, then the
+    /// map cell), so the label under the pointer and the click under the pointer can never name
+    /// two different things. Buttons are not here at all: the router tests
+    /// <see cref="TryButton"/> first and hands <see cref="HoverTarget.OfButton"/> instead.</para>
+    ///
+    /// <para>The overlay rectangles are <see cref="Rectangle.Empty"/> while their overlay is
+    /// down (see <see cref="Sheet"/>), so a lowered palette answers None with no extra branch;
+    /// the canvas is asked last and only while <see cref="CanvasLive"/>, because a viewport
+    /// under an overlay is drawn over and its cells are not clickable.</para>
+    /// </summary>
+    public MapRegion RegionAt(int x, int y)
+    {
+        if (Sheet.Contains(x, y))
+        {
+            return MapRegion.Tiles;
+        }
+        if (Minimap.Contains(x, y))
+        {
+            return MapRegion.Minimap;
+        }
+        if (Slider.Contains(x, y))
+        {
+            return MapRegion.Slider;
+        }
+        return CanvasLive && Canvas.Contains(x, y) ? MapRegion.Canvas : MapRegion.None;
+    }
+
+    /// <summary>
+    /// The rectangle a region's label names — the same box <see cref="RegionAt"/> answered from,
+    /// and <see cref="Rectangle.Empty"/> for a control this layout is not showing. Empty rather
+    /// than "the rectangle it would have", by this struct's standing rule (see
+    /// <see cref="Sheet"/>): a control that is not on screen has no place on it.
+    /// </summary>
+    public Rectangle RegionRect(MapRegion region) => region switch
+    {
+        MapRegion.Canvas => CanvasLive ? Canvas : Rectangle.Empty,
+        MapRegion.Tiles => Sheet,
+        MapRegion.Minimap => Minimap,
+        MapRegion.Slider => Slider,
+        _ => Rectangle.Empty,
+    };
 }

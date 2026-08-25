@@ -141,9 +141,11 @@ public static class MusicEditorRenderer
     public static string? StandingNotice(MusicEditorSession session)
     {
         ArgumentNullException.ThrowIfNull(session);
-        return session.BankReadOnly
-            ? $"READ-ONLY: {MusicEditorSession.MusicSourceFileName.ToUpperInvariant()} OWNS THIS SONG"
-            : null;
+        // The clipboard's refusal wins, on all four screens — see SfxEditorRenderer.StandingNotice.
+        return session.ClipboardNotice
+            ?? (session.BankReadOnly
+                ? $"READ-ONLY: {MusicEditorSession.MusicSourceFileName.ToUpperInvariant()} OWNS THIS SONG"
+                : null);
     }
 
     /// <summary>
@@ -153,11 +155,24 @@ public static class MusicEditorRenderer
     /// <see cref="EditorIcons.MusicRegionTooltip"/>, which is where this screen's keys are
     /// announced. The cut to the field's width belongs to <see cref="ConsoleChrome.FitTooltip"/>,
     /// the only thing that knows how wide the field is.
+    ///
+    /// <para><b>A target this screen does not recognise means "no label", never an exception.</b>
+    /// The tracker is cleared the moment the screen changes (<see cref="IconHoverTracker.Clear"/>
+    /// carries the crash this rule answers), so a foreign target should not arrive here at all —
+    /// this is the second lock on the same door. It is worth having because the caller is
+    /// <c>Draw</c>: an exception thrown while painting a frame reaches nothing that can recover,
+    /// and the console dies with the author's unsaved work still on screen. No tooltip is worth
+    /// that. Returning null is what the field already does when nothing is hovered, so the
+    /// degraded picture is one the eye has seen before.</para>
     /// </summary>
-    public static string TooltipText(in HoverTarget target) =>
-        target.Button is EditorButton button
-            ? EditorIcons.MusicTooltip(button)
-            : EditorIcons.MusicRegionTooltip(target.Music);
+    public static string? TooltipText(in HoverTarget target)
+    {
+        if (target.Button is EditorButton button)
+        {
+            return EditorIcons.MusicTooltip(button);
+        }
+        return target.Music is MusicRegion.None ? null : EditorIcons.MusicRegionTooltip(target.Music);
+    }
 
     /// <summary>
     /// The channel header: a number and two toggles per channel, and the rule under the band. A

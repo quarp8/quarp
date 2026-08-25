@@ -24,7 +24,10 @@ namespace Quarp.Shell.Desktop;
 /// showed at 1280x720. <see cref="CodeEditorLayout"/> carries the whole arithmetic and the four
 /// decisions behind it (which font, where the eleventh line came from, why there is no
 /// line-number gutter, what the tool column costs). ADR-029 accepted this as the price of a
-/// 90-row console before any of it was written.</para>
+/// 90-row console before any of it was written — and named the mitigation in the same breath.
+/// That mitigation is here now: <b>F11</b> takes the chrome off and the page becomes the console,
+/// fifteen lines by forty columns, 600 characters. <see cref="DrawFullscreen"/> is the whole of
+/// what that costs this file.</para>
 ///
 /// <para><b>Nothing was dropped, and here is the roll call</b> (the wave's law: if a control
 /// went under a key, it gets named). Find: its button, <c>Ctrl+F</c>, <c>Ctrl+G</c> or
@@ -32,9 +35,26 @@ namespace Quarp.Shell.Desktop;
 /// Save, undo, redo: buttons in the tool column and their usual chords. Selection: the mouse
 /// drag, <c>Shift</c> with any movement key, <c>Ctrl+A</c>. Clipboard: <c>Ctrl+C</c> /
 /// <c>Ctrl+X</c> / <c>Ctrl+V</c>. Travel: arrows, <c>Ctrl+arrows</c> by word, Home/End,
-/// <c>Ctrl+Home/End</c>, PgUp/PgDn, the wheel over the text and the scrollbar. The one control
+/// <c>Ctrl+Home/End</c>, PgUp/PgDn, <c>Alt+Up/Down</c> by declaration, the wheel over the text
+/// and the scrollbar. Tabs: their five buttons, <c>Alt+Left/Right</c> and <c>F1..F5</c>. The one control
 /// that <em>left</em> is the line-number gutter, and with it the click that put the caret at a
-/// line's start — that click is Home, and the pixels became six more columns of code.</para>
+/// line's start — that click is Home, and the pixels became six more columns of code. Fullscreen:
+/// <c>F11</c>, and <c>Shift+F11</c> for its one status row.</para>
+///
+/// <para><b>No on-screen outline list, and that is a measurement rather than an opinion.</b>
+/// REFERENCES-EDITORS §8 item 14 asks for three things — find, go-to-line and a list of
+/// functions. The first two are here; the third is not, and here is the arithmetic. TIC-80's
+/// outline (<c>TEXT_OUTLINE_MODE</c>, <c>Ctrl+O</c>) is a <em>mode</em>: it takes the whole code
+/// area, owns the keyboard while it is up, scrolls, is clicked, and has its own way out. On this
+/// screen the code area is eleven lines by thirty-six columns and the one message line already
+/// has three tenants in a precedence order (<see cref="StandingNotice"/>); a list that covered
+/// the page would need its own rectangle, its own scroll, its own hit test, its own Esc rung and
+/// its own button — which is a second window on a 160x90 console, exactly what the order
+/// excluded. So the wave takes the other half of the same item, the half two of the three
+/// references make the primary tool: <b>Alt+Up / Alt+Down</b> walk the declarations directly
+/// (<see cref="CodeEditorSession.IsDeclarationLine"/> owns what one is). The list is not
+/// cancelled, it is unfunded: when it comes it comes as a mode of its own, with a layout, a
+/// router and a golden picture, and not as three lines smuggled into a renderer.</para>
 ///
 /// <para><b>No syntax highlighting in this wave, and it is not an oversight.</b> LIKO-12 has it
 /// (<c>Libraries.SyntaxHighlighter</c>, a nine-colour theme) and TIC-80 has it per language;
@@ -63,11 +83,21 @@ public static class CodeEditorRenderer
     /// <summary>What the tooltip field says when no control is hovered — TIC-80's <c>Names[mode]</c>.</summary>
     public const string ScreenName = "CODE";
 
-    /// <summary>The layout this screen is drawn with; the router asks for the same one, so picture and clicks cannot disagree.</summary>
-    public static CodeEditorLayout LayoutFor(ShellScreen screen)
+    /// <summary>
+    /// The layout this screen is drawn with; the router asks for the same one, so picture and
+    /// clicks cannot disagree. It takes the view and the session because since the fullscreen
+    /// wave the geometry has two more inputs than the screen's size —
+    /// <see cref="CodeEditorView.Fullscreen"/> and <see cref="CodeEditorView.StatusBandShown"/>
+    /// — and the whole point of one owner is that both channels read them from the same place.
+    /// </summary>
+    public static CodeEditorLayout LayoutFor(
+        ShellScreen screen, CodeEditorSession session, CodeEditorView view)
     {
         ArgumentNullException.ThrowIfNull(screen);
-        return CodeEditorLayout.Compute(screen.Width, screen.Height);
+        ArgumentNullException.ThrowIfNull(session);
+        ArgumentNullException.ThrowIfNull(view);
+        return CodeEditorLayout.Compute(
+            screen.Width, screen.Height, view.Fullscreen, view.StatusBandShown(session));
     }
 
     /// <summary>
@@ -89,10 +119,15 @@ public static class CodeEditorRenderer
     {
         ArgumentNullException.ThrowIfNull(session);
         ArgumentNullException.ThrowIfNull(view);
-        CodeEditorLayout layout = LayoutFor(screen);
+        CodeEditorLayout layout = LayoutFor(screen, session, view);
         VirtualConsole console = screen.Console;
         screen.Begin();
         console.Cls(Ink);
+
+        if (layout.Fullscreen)
+        {
+            return DrawFullscreen(console, layout, session, view, timeSeconds);
+        }
 
         DrawBands(console, layout.Chrome);
         DrawSelection(console, layout, session, view);
@@ -102,7 +137,7 @@ public static class CodeEditorRenderer
         DrawButtons(console, layout, session, view, hover);
         // The readouts: where the caret is, in the numbers a compiler error names, and how much
         // of the code budget is spent.
-        DrawStatusText(console, layout.Chrome, Coordinates(session), Budget(session));
+        DrawStatusText(console, layout.Chrome, Coordinates(session), Budget(session), BudgetInk(session));
         DrawMessageLine(
             console, layout.Chrome, view.ExitPromptShown, session.SaveError, StandingNotice(session, view));
         DrawTooltipField(
@@ -112,6 +147,82 @@ public static class CodeEditorRenderer
                 : null,
             ScreenName);
         return layout;
+    }
+
+    /// <summary>
+    /// One frame with the chrome off (F11): the console <em>is</em> the page — fifteen lines of
+    /// forty columns, and fourteen while the status row is summoned. Three of the windowed
+    /// screen's six painters are simply not called, and that is the whole implementation: no
+    /// bands, no buttons, no tooltip field, no scrollbar. Nothing is drawn in a second place or
+    /// by a second rule — the selection, the glyphs and the caret come off the same three
+    /// methods and the same <see cref="CodeEditorLayout"/> rectangles the windowed screen uses,
+    /// which is why a fullscreen page can never disagree with a windowed one about where a
+    /// character sits inside its cell.
+    ///
+    /// <para><b>The band and the windowed status line now say the same thing in the same hue.</b>
+    /// TIC-80's <c>drawStatus</c> turns the size readout red past the limit
+    /// (<c>code->status.color = codeLen > MAX_CODE ? tic_color_red : tic_color_white</c>,
+    /// REFERENCES-EDITORS §8 item 13). This band, which belongs to the code screen alone, took
+    /// that red first; the windowed line went without it for as long as
+    /// <see cref="ConsoleChromeRenderer.DrawStatusText"/> took no colour. It takes one now — an
+    /// optional one, defaulting to what it always drew — so both surfaces read the same
+    /// expression, <see cref="BudgetInk"/>, and neither can drift from the other.</para>
+    /// </summary>
+    private static CodeEditorLayout DrawFullscreen(
+        VirtualConsole console, in CodeEditorLayout layout, CodeEditorSession session,
+        CodeEditorView view, double timeSeconds)
+    {
+        DrawSelection(console, layout, session, view);
+        DrawText(console, layout, session, view);
+        DrawCaret(console, layout, session, view, timeSeconds);
+        if (!layout.StatusBand)
+        {
+            return layout;
+        }
+
+        // The band's own rule, on the row the chrome puts one on: without it the bottom line of
+        // code and the readout would touch, and the reader could not tell which was which.
+        ConsoleChrome chrome = layout.Chrome;
+        console.RectFill(0, chrome.StatusRuleY, chrome.ScreenWidth, 1, Dim);
+
+        // One row, one tenant, in the same precedence the message line uses windowed: whatever
+        // called the band up gets to speak on it, and the coordinates are the fallback tenant.
+        // LIKO-12's ISRCH: replacing its line counter is this behaviour at the reference
+        // (REFERENCES-EDITORS §4.2); see CodeEditorView.StatusBandShown for the whole argument.
+        if (StandingNotice(session, view) is string notice)
+        {
+            console.Print(chrome.FitLine(notice), ConsoleChrome.Margin, layout.StatusTextY, Warn);
+            return layout;
+        }
+        string budget = Budget(session);
+        console.Print(Coordinates(session), ConsoleChrome.Margin, layout.StatusTextY, Text);
+        console.Print(
+            budget,
+            chrome.ScreenWidth - ConsoleChrome.Margin - budget.Length * SystemFont.CellWidth,
+            layout.StatusTextY,
+            BudgetInk(session));
+        return layout;
+    }
+
+    /// <summary>
+    /// What colour the budget readout is drawn in, and the whole of TIC-80's
+    /// <c>code->status.color = codeLen > MAX_CODE ? tic_color_red : tic_color_white</c>
+    /// (REFERENCES-EDITORS §8 item 13) in one expression. <b>Red means exactly what it means
+    /// there and nothing more: the buffer is past the limit.</b> Not "unsaved" (that is the save
+    /// icon's yellow), not "a save failed" (that is the message line's own red sentence) — a
+    /// status hue that meant three things would mean none of them.
+    ///
+    /// <para>One owner for both surfaces: the windowed status line hands it to
+    /// <see cref="ConsoleChromeRenderer.DrawStatusText"/>'s optional colour and the fullscreen
+    /// band prints with it directly, so the two cannot disagree about when the number is
+    /// alarming. <see cref="CodeEditorSession.ByteCount"/> and not <see cref="CodeEditorSession.MeasureBudgetBytes"/>
+    /// because this runs every frame and the readout beside it is the same number — the hue and
+    /// the digits must agree with each other before either agrees with the loader.</para>
+    /// </summary>
+    public static byte BudgetInk(CodeEditorSession session)
+    {
+        ArgumentNullException.ThrowIfNull(session);
+        return session.ByteCount > CodeEditorSession.MaxByteCount ? Error : Bright;
     }
 
     /// <summary>
@@ -135,12 +246,12 @@ public static class CodeEditorRenderer
     /// 22 — 22 + 18 is 40, one more than there is — so the ratio stands alone, right-aligned to
     /// the screen's edge where a number that gains a digit does not shove its neighbour.
     ///
-    /// <para><b>The other half of TIC-80's field did not survive and is named here.</b> Its
-    /// <c>drawStatus</c> turns the size red past the limit; the console's status painter
-    /// (<see cref="ConsoleChromeRenderer.DrawStatusText"/>) takes no colour, because one owner
-    /// of the status line for four screens is worth more than one screen's red. The overflow is
-    /// still announced, on the message line, by <see cref="StandingNotice"/> — which says how
-    /// many bytes over and what happens, and is a sentence rather than a hue.</para>
+    /// <para><b>The other half of TIC-80's field is here too now.</b> Its <c>drawStatus</c> turns
+    /// the size red past the limit, and so does this one — <see cref="BudgetInk"/> owns the
+    /// choice and hands it to the shared painter's optional colour, which four screens leave
+    /// alone. The sentence has not been replaced by the hue: <see cref="StandingNotice"/> still
+    /// says how many bytes over and what will happen, because a colour cannot say a number and
+    /// somebody reading this screen may not see red at all.</para>
     /// </summary>
     public static string Budget(CodeEditorSession session)
     {

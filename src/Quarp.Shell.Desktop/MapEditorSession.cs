@@ -168,6 +168,26 @@ public sealed class MapEditorSession
     /// <summary>Why the last save failed, or null. A save the author believes happened but did not is data loss, so it has to be sayable.</summary>
     public string? SaveError { get; private set; }
 
+    /// <summary>
+    /// What the last clipboard verb refused to do, or null — the sentence
+    /// <c>MapEditorRenderer.StandingNotice</c> puts on the message line. Lives on the session
+    /// rather than on <see cref="MapEditorView"/> so that all four editors report a refusal
+    /// through the same road their <see cref="SaveError"/> already travels, and so that the
+    /// renderer's standing-line signature does not have to grow a second argument.
+    ///
+    /// <para>Transient: every clipboard verb clears it on the way in, so it describes the last
+    /// Ctrl+C/X/V and never a stale complaint.</para>
+    ///
+    /// <para><b>The name stayed, the job grew.</b> Since the transform wave it also carries the
+    /// refusals of F, V and R (nothing marked; a non-square rectangle under R). The property was
+    /// <em>not</em> renamed, because <c>ClipboardNotice</c> is the name all four editor sessions
+    /// give this one channel, and one screen spelling it differently would make "where does a
+    /// refusal go" a question with two answers. It is, and always was, the screen's single
+    /// transient message line — <see cref="MapEditorRenderer.StandingNotice"/> reads it and
+    /// nothing else writes it.</para>
+    /// </summary>
+    public string? ClipboardNotice { get; private set; }
+
     /// <summary>Tile byte at a map cell. Out-of-map coordinates throw: the viewport clamps its own loops, and a silent 0 here would hide a windowing bug.</summary>
     public byte TileAt(int cellX, int cellY)
     {
@@ -304,6 +324,178 @@ public sealed class MapEditorSession
     public void Fill(int cellX, int cellY) => Fill(cellX, cellY, SelectedSprite);
 
     /// <summary>
+    /// The bucket's <b>second half</b>: every cell holding the value under the cursor becomes
+    /// <paramref name="tile"/>, connected or not (REFERENCES-EDITORS §8 item 6). TIC-80 hangs it
+    /// on Ctrl over the fill tool — <c>processMouseFillMode</c> calls <c>replaceTile</c> instead
+    /// of <c>fillMap</c> while Ctrl is down (§3.1) — and this shell already carries exactly that
+    /// pair one bank over, <see cref="SpriteEditorSession.Fill"/> beside
+    /// <see cref="SpriteEditorSession.ReplaceColor"/>, on exactly that key. Two banks, one rule
+    /// for the author to learn.
+    ///
+    /// <para><b>Its border is the whole map</b>, because that is what the reference says the
+    /// unmarked case means (§3.1: «замена по всей карте/выделению»). The marked case is the
+    /// overload below; which of the two applies is <see cref="MapEditorPaint"/>'s call, since
+    /// the marked rectangle lives on <see cref="MapEditorView"/> and this class must not know a
+    /// screen exists.</para>
+    ///
+    /// <para><b>What is deliberately NOT copied from TIC-80.</b> Its <c>replaceTile</c> lays the
+    /// whole <c>sheet.rect</c> block down and keeps the pattern's phase with <c>moduloWrap</c>.
+    /// Ours lays one tile, because <see cref="Fill"/> lays one tile: the two halves of one tool
+    /// must put down the same thing, or Ctrl would quietly change what the bucket paints as well
+    /// as where.</para>
+    ///
+    /// <para>One undo step, like a fill; and replacing a value with itself changes nothing, so it
+    /// never happened as far as undo and dirt are concerned. Unlike the fill, no scan is needed
+    /// before the snapshot — the seed cell <em>is</em> one of the cells holding the target, so at
+    /// least it changes.</para>
+    /// </summary>
+    public void ReplaceTile(int cellX, int cellY, int tile) =>
+        ReplaceTile(cellX, cellY, tile, 0, 0, MapColumns, MapRows);
+
+    /// <summary>
+    /// Replace inside one rectangle — the marked half of the rule above. The seed cell is read
+    /// wherever it is (the author may click outside the mark and still mean "this value"), and
+    /// only cells inside the rectangle are written. A rectangle with no area is a no-op rather
+    /// than a throw, like <see cref="ClearArea"/>'s; a rectangle that leaves the map IS a throw,
+    /// for the same reason painting outside it is.
+    /// </summary>
+    public void ReplaceTile(
+        int cellX, int cellY, int tile, int areaX, int areaY, int areaWidth, int areaHeight)
+    {
+        ClipboardNotice = null;     // transient: this verb's own answer, never the last one's
+        RequireWritableMap();
+        ValidateCell(cellX, cellY);
+        ValidateSprite(tile);
+        if (areaWidth <= 0 || areaHeight <= 0)
+        {
+            return;
+        }
+        ValidateCell(areaX, areaY);
+        ValidateCell(areaX + areaWidth - 1, areaY + areaHeight - 1);
+        byte target = _map[cellY * MapColumns + cellX];
+        byte replacement = (byte)tile;
+        if (target == replacement)
+        {
+            return;
+        }
+        EndStroke();        // an operation is its own step: whatever gesture was open commits first
+        BeginStroke();
+        for (int y = areaY; y < areaY + areaHeight; y++)
+        {
+            for (int x = areaX; x < areaX + areaWidth; x++)
+            {
+                int offset = y * MapColumns + x;
+                if (_map[offset] == target)
+                {
+                    WriteCell(offset, replacement);
+                }
+            }
+        }
+        EndStroke();
+    }
+
+    // ---- flip and rotate, over a marked rectangle (REFERENCES-EDITORS §8 item 10) ----
+
+    /// <summary>
+    /// <c>F</c>: mirror a rectangle of the map left↔right, as <b>one</b> undo step. The sprite
+    /// editor's <see cref="SpriteEditorSession.FlipHorizontal"/>, one bank over and on the same
+    /// key (PICO-8's <c>F</c>/<c>V</c>/<c>R</c>, REFERENCES-EDITORS §2.3 and §8 item 10; TIC-80
+    /// spends 5/6/7 on the same three verbs for its own selection).
+    ///
+    /// <para>A symmetric rectangle is a no-op and stays invisible — the writer below only counts
+    /// bytes that actually move, so an idle transform pushes no undo step, exactly as an idle
+    /// pencil click does not.</para>
+    /// </summary>
+    public void FlipAreaHorizontal(int cellX, int cellY, int width, int height) =>
+        TransformArea(
+            cellX, cellY, width, height,
+            static (source, w, _, x, y) => source[(y * w) + (w - 1 - x)]);
+
+    /// <summary><c>V</c>: mirror a rectangle of the map top↔bottom. <see cref="FlipAreaHorizontal"/>'s twin.</summary>
+    public void FlipAreaVertical(int cellX, int cellY, int width, int height) =>
+        TransformArea(
+            cellX, cellY, width, height,
+            static (source, w, h, x, y) => source[((h - 1 - y) * w) + x]);
+
+    /// <summary>
+    /// <c>R</c>: rotate a rectangle of the map 90° clockwise — the top row becomes the right
+    /// column — as one undo step.
+    ///
+    /// <para><b>The decision about a non-square block, in words.</b> A rotation turns a w×h block
+    /// into an h×w one, so on anything but a square it either writes cells the author never
+    /// marked, or drops cells the author did mark, or runs off the map's edge; all three are
+    /// silent data loss on a 256x72 level. So <b>a non-square selection is refused</b>, and the
+    /// message line says why. That is PICO-8's rule verbatim — its manual lists <c>R</c> as
+    /// «Rotate (requires a square selection)» (REFERENCES-EDITORS §2.3) — and it is the rule
+    /// this shell's own sprite editor already lives by, where
+    /// <see cref="SpriteEditorSession.RotateClockwise"/> is legal only because its region is
+    /// square by construction. TIC-80's map editor offers nothing to copy here: it has no
+    /// transform at all (§3.1 lists four tools and no flip), and its <em>sprite</em> rotate turns
+    /// a square canvas. Refusing loudly beats the alternatives because the author can then make
+    /// the mark square and press R again — no undo, no lost tiles, no surprise.</para>
+    /// </summary>
+    /// <returns>True when the rectangle was rotated; false when it was refused as non-square.</returns>
+    public bool RotateAreaClockwise(int cellX, int cellY, int width, int height)
+    {
+        ClipboardNotice = null;
+        RequireWritableMap();
+        if (width <= 0 || height <= 0)
+        {
+            return false;
+        }
+        if (width != height)
+        {
+            ClipboardNotice = "ROTATE: SELECTION MUST BE SQUARE";
+            return false;
+        }
+        TransformArea(
+            cellX, cellY, width, height,
+            static (source, w, _, x, y) => source[((w - 1 - x) * w) + y]);
+        return true;
+    }
+
+    /// <summary>
+    /// The one body all three transforms share: read the rectangle out whole, then write every
+    /// cell of it back through the one writer, as a single undo step. Read whole first because a
+    /// transform is not a per-cell map — a flip reads the cell it is about to overwrite — and a
+    /// second copy of "snapshot, end, begin, write, end" per verb is how three verbs come to
+    /// disagree about what one step means.
+    /// </summary>
+    /// <param name="pick">Source block, its width, its height, and the destination cell — returns the byte that lands there.</param>
+    private void TransformArea(
+        int cellX, int cellY, int width, int height, Func<byte[], int, int, int, int, byte> pick)
+    {
+        ClipboardNotice = null;
+        RequireWritableMap();
+        if (width <= 0 || height <= 0)
+        {
+            return;
+        }
+        ValidateCell(cellX, cellY);
+        ValidateCell(cellX + width - 1, cellY + height - 1);
+        var source = new byte[width * height];
+        for (int row = 0; row < height; row++)
+        {
+            for (int column = 0; column < width; column++)
+            {
+                source[(row * width) + column] = _map[((cellY + row) * MapColumns) + cellX + column];
+            }
+        }
+        EndStroke();
+        BeginStroke();
+        for (int row = 0; row < height; row++)
+        {
+            for (int column = 0; column < width; column++)
+            {
+                WriteCell(
+                    ((cellY + row) * MapColumns) + cellX + column,
+                    pick(source, width, height, column, row));
+            }
+        }
+        EndStroke();
+    }
+
+    /// <summary>
     /// <c>Del</c> over a marked rectangle: every cell in it becomes <see cref="EmptyTile"/>,
     /// as one undo step. TIC-80's <c>deleteSelection</c> (REFERENCES-EDITORS §7.3), including
     /// its shape — the editor has no eraser tool, it has this and a tile numbered zero. An
@@ -372,6 +564,85 @@ public sealed class MapEditorSession
         BlitBlock(cellX, cellY, width, height, tiles);
         EndStroke();
     }
+
+    // ---- the clipboard, as text (REFERENCES-EDITORS §8 item 2) ----
+
+    /// <summary>
+    /// <c>Ctrl+C</c>'s document half: a rectangle of cells as one line of
+    /// <see cref="ClipboardFormat"/> text. The rectangle is the one the author already marked —
+    /// <c>MapEditorPaint.CopySelectionToText</c> reads it off <see cref="MapEditorView"/> and
+    /// hands it here — so no new selection model appears anywhere. Legal on a read-only map for
+    /// the same reason the eyedropper is: reading cells writes nothing, and copying a piece of
+    /// someone else's level is exactly what an author needs to do.
+    /// </summary>
+    /// <returns>The block's text, or the empty string when the rectangle is not on the map.</returns>
+    public string CopyAreaToText(int cellX, int cellY, int width, int height)
+    {
+        ClipboardNotice = null;
+        if (width <= 0 || height <= 0
+            || cellX < 0 || cellY < 0
+            || cellX + width > MapColumns || cellY + height > MapRows)
+        {
+            ClipboardNotice = "COPY: NOTHING SELECTED";
+            return string.Empty;
+        }
+        var tiles = new byte[width * height];
+        for (int row = 0; row < height; row++)
+        {
+            for (int column = 0; column < width; column++)
+            {
+                tiles[(row * width) + column] = _map[((cellY + row) * MapColumns) + cellX + column];
+            }
+        }
+        return ClipboardFormat.EncodeMap(width, height, tiles);
+    }
+
+    /// <summary>
+    /// <c>Ctrl+V</c>'s document half: turn clipboard text into a block of tiles, or say why not.
+    /// The <em>placing</em> of the block is not here — the map's paste has floated since wave 3e
+    /// (TIC-80's <c>drawPasteData</c>) and lands on the next paint press, so this method only
+    /// answers "is this a map block, and what does it say"; <c>MapEditorPaint.PasteText</c> puts
+    /// the answer on the view's clipboard and starts the float.
+    ///
+    /// <para>A block of another bank is refused <b>by name</b>: pasting sprite pixels here would
+    /// otherwise become a rectangle of nonsense tile numbers, which is precisely the silent
+    /// misread the format's header exists to prevent (see <see cref="ClipboardFormat"/>).</para>
+    /// </summary>
+    public bool TryDecodeMapText(string? text, out int width, out int height, out byte[] tiles)
+    {
+        ClipboardNotice = null;
+        width = 0;
+        height = 0;
+        tiles = Array.Empty<byte>();
+        if (!ClipboardFormat.TryDecode(text, ClipboardKind.Map, out ClipboardBlock? block, out string reason))
+        {
+            ClipboardNotice = $"PASTE: {reason}";
+            return false;
+        }
+        width = block!.Width;
+        height = block.Height;
+        tiles = block.Bytes.ToArray();
+        return true;
+    }
+
+    /// <summary>
+    /// The refusal a read-only map answers a writing verb with — one owner for the sentence,
+    /// so neither the router nor <see cref="MapEditorView"/> spells it. <paramref name="verb"/>
+    /// is "PASTE", "CUT", "FLIP", "ROTATE" or "REPLACE": the halves that write, and therefore
+    /// the ones <c>map.csv</c> takes away (MAP-FORMAT §4). Copying is never refused — reading
+    /// cells writes nothing.
+    /// </summary>
+    public void ReportReadOnly(string verb) =>
+        ClipboardNotice = $"{verb}: {MapSourceFileName.ToUpperInvariant()} OWNS THIS MAP";
+
+    /// <summary>
+    /// The refusal a verb that needs a marked rectangle answers with when there is none — the
+    /// order's "a plain refusal on the message line, not an error". One owner for the sentence,
+    /// and it is deliberately the <em>same</em> sentence <see cref="CopyAreaToText"/> already
+    /// puts there for an unmarked Ctrl+C, so the author reads one phrase for one situation
+    /// whichever key produced it. <paramref name="verb"/> is "FLIP" or "ROTATE".
+    /// </summary>
+    public void ReportNoSelection(string verb) => ClipboardNotice = $"{verb}: NOTHING SELECTED";
 
     /// <summary>
     /// A rectangle of tiles onto the map, <b>clipped</b> at the map's borders — the one place

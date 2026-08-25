@@ -200,6 +200,54 @@ public class EditorKeysAndStatusLayoutTests
         Assert.False(reader.Read(new KeyboardState(Keys.Right)).EditorTilesModifier);
     }
 
+    // ---- the brush ladder's keys and the second ink's modifier ----
+
+    /// <summary>
+    /// TIC-80's brush keys are edges, not levels: <c>-</c> and <c>=</c> step the ladder once per
+    /// press, or holding one would run the whole ladder past in four frames
+    /// (REFERENCES-EDITORS §2.1 — <c>updateBrushSize</c> is called from a key <em>press</em>).
+    ///
+    /// <para>Break recipe: read them with <c>keyboard.IsKeyDown</c> instead of <c>Pressed</c> in
+    /// <c>ShellCommandReader</c> and the "held" assertions go red — which is the difference
+    /// between a brush that steps and a brush that spins.</para>
+    /// </summary>
+    [Fact]
+    public void MinusAndEqualsStepTheBrushOncePerPress()
+    {
+        var reader = new ShellCommandReader();
+
+        ShellCommands press = reader.Read(new KeyboardState(Keys.OemMinus, Keys.OemPlus));
+        Assert.True(press.EditorBrushSmaller);
+        Assert.True(press.EditorBrushBigger);
+
+        ShellCommands held = reader.Read(new KeyboardState(Keys.OemMinus, Keys.OemPlus));
+        Assert.False(held.EditorBrushSmaller);
+        Assert.False(held.EditorBrushBigger);
+    }
+
+    /// <summary>
+    /// Shift is the keyboard's second ink — a level, like Ctrl's filled flag, because what
+    /// matters is which ink was in the hand at the press. LIKO-12 reads exactly this key for
+    /// exactly this (<c>sprite.lua</c>: <c>isKDown("lshift","rshift") or isMDown(2)</c>,
+    /// REFERENCES-EDITORS §2.2).
+    ///
+    /// <para>Break recipe: gate <c>EditorSecondaryInk</c> on anything but the shift level (say,
+    /// <c>Pressed(Keys.LeftShift)</c>) and the "still held" assertion goes red — a modifier that
+    /// only fires on its own edge would colour the first frame of a stroke and no other.</para>
+    /// </summary>
+    [Fact]
+    public void ShiftReportsTheSecondInkAsALevel()
+    {
+        var reader = new ShellCommandReader();
+
+        Assert.True(reader.Read(new KeyboardState(Keys.LeftShift)).EditorSecondaryInk);
+        Assert.True(reader.Read(new KeyboardState(Keys.LeftShift)).EditorSecondaryInk);  // still held
+        Assert.False(reader.Read(new KeyboardState()).EditorSecondaryInk);
+        Assert.True(reader.Read(new KeyboardState(Keys.RightShift)).EditorSecondaryInk);
+        // Nothing else raises it — a bare paint key is the first ink's, as it always was.
+        Assert.False(reader.Read(new KeyboardState(Keys.Z)).EditorSecondaryInk);
+    }
+
     // ---- the shape tool's filled modifier ----
 
     /// <summary>Ctrl is the shape's "filled" flag — a level, not an edge, so the preview flips the moment it changes.</summary>
@@ -302,7 +350,7 @@ public class EditorKeysAndStatusLayoutTests
     /// never grow into it or into the status band below it.
     ///
     /// <para>Re-pinned in wave R2 with the rest of this file: the line's height is the system
-    /// font's own five pixels now, not <c>PixelFontAtlas.LineHeight(ui)</c>, because the screen
+    /// font's own five pixels now, not the dead host atlas's <c>LineHeight(ui)</c>, because the screen
     /// prints with the console's font and the host font is not on it any more.</para>
     /// </summary>
     [Theory]

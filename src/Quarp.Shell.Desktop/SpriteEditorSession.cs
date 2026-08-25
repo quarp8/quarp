@@ -56,6 +56,26 @@ public enum SelectionVariant
 }
 
 /// <summary>
+/// Which of the two inks a canvas verb lays. Every reference console keeps two colours in
+/// hand and puts them on the two mouse buttons — TIC-80's <c>color</c>/<c>color2</c>
+/// (<c>src/studio/editors/sprite.c</c>, <c>processDrawCanvasMouse</c>), LIKO-12's
+/// <c>colsL</c>/<c>colsR</c> (<c>src/OS/DiskOS/Editors/sprite.lua</c>: <c>if isKDown("lshift")
+/// or isMDown(2) then b = 2 end</c>), PICO-8's "RMB to select the colour under the cursor"
+/// (REFERENCES-EDITORS §8 item 7).
+///
+/// <para>It is an enum and not a bool because it is what the shell <em>says</em>, not a flag it
+/// computes: <c>Paint(x, y)</c> with no ink named is the left button, which keeps every existing
+/// caller and every existing test honest, and a call site that means the right button has to
+/// spell it out. A bool named <c>secondary</c> would read as a modifier on the verb; this reads
+/// as which of two brushes is in the hand, which is what it is.</para>
+/// </summary>
+public enum SpriteEditorInk
+{
+    Primary,
+    Secondary,
+}
+
+/// <summary>
 /// The sprite editor's whole state and policy, with no window attached (M9 stage 2, waves
 /// 2b/2c) — the same split that made <see cref="ShellModeMachine"/> testable: <c>QuarpGame</c>
 /// routes keys and mouse hits here, <see cref="SpriteEditorRenderer"/> paints what this says,
@@ -73,10 +93,11 @@ public enum SelectionVariant
 /// <para><b>The 0-15 invariant has exactly four doors — layers added none.</b> Pixels enter
 /// a layer through (1) the load in the constructor — <see cref="PngDecoder.DecodeToPaletteIndices"/>
 /// only ever emits matches against the 16 visible palette colors, for gfx.png and
-/// gfx-layers.png alike; (2) the pencil, the bucket and the shape commit — which write
-/// <see cref="CurrentColor"/> (the shapes through the very same <see cref="Plot"/> the pencil
-/// uses), and <see cref="SelectColor"/> throws on anything outside 0-15 while
-/// <see cref="PickColor"/> copies a value already in a layer; (3) undo/redo — which swap
+/// gfx-layers.png alike; (2) the pencil, the bucket, the colour replace and the shape commit —
+/// which write <see cref="CurrentColor"/> or <see cref="SecondaryColor"/> through the one
+/// <see cref="InkColor"/> lookup (the shapes through the very same <see cref="Plot"/> the pencil
+/// uses), and <see cref="SelectColor"/> throws on anything outside 0-15 for <b>either</b> ink
+/// while <see cref="PickColor"/> copies a value already in a layer; (3) undo/redo — which swap
 /// whole layer stacks that were themselves stacks; (4) the region edits — flips, the
 /// rotation, the selection move and the stamp only copy values already read out of a layer,
 /// and the clears (whole region, selected pixels, and the holes a move leaves) write the
@@ -202,6 +223,9 @@ public sealed class SpriteEditorSession
     private int _lastPaintX = -1;
     private int _lastPaintY;
 
+    /// <summary>Which ink the open stroke lays — fixed at <see cref="BeginStroke"/> and read only by <see cref="Plot"/>, so one mark is one colour whatever the palette does mid-drag.</summary>
+    private SpriteEditorInk _strokeInk;
+
     // The shape gesture's whole state: anchor (where the press landed), corner (where the drag
     // is now), the Ctrl-held "filled" flag, and the preview's point set. The points are THE
     // shape — the commit plots this very list, so the preview can never disagree with what
@@ -214,6 +238,7 @@ public sealed class SpriteEditorSession
     private int _shapeCornerX;
     private int _shapeCornerY;
     private bool _shapeFilled;
+    private SpriteEditorInk _shapeInk;
     private readonly List<(int X, int Y)> _shapePoints = new();
 
     /// <summary>
@@ -390,8 +415,77 @@ public sealed class SpriteEditorSession
         // No Version bump: switching layers repaints nothing — the composite is unchanged.
     }
 
-    /// <summary>The pencil's ink, always a visible palette index 0-15. Painting with 0 IS the eraser (work order: no separate tool).</summary>
+    /// <summary>The LEFT button's ink, always a visible palette index 0-15. Painting with 0 IS the eraser (work order: no separate tool). TIC-80's <c>color</c>.</summary>
     public int CurrentColor { get; private set; }
+
+    /// <summary>
+    /// The RIGHT button's ink — TIC-80's <c>color2</c>, LIKO-12's <c>colsR</c>
+    /// (REFERENCES-EDITORS §8 item 7). A second remembered colour and not a modifier: the whole
+    /// point of the pair is that the two survive each other, so an author can keep an outline
+    /// colour under one finger and the fill under the other.
+    ///
+    /// <para>It opens on 0, the same index <see cref="CurrentColor"/> opens on, and that is a
+    /// choice rather than a default left alone: colour 0 is this editor's eraser (there is no
+    /// eraser tool), so a fresh sheet hands the author draw-on-the-left / erase-on-the-right,
+    /// which is the use a second button is most often reached for. The references do not settle
+    /// this — the survey records their two colours, not their opening values — so the reason is
+    /// written here rather than borrowed. The palette marks the two distinguishably even when
+    /// they coincide, which is what makes the shared opening value legible: see
+    /// <c>SpriteEditorRenderer.DrawSwatches</c>.</para>
+    /// </summary>
+    public int SecondaryColor { get; private set; }
+
+    /// <summary>
+    /// The colour one ink stands for. The <b>one</b> lookup: <see cref="Plot"/>,
+    /// <see cref="Fill"/> and <see cref="ReplaceColor"/> all read the sheet's next byte through
+    /// it, so no verb can grow a private idea of which button it is serving.
+    /// </summary>
+    public int InkColor(SpriteEditorInk ink) =>
+        ink == SpriteEditorInk.Secondary ? SecondaryColor : CurrentColor;
+
+    /// <summary>
+    /// How many brush sizes the ladder offers — four, TIC-80's own
+    /// <c>#define BRUSH_SIZES 4</c> (<c>src/studio/editors/sprite.c</c>), and the same count
+    /// LIKO-12's Size slider has (REFERENCES-EDITORS §2.1, §2.2).
+    /// </summary>
+    public const int BrushSizeCount = 4;
+
+    /// <summary>
+    /// The ladder itself: 1, 2, 3, 4 pixels a side. <b>TIC-80's ladder, not LIKO-12's.</b> The
+    /// two references disagree — LIKO-12's <c>sizes</c> table is <c>{1,2,3,5}</c> — and this
+    /// screen follows TIC-80 because TIC-80 is also where the <c>-</c>/<c>=</c> keys and the
+    /// panel control come from, and because a 5-px brush covers a third of an 8-px sprite's
+    /// width in one dab, which on this console's smallest region is a blunter instrument than
+    /// the ladder's top step should be. Named here rather than left as a formula so the
+    /// divergence is a fact with an owner instead of an arithmetic accident.
+    /// </summary>
+    private static readonly int[] _brushSizes = { 1, 2, 3, 4 };
+
+    /// <summary>The ladder in order — the panel's list and the <c>-</c>/<c>=</c> walk read the same array.</summary>
+    public static IReadOnlyList<int> BrushSizes => _brushSizes;
+
+    /// <summary>Ladder index → brush side in pixels. Inverse of <see cref="BrushIndexOf"/>.</summary>
+    public static int BrushSizeAt(int index)
+    {
+        if (index is < 0 or >= BrushSizeCount)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(index), index, $"the brush ladder has {BrushSizeCount} steps (TIC-80's BRUSH_SIZES).");
+        }
+        return _brushSizes[index];
+    }
+
+    /// <summary>Brush side in pixels → its ladder index; -1 for a side that is not on the ladder.</summary>
+    public static int BrushIndexOf(int size) => Array.IndexOf(_brushSizes, size);
+
+    /// <summary>
+    /// The pencil's brush side in region pixels — one dab is a <see cref="BrushSize"/>-square
+    /// centred under the cursor. It reaches the pencil and the eraser only (the eraser IS the
+    /// pencil holding colour 0 here), never the bucket, the shapes or the selection: TIC-80
+    /// runs its <c>brushSize</c> through <c>paintPoint</c>, which only <c>SPRITE_DRAW_MODE</c>
+    /// calls, and a fill or a marquee has no stroke width to be.
+    /// </summary>
+    public int BrushSize { get; private set; } = 1;
 
     /// <summary>What a left click on the canvas does — the footer names this, so switching tools is always visible.</summary>
     public SpriteEditorTool Tool { get; private set; } = SpriteEditorTool.Pencil;
@@ -596,15 +690,75 @@ public sealed class SpriteEditorSession
     /// <summary>Why the last save failed, or null. Shown in the footer: a save the author believes happened but did not is data loss.</summary>
     public string? SaveError { get; private set; }
 
-    /// <summary>Swatch click. Throws rather than masks: a value outside 0-15 here is a caller bug, and masking it would paint the wrong color silently.</summary>
-    public void SelectColor(int color)
+    /// <summary>
+    /// What the last clipboard verb refused to do, or null — the sentence the screen's message
+    /// line shows. Every one of the four editors carries one of these, all in the session, so a
+    /// refusal reaches the author by the road <see cref="SaveError"/> already uses instead of
+    /// each screen inventing a channel of its own.
+    ///
+    /// <para><b>Transient by construction.</b> Each clipboard verb clears it on the way in, so
+    /// it says what the <em>last</em> Ctrl+C/X/V did and never a stale complaint about one three
+    /// gestures ago. A verb that succeeds leaves it null, which is how "nothing to say" is
+    /// spelled.</para>
+    /// </summary>
+    public string? ClipboardNotice { get; private set; }
+
+    /// <summary>
+    /// Swatch click, into whichever ink the button that clicked it holds — left button (and
+    /// every keyboard path) into <see cref="CurrentColor"/>, right button into
+    /// <see cref="SecondaryColor"/>, exactly TIC-80's <c>drawPalette</c>. Throws rather than
+    /// masks: a value outside 0-15 here is a caller bug, and masking it would paint the wrong
+    /// color silently. The default keeps every pre-two-ink caller meaning what it always meant.
+    /// </summary>
+    public void SelectColor(int color, SpriteEditorInk ink = SpriteEditorInk.Primary)
     {
         if (color is < 0 or >= Palette.VisibleCount)
         {
             throw new ArgumentOutOfRangeException(
                 nameof(color), color, "the pencil takes visible palette indices 0-15 only (SPEC-8 §6).");
         }
-        CurrentColor = color;
+        if (ink == SpriteEditorInk.Secondary)
+        {
+            SecondaryColor = color;
+        }
+        else
+        {
+            CurrentColor = color;
+        }
+    }
+
+    /// <summary>
+    /// Direct brush size — a side from <see cref="BrushSizes"/>, and nothing else. Throws on any
+    /// other value for the reason <see cref="SelectRegionSize"/> does: the callers are the panel
+    /// list and the <c>-</c>/<c>=</c> walk, both of which read the ladder, so a foreign number is
+    /// a bug, and clamping it would silently hand the author a brush they never picked.
+    ///
+    /// <para>It does not end an open stroke, and that is the point of the whole feature: TIC-80's
+    /// <c>updateBrushSize</c> writes one field and nothing else, so a size changed mid-drag
+    /// simply widens the rest of the same mark, and the stroke stays <b>one</b> undo step.</para>
+    /// </summary>
+    public void SelectBrushSize(int size)
+    {
+        if (BrushIndexOf(size) < 0)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(size), size, "brush sides are 1, 2, 3 or 4 pixels (TIC-80's BRUSH_SIZES ladder).");
+        }
+        BrushSize = size;
+    }
+
+    /// <summary>
+    /// The <c>-</c> and <c>=</c> keys' walk along the ladder, TIC-80's <c>updateBrushSize</c>:
+    /// <b>cyclic</b>, so the smallest brush is one press away from the largest and neither end
+    /// is a dead key. Funnels through <see cref="SelectBrushSize"/> so the keyboard and the panel
+    /// list cannot drift about what a step is.
+    /// </summary>
+    public void CycleBrushSize(int delta)
+    {
+        int index = BrushIndexOf(BrushSize);
+        // Two modulos: C# keeps the sign of the dividend, and -1 % 4 is -1, not 3.
+        int next = ((index + delta) % BrushSizeCount + BrushSizeCount) % BrushSizeCount;
+        SelectBrushSize(BrushSizeAt(next));
     }
 
     /// <summary>
@@ -653,11 +807,15 @@ public sealed class SpriteEditorSession
     public void MoveCursor(int dx, int dy) => SetCursor(CursorX + dx, CursorY + dy);
 
     /// <summary>
-    /// Left button pressed on the canvas. The pre-stroke stack is snapshotted here and becomes
+    /// A paint button pressed on the canvas. The pre-stroke stack is snapshotted here and becomes
     /// the undo entry when the stroke ends — which is the whole "one stroke = one undo step"
-    /// mechanism: nothing inside the stroke ever touches the undo stack.
+    /// mechanism: nothing inside the stroke ever touches the undo stack. <b>Which ink</b> is
+    /// fixed at the press — the button that started the mark is what the mark is made of, so a
+    /// right-drag stays the right button's however the left one is used mid-gesture. Which
+    /// <em>colour</em> that ink names is read live, per pixel, exactly as it was before there
+    /// were two: the palette is a hand, not a snapshot.
     /// </summary>
-    public void BeginStroke()
+    public void BeginStroke(SpriteEditorInk ink = SpriteEditorInk.Primary)
     {
         if (StrokeActive)
         {
@@ -666,13 +824,17 @@ public sealed class SpriteEditorSession
         _strokeBackup = TakeSnapshot();
         _strokeChanged = false;
         _lastPaintX = -1;
+        _strokeInk = ink;
     }
 
     /// <summary>
     /// One pencil sample at a region-local pixel. Consecutive samples within a stroke are
     /// joined with a Bresenham line, because the mouse reports positions per frame, not per
     /// pixel — a fast drag would otherwise dot the canvas instead of drawing through it
-    /// (the "тянущийся мазок" the order demands).
+    /// (the "тянущийся мазок" the order demands). Every point of that line is a
+    /// <see cref="BrushSize"/>-square <see cref="Dab"/> rather than a single pixel, which is
+    /// TIC-80's own arrangement — <c>paintLine</c> walks the segment and calls <c>paintPoint</c>,
+    /// and <c>paintPoint</c> is the thing that knows how wide the brush is.
     /// </summary>
     public void Paint(int localX, int localY)
     {
@@ -684,14 +846,53 @@ public sealed class SpriteEditorSession
         ValidateLocal(localY, nameof(localY));
         if (_lastPaintX < 0)
         {
-            Plot(localX, localY);
+            Dab(localX, localY);
         }
         else
         {
-            TraceLine(_lastPaintX, _lastPaintY, localX, localY, Plot);
+            TraceLine(_lastPaintX, _lastPaintY, localX, localY, Dab);
         }
         _lastPaintX = localX;
         _lastPaintY = localY;
+    }
+
+    /// <summary>
+    /// One dab of the brush: the <see cref="BrushSize"/>-square centred on the given region-local
+    /// pixel (TIC-80's <c>paintPoint</c>, REFERENCES-EDITORS §2.1), clipped to the region instead
+    /// of wrapping or throwing. The clip is not a nicety: region-local coordinates address the
+    /// sheet through <see cref="SheetOffset"/>, so a negative x is not "off the canvas" but
+    /// <b>the neighbouring sprite</b> — an unclipped dab at the edge would silently edit a
+    /// sprite the author is not looking at.
+    ///
+    /// <para>The centring offset is <c>size / 2</c>: odd sizes sit truly centred and even sizes
+    /// lean up and left by half a pixel, which is the only thing an even-sided square can do
+    /// around a point. The references settle that a dab is a centred square and not which way an
+    /// even one leans, so the tie-break is ours and is written down here. Nothing in this method
+    /// touches the undo stack — the dab writes through <see cref="Plot"/> like every other pixel
+    /// of the stroke, so a hundred dabs are still one step.</para>
+    /// </summary>
+    private void Dab(int localX, int localY)
+    {
+        int size = BrushSize;
+        int origin = size / 2;
+        int n = RegionPixels;
+        for (int dy = 0; dy < size; dy++)
+        {
+            int y = localY + dy - origin;
+            if (y < 0 || y >= n)
+            {
+                continue;
+            }
+            for (int dx = 0; dx < size; dx++)
+            {
+                int x = localX + dx - origin;
+                if (x < 0 || x >= n)
+                {
+                    continue;
+                }
+                Plot(x, y);
+            }
+        }
     }
 
     /// <summary>
@@ -717,17 +918,33 @@ public sealed class SpriteEditorSession
     }
 
     /// <summary>
-    /// Right button on the canvas: the pencil takes the color under the cursor (PICO-8's
-    /// pattern, per the niche survey) — from the <b>active layer</b>, not the composite
-    /// (the wave's card): the eyedropper answers "what did I draw here", and picking a
+    /// The eyedropper: the color under the cursor becomes an ink — from the <b>active layer</b>,
+    /// not the composite (the wave's card): it answers "what did I draw here", and picking a
     /// covering layer's color while standing on a lower one would hand the pencil ink the
     /// author never placed on this layer.
+    ///
+    /// <para><b>It fills the ink of the button that reached for it</b> (REFERENCES-EDITORS §8
+    /// item 7). TIC-80 puts the always-available eyedropper on the middle button and sends it to
+    /// <c>color</c> (<c>drawCanvasVBank1</c>: <c>checkMouseDown(..., tic_mouse_middle)</c>),
+    /// and its picker tool sends the left button to <c>color</c> and the right to <c>color2</c>.
+    /// That is the whole of the parameter: an eyedropper that always filled the left ink would
+    /// make the second colour reachable only through the palette.</para>
     /// </summary>
-    public void PickColor(int localX, int localY)
+    public void PickColor(int localX, int localY, SpriteEditorInk ink = SpriteEditorInk.Primary)
     {
         ValidateLocal(localX, nameof(localX));
         ValidateLocal(localY, nameof(localY));
-        CurrentColor = ActiveSheet[SheetOffset(localX, localY)];
+        // The sheet only ever holds 0-15 (the type comment's four doors), so this needs no
+        // range check — and going through SelectColor would add one that can never fire.
+        byte picked = ActiveSheet[SheetOffset(localX, localY)];
+        if (ink == SpriteEditorInk.Secondary)
+        {
+            SecondaryColor = picked;
+        }
+        else
+        {
+            CurrentColor = picked;
+        }
     }
 
     /// <summary>
@@ -816,8 +1033,11 @@ public sealed class SpriteEditorSession
     /// point. Throws outside the region like <see cref="Paint"/> — the shell's clamp is the
     /// contract, and since both corners can only ever be in-range, a committed shape cannot
     /// reach a neighbouring sprite by construction (the "фигуры клампятся регионом" law).
+    /// The ink is fixed at the press for the reason <see cref="BeginStroke"/> fixes its own: the
+    /// button that opened the gesture is what the shape will be drawn in, and the preview shows
+    /// that same colour through <see cref="ShapeInk"/> long before the commit.
     /// </summary>
-    public void BeginShape(int localX, int localY)
+    public void BeginShape(int localX, int localY, SpriteEditorInk ink = SpriteEditorInk.Primary)
     {
         if (_shapeActive)
         {
@@ -831,8 +1051,12 @@ public sealed class SpriteEditorSession
         _shapeCornerX = localX;
         _shapeCornerY = localY;
         _shapeFilled = false;
+        _shapeInk = ink;
         RebuildShapePreview();
     }
+
+    /// <summary>Which ink the open shape will commit in — what the renderer paints the preview with, so the preview never lies about the colour.</summary>
+    public SpriteEditorInk ShapeInk => _shapeInk;
 
     /// <summary>
     /// One frame of an open shape gesture: the dragged corner and the Ctrl-held filled flag
@@ -873,7 +1097,10 @@ public sealed class SpriteEditorSession
             return;
         }
         _shapeActive = false;
-        BeginStroke();
+        // The gesture's own ink, not the left button's — and NOT through Dab: a shape's width is
+        // its own geometry, so the brush ladder must not thicken its contour (TIC-80 keeps
+        // brushSize inside paintPoint, which only the pencil reaches).
+        BeginStroke(_shapeInk);
         foreach ((int x, int y) in _shapePoints)
         {
             Plot(x, y);
@@ -1304,21 +1531,69 @@ public sealed class SpriteEditorSession
     /// wand. One undo step, like a stroke — and filling a color with itself changes nothing,
     /// so it never happened as far as undo and dirt are concerned.
     /// </summary>
-    public void Fill(int localX, int localY)
+    public void Fill(int localX, int localY, SpriteEditorInk ink = SpriteEditorInk.Primary)
     {
         ValidateLocal(localX, nameof(localX));
         ValidateLocal(localY, nameof(localY));
         InterruptGesture();     // A stray open gesture commits as its own step before the fill becomes one.
         byte target = ActiveSheet[SheetOffset(localX, localY)];
-        if (target == CurrentColor)
+        int color = InkColor(ink);
+        if (target == color)
         {
             return;
         }
-        // target != CurrentColor guarantees at least the seed pixel changes, so the undo
+        // target != color guarantees at least the seed pixel changes, so the undo
         // snapshot is taken unconditionally — there is no "nothing changed" path from here.
         _undo.Add(TakeSnapshot());
         _redo.Clear();
-        VisitConnectedColor(localX, localY, (x, y) => ActiveSheet[SheetOffset(x, y)] = (byte)CurrentColor);
+        VisitConnectedColor(localX, localY, (x, y) => ActiveSheet[SheetOffset(x, y)] = (byte)color);
+        Version++;
+    }
+
+    /// <summary>
+    /// The bucket's second half: <b>replace this colour everywhere in the region</b>, connected
+    /// or not. TIC-80 hangs it on Ctrl over the fill tool — <c>processFillCanvasMouse</c> calls
+    /// <c>replaceColor</c> instead of <c>floodFill</c> while <c>tic_key_ctrl</c> is down — LIKO-12
+    /// gives it its own mode, and PICO-8's manual says the same words on the draw tool ("Hold
+    /// CTRL to search and replace colour"); REFERENCES-EDITORS §8 item 6 is where the three meet.
+    ///
+    /// <para><b>Its border is the fill's border, to the pixel.</b> <see cref="Fill"/> walls its
+    /// flood at <see cref="RegionPixels"/> and addresses the sheet through
+    /// <see cref="SheetOffset"/>; this scans exactly that square through exactly that offset. So
+    /// "this area" means the same thing under both halves of the tool — which is the whole reason
+    /// the flood's walls were given one owner in the first place — and a replace can no more
+    /// reach a neighbouring sprite than a fill can.</para>
+    ///
+    /// <para>One undo step, like a fill; and replacing a colour with itself changes nothing, so
+    /// it never happened as far as undo and dirt are concerned. Unlike the fill, no scan is
+    /// needed before the snapshot: the seed pixel <em>is</em> one of the pixels holding the
+    /// target colour, so at least it changes.</para>
+    /// </summary>
+    public void ReplaceColor(int localX, int localY, SpriteEditorInk ink = SpriteEditorInk.Primary)
+    {
+        ValidateLocal(localX, nameof(localX));
+        ValidateLocal(localY, nameof(localY));
+        InterruptGesture();
+        byte target = ActiveSheet[SheetOffset(localX, localY)];
+        int color = InkColor(ink);
+        if (target == color)
+        {
+            return;
+        }
+        _undo.Add(TakeSnapshot());
+        _redo.Clear();
+        int n = RegionPixels;
+        for (int y = 0; y < n; y++)
+        {
+            for (int x = 0; x < n; x++)
+            {
+                int offset = SheetOffset(x, y);
+                if (ActiveSheet[offset] == target)
+                {
+                    ActiveSheet[offset] = (byte)color;
+                }
+            }
+        }
         Version++;
     }
 
@@ -1407,6 +1682,113 @@ public sealed class SpriteEditorSession
         {
             ApplyRegionEdit(static (_, _, _, _) => 0);
         }
+    }
+
+    // ---- the clipboard, as text (REFERENCES-EDITORS §8 item 2) ----
+
+    /// <summary>
+    /// <c>Ctrl+C</c>: what is under the author, as one line of <see cref="ClipboardFormat"/>
+    /// text. <b>Which pixels</b> is not a new decision — it is the selection model this editor
+    /// already has: a committed mask's bounding box if there is one, the whole region if there
+    /// is not, which is the same pair <see cref="ClearRegion"/> chooses between and the same
+    /// rectangle <c>CaptureStampSource</c> takes.
+    ///
+    /// <para>Values come out of the <b>active layer</b>, like the stamp's do, and for the same
+    /// reason: the author marked what they drew there, not what shows through from underneath.
+    /// Cells of the box that the mask does not cover come out as colour 0 — again the stamp's
+    /// rule — so a round trip through a <em>rectangular</em> selection is byte-exact and a round
+    /// trip through a brush-shaped one squares its corners off. That is a property of the
+    /// rectangle a text block has to be, not of this method.</para>
+    ///
+    /// <para>Never null and never empty in practice: a region always exists, so there is always
+    /// something to copy. Whoever hands the string to the machine's clipboard is layer 4's
+    /// business (see <see cref="ITextClipboard"/>); this session only produces the string.</para>
+    /// </summary>
+    public string CopyToText()
+    {
+        ClipboardNotice = null;
+        int n = RegionPixels;
+        int minX = 0;
+        int minY = 0;
+        int maxX = n - 1;
+        int maxY = n - 1;
+        bool[]? mask = _selection;
+        if (mask is not null && TrySelectionBounds(out int sx, out int sy, out int ex, out int ey))
+        {
+            minX = sx;
+            minY = sy;
+            maxX = ex;
+            maxY = ey;
+        }
+        else
+        {
+            mask = null;
+        }
+        int width = maxX - minX + 1;
+        int height = maxY - minY + 1;
+        var pixels = new byte[width * height];
+        for (int y = minY; y <= maxY; y++)
+        {
+            for (int x = minX; x <= maxX; x++)
+            {
+                pixels[((y - minY) * width) + (x - minX)] =
+                    mask is null || mask[(y * n) + x] ? ActiveSheet[SheetOffset(x, y)] : (byte)0;
+            }
+        }
+        return ClipboardFormat.EncodeSprites(width, height, pixels);
+    }
+
+    /// <summary>
+    /// <c>Ctrl+X</c>: the same text, and then the same pixels emptied — TIC-80's own composition
+    /// for this editor (<c>copy + deleteSprite</c>, REFERENCES-EDITORS §2.1). The clearing is
+    /// <see cref="ClearRegion"/>, so it is <b>one</b> undo step and it empties exactly what was
+    /// copied (the mask if there is one, the region if not) rather than a second rectangle
+    /// computed here.
+    /// </summary>
+    public string CutToText()
+    {
+        string text = CopyToText();
+        ClearRegion();
+        return text;
+    }
+
+    /// <summary>
+    /// <c>Ctrl+V</c>: a block of sprite text laid into the region's top-left corner as <b>one</b>
+    /// undo step, opaque — colour 0 in the block writes colour 0, it is not treated as
+    /// transparent. That is the difference between this and the stamp tool
+    /// (<see cref="StampAt"/>), and it is deliberate: a stamp is a brush and a paste is a
+    /// replacement, so only the opaque reading makes "copy, paste, compare" give back the bytes
+    /// that were copied. TIC-80 reads it the same way — its sprite paste overwrites the region
+    /// wholesale (<c>copyFromClipboard</c>, §2.1).
+    ///
+    /// <para><b>The corner, not the cursor.</b> TIC-80's sprite paste is size-locked
+    /// (<c>sameSize=true</c>, §1) and lands on the region it was taken from; ours accepts a
+    /// block <em>no larger than</em> the region — because our own copy may be a sub-region
+    /// selection — and lands it at the corner. A block that would not fit is refused outright
+    /// with its measurements in the sentence, never clipped: half a pasted sprite looks like a
+    /// drawing mistake and would be undone by hand instead of understood.</para>
+    /// </summary>
+    /// <returns>True when the sheet was written; false with <see cref="ClipboardNotice"/> set otherwise.</returns>
+    public bool PasteFromText(string? text)
+    {
+        ClipboardNotice = null;
+        if (!ClipboardFormat.TryDecode(text, ClipboardKind.Sprites, out ClipboardBlock? block, out string reason))
+        {
+            ClipboardNotice = $"PASTE: {reason}";
+            return false;
+        }
+        int n = RegionPixels;
+        int width = block!.Width;
+        int height = block.Height;
+        if (width > n || height > n)
+        {
+            ClipboardNotice = $"PASTE: {width}x{height} BLOCK, REGION IS {n}x{n}";
+            return false;
+        }
+        byte[] pixels = block.Bytes.ToArray();
+        ApplyRegionEdit((src, side, x, y) =>
+            x < width && y < height ? pixels[(y * width) + x] : src[(y * side) + x]);
+        return true;
     }
 
     /// <summary>
@@ -1779,18 +2161,22 @@ public sealed class SpriteEditorSession
     }
 
     /// <summary>
-    /// The single write into the live stack. <see cref="CurrentColor"/> is 0-15 by the
-    /// invariant above, so the cast cannot truncate; writing the value already there is
-    /// skipped so that a stroke which changes nothing stays invisible to undo and dirt.
+    /// The single write into the live stack. Both inks are 0-15 by the invariant above, so the
+    /// cast cannot truncate whichever <see cref="InkColor"/> hands back; writing the value
+    /// already there is skipped so that a stroke which changes nothing stays invisible to undo
+    /// and dirt. It writes ONE pixel and knows nothing of <see cref="BrushSize"/> — the brush
+    /// lives one level up, in <see cref="Dab"/>, which is why the shapes and the selection
+    /// (which call here, or its line, directly) are untouched by it.
     /// </summary>
     private void Plot(int localX, int localY)
     {
         int offset = SheetOffset(localX, localY);
-        if (ActiveSheet[offset] == CurrentColor)
+        int color = InkColor(_strokeInk);
+        if (ActiveSheet[offset] == color)
         {
             return;
         }
-        ActiveSheet[offset] = (byte)CurrentColor;
+        ActiveSheet[offset] = (byte)color;
         _strokeChanged = true;
         Version++;
     }

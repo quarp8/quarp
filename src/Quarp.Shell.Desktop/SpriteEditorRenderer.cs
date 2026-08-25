@@ -75,6 +75,7 @@ public static class SpriteEditorRenderer
         console.Cls(Ink);
 
         DrawBands(console, layout.Chrome);
+        DrawPanelFrames(console, layout);
         DrawCanvas(console, layout, editor, timeSeconds);
         DrawButtons(console, layout, editor, hover);
         DrawSwatches(console, layout, editor);
@@ -92,6 +93,29 @@ public static class SpriteEditorRenderer
             tooltipVisible && hover is HoverTarget target ? TooltipText(editor, target) : null,
             ScreenName);
         return layout;
+    }
+
+    /// <summary>
+    /// The borders of the two panels that hold pictures — the canvas and the sheet window.
+    /// They are drawn <b>second</b>, right after the three band rules and before anything else,
+    /// for one reason: every pixel they touch is either free ground or a pixel some neighbour
+    /// owns, and the neighbour must win. The tool column's buttons repaint the canvas's left
+    /// side, the layer tabs repaint the lower half of its right side and the sheet's left side,
+    /// the slider repaints the sheet's bottom. Drawing the frames late would have this file
+    /// scribbling grey over a hovered button's bright border; drawing them first makes the
+    /// frame the <em>ground</em> those controls stand on, which is what it is.
+    ///
+    /// <para>Both rings sit entirely OUTSIDE their panel — TIC-80's <c>x - 1, y - 1, w + 2,
+    /// h + 2</c> (<c>sprite.c</c>, <c>drawCanvas</c> and <c>drawSheetVBank1</c>) — so not one
+    /// pixel of the author's drawing is covered by them, which is rule 3 of the order of
+    /// 2026-08-25. <see cref="SpriteEditorLayout.CanvasFrame"/> carries the argument about where
+    /// the pixels came from; <see cref="SpriteEditorLayout.SheetFrame"/> the one about the side
+    /// that falls off the screen.</para>
+    /// </summary>
+    private static void DrawPanelFrames(VirtualConsole console, in SpriteEditorLayout layout)
+    {
+        Outline(console, layout.CanvasFrame, Dim);
+        Outline(console, layout.SheetFrame, Dim);
     }
 
     /// <summary>The status line's left half, in <b>sheet</b> pixels — the coordinate an author would type into code, not a screen position.</summary>
@@ -120,11 +144,14 @@ public static class SpriteEditorRenderer
     public static string? StandingNotice(SpriteEditorSession editor)
     {
         ArgumentNullException.ThrowIfNull(editor);
-        return editor.GfxOutOfSyncOnDisk
-            ? "GFX.PNG EDITED OUTSIDE - SAVING WINS"
-            : editor.SpriteIndex == 0
-                ? "SPR 000 IS THE MAP'S EMPTY TILE"
-                : null;
+        // The clipboard's refusal wins — see SfxEditorRenderer.StandingNotice for why the
+        // transient answer to a keystroke outranks the two standing facts about the folder.
+        return editor.ClipboardNotice
+            ?? (editor.GfxOutOfSyncOnDisk
+                ? "GFX.PNG EDITED OUTSIDE - SAVING WINS"
+                : editor.SpriteIndex == 0
+                    ? "SPR 000 IS THE MAP'S EMPTY TILE"
+                    : null);
     }
 
     /// <summary>
@@ -196,8 +223,12 @@ public static class SpriteEditorRenderer
     /// <summary>
     /// The open group flyout: the slot's variants as ordinary buttons floating right of it, the
     /// remembered variant on the active-blue fill. Drawn on ink plates because the row overlaps
-    /// the canvas — a variant icon over sheet pixels would be unreadable. The size toggle's
-    /// variants are text (8/16/32), the same faces the slot itself wears.
+    /// the canvas — a variant icon over sheet pixels would be unreadable. Two slots wear text
+    /// rather than glyphs — the sprite size (8/16/32) and the brush size (1-4), the same faces
+    /// their slots wear — and which ones those are is <see cref="EditorIcons.VariantText"/>'s
+    /// answer, not a name this file matches on: the brush toggle arrived as a second text-faced
+    /// slot and a hard-coded <c>slot == SizeToggle</c> here would have asked
+    /// <see cref="EditorIcons.VariantIcon"/> for a glyph that throws.
     /// </summary>
     private static void DrawFlyout(
         VirtualConsole console, in SpriteEditorLayout layout, SpriteEditorSession editor,
@@ -214,9 +245,8 @@ public static class SpriteEditorRenderer
             bool hovered = hover is HoverTarget target && target.FlyoutSlot == slot && target.FlyoutVariant == i;
             console.RectFill(rect.X, rect.Y, rect.Width, rect.Height, i == current ? ActiveBg : Ink);
             byte ink = i == current ? Bright : Text;
-            if (slot == EditorButton.SizeToggle)
+            if (EditorIcons.VariantText(slot, i) is string label)
             {
-                string label = EditorIcons.SizeLabel(EditorIcons.SizeVariantCells(i));
                 console.Print(
                     label, ConsoleChrome.ButtonTextX(rect, label), ConsoleChrome.ButtonTextY(rect), ink);
             }
@@ -258,7 +288,10 @@ public static class SpriteEditorRenderer
         {
             foreach ((int px, int py) in editor.ShapePreview)
             {
-                Fill(console, PixelRect(layout, px, py), (byte)editor.CurrentColor);
+                // The gesture's OWN ink, not the left button's: a shape dragged with the right
+                // button commits in the second colour, and a preview in the first would be a
+                // promise the commit breaks.
+                Fill(console, PixelRect(layout, px, py), (byte)editor.InkColor(editor.ShapeInk));
             }
         }
 
@@ -391,6 +424,16 @@ public static class SpriteEditorRenderer
     /// colour am I holding" would then have no answer at all for exactly one of the sixteen.
     /// The signal stays a shape either way, never a hue, so it survives an author who cannot
     /// separate blue from grey.</para>
+    ///
+    /// <para><b>Two marks, because there are two inks.</b> TIC-80 frames <c>color</c> and
+    /// <c>color2</c> differently in <c>drawPalette</c> (REFERENCES-EDITORS §8 item 7); here the
+    /// left ink keeps the ring and the right ink is a single pixel <em>inside</em> the cell, at
+    /// the bottom right of the 2x2 body. Inside and not on the border for one reason worth
+    /// spelling out: the two inks are allowed to be the same colour, and a second border mark
+    /// would then be swallowed whole by the ring — the swatch would say "one ink is here" while
+    /// two are. A ring plus an inner dot reads as both, a ring alone as the left one, a bare dot
+    /// as the right one; four pixels of body is the most this column can spend and it is enough
+    /// for three distinguishable states.</para>
     /// </summary>
     private static void DrawSwatches(
         VirtualConsole console, in SpriteEditorLayout layout, SpriteEditorSession editor)
@@ -399,9 +442,14 @@ public static class SpriteEditorRenderer
         {
             Rectangle rect = layout.SwatchRect(i);
             Fill(console, rect, (byte)i);
+            byte mark = i == Bright ? Ink : Bright;
             if (i == editor.CurrentColor)
             {
-                console.Rect(rect.X, rect.Y, rect.Width, rect.Height, i == Bright ? Ink : Bright);
+                console.Rect(rect.X, rect.Y, rect.Width, rect.Height, mark);
+            }
+            if (i == editor.SecondaryColor)
+            {
+                console.Pset(rect.Right - 2, rect.Bottom - 2, mark);
             }
         }
     }
@@ -453,9 +501,13 @@ public static class SpriteEditorRenderer
     /// block-wise draw would have to re-derive the lane arithmetic to clip, which is precisely
     /// the second owner the strip type exists to prevent.
     ///
-    /// <para>Sprite 0 wears a dim frame wherever the window shows it: it is the map's empty tile,
-    /// and the author is told so here — where he draws — and not only after carrying the art to
-    /// the map screen and finding it missing. The selected region wears a bright one.</para>
+    /// <para>Three marks go on top of those pixels, in this order and for these reasons. An
+    /// <b>empty</b> cell gets a dim frame (<see cref="DrawEmptyCellMarks"/>) so the window reads
+    /// as cells and not as one black slab — nothing is covered, because an empty cell has
+    /// nothing to cover. <b>Sprite 0</b> wears a dim frame wherever the window shows it: it is
+    /// the map's empty tile, and the author is told so here — where he draws — and not only
+    /// after carrying the art to the map screen and finding it missing. The <b>selected
+    /// region</b> wears a bright one, last, so it wins over both.</para>
     /// </summary>
     private static void DrawSheet(
         VirtualConsole console, in SpriteEditorLayout layout, SpriteEditorSession editor, int scroll)
@@ -481,6 +533,8 @@ public static class SpriteEditorRenderer
             }
         }
 
+        DrawEmptyCellMarks(console, layout, pixels, scroll);
+
         foreach (Rectangle zero in layout.SheetRegionHighlights(0, 0, 1, scroll))
         {
             Outline(console, Rectangle.Intersect(zero, layout.Sheet), Dim);
@@ -490,6 +544,92 @@ public static class SpriteEditorRenderer
         {
             Outline(console, Rectangle.Intersect(highlight, layout.Sheet), Bright);
         }
+    }
+
+    /// <summary>
+    /// A dim frame inside every visible sheet cell that holds nothing at all — the second half
+    /// of the defect of 2026-08-25. A frame around the window says where the sheet is; it says
+    /// nothing about where sprite 47 is, and on a fresh cart all 256 cells are colour 0, so the
+    /// window was one flat black slab and "select the forty-seventh sprite" meant counting
+    /// blind.
+    ///
+    /// <para><b>This is a named divergence, and it is the only one in this change.</b> None of
+    /// the three references rules its sprite sheet: TIC-80 draws the 128x128 sheet as one
+    /// <c>tic_api_spr</c> call with a frame around the whole of it (§2.1), LIKO-12 the same for
+    /// its bank strip (§2.2), PICO-8 the same for its navigator (§2.3) — all three simply live
+    /// with a black slab when the sheet is empty, which they can afford because a cell there is
+    /// 8 px on a 128 px sheet the author sees whole, while ours is 8 px in a window that shows
+    /// seven columns of a scrolling strip. A grid over the cells is what would match the eye's
+    /// need and it is exactly what rule 3 forbids: a line on a cell boundary eats one row of
+    /// every eight of somebody's art. So the mark is drawn <b>only where there is no art to
+    /// cover</b> — a cell whose sixty-four pixels are all colour 0 — and it disappears the
+    /// instant the author puts a pixel in that cell. What the reference does have is the same
+    /// idea applied to a different grid: TIC-80's SFX selector paints empty slots differently
+    /// from full ones (<c>sfx.c</c>, <c>drawSelector</c>: "пустые сэмплы окрашены темнее",
+    /// §5.1), which is the precedent this borrows — an empty slot is allowed to look empty.</para>
+    ///
+    /// <para>The mark is <see cref="ConsoleChromeRenderer.Dim"/>, the same grey as the panel
+    /// frames and as sprite 0's marker below, so an empty sheet reads as a lattice of ground and
+    /// never competes with the bright frame the selected region wears. Sprite 0's dim marker is
+    /// drawn after this and over it: on an empty sprite 0 the two coincide exactly, which loses
+    /// nothing — the standing notice on the message line is what carries that fact in words —
+    /// and the moment sprite 0 has art its marker is the only dim frame among its neighbours
+    /// again.</para>
+    ///
+    /// <para>Cells are clipped to the window rather than skipped, the way sprite 0's marker and
+    /// the region highlight already are. That is safe here precisely because the cell is empty:
+    /// the clipped side of a half-visible cell draws a line down the window's own edge and there
+    /// is no art under it to lose.</para>
+    /// </summary>
+    private static void DrawEmptyCellMarks(
+        VirtualConsole console, in SpriteEditorLayout layout, ReadOnlySpan<byte> pixels, int scroll)
+    {
+        int size = VirtualConsole.SpriteSize;
+        int cell = size * layout.SheetScale;
+        int firstColumn = scroll / size;
+        int lastColumn = (scroll + layout.SheetVisiblePixels - 1) / size;
+        for (int stripRow = 0; stripRow < SheetStrip.Rows; stripRow++)
+        {
+            for (int stripColumn = firstColumn; stripColumn <= lastColumn; stripColumn++)
+            {
+                if (!SheetStrip.TryStripCellToSheetCell(
+                        stripColumn, stripRow, out int cellX, out int cellY)
+                    || !IsCellEmpty(pixels, cellX, cellY))
+                {
+                    continue;
+                }
+                var rect = new Rectangle(
+                    layout.Sheet.X + (stripColumn * size - scroll) * layout.SheetScale,
+                    layout.Sheet.Y + stripRow * cell,
+                    cell,
+                    cell);
+                Outline(console, Rectangle.Intersect(rect, layout.Sheet), Dim);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Whether one canonical sheet cell holds nothing but colour 0 — read off the very bytes the
+    /// window has just plotted (the session's flattened composite, ADR-027), so the mark can
+    /// never disagree with the picture under it. Sixty-four byte reads with an early exit, for
+    /// at most the fifty-six cells the window shows: the same order of cost as the pixel loop
+    /// above it, which plots 56x64 rectangles.
+    /// </summary>
+    private static bool IsCellEmpty(ReadOnlySpan<byte> pixels, int cellX, int cellY)
+    {
+        int size = VirtualConsole.SpriteSize;
+        for (int y = 0; y < size; y++)
+        {
+            int row = (cellY * size + y) * VirtualConsole.SheetWidth + cellX * size;
+            for (int x = 0; x < size; x++)
+            {
+                if (pixels[row + x] != 0)
+                {
+                    return false;
+                }
+            }
+        }
+        return true;
     }
 
     /// <summary>

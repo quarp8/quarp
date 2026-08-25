@@ -177,7 +177,7 @@ public class LibraryLayoutTests
     /// absolute rows: a console of another height must move the footer, not strand it in the
     /// middle. Checked on a hypothetical 160x120 screen that nothing ships — the point is only
     /// that no 90 is baked in, which is the same mistake at the layout scale that
-    /// <c>PixelFontMetrics.UiScale</c>'s 320x180 anchor was at the screen scale.
+    /// the dead host path's 320x180 text anchor was at the screen scale.
     /// </summary>
     [Fact]
     public void TheBottomOfTheScreenIsMeasuredFromTheBottom()

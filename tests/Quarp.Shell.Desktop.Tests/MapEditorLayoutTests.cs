@@ -129,7 +129,7 @@ public class MapEditorLayoutTests
 
     /// <summary>
     /// The shell standard's tab strip, literally — the same order the sprite editor's test pins,
-    /// and from the same single owner (<see cref="EditorChrome.RightTabs"/>), so the two screens
+    /// and from the same single owner (<see cref="ConsoleChrome.RightTabs"/>), so the two screens
     /// cannot drift apart. Break recipe: swap two entries of that list.
     /// </summary>
     [Fact]

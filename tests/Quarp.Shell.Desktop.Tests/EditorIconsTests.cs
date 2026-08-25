@@ -39,27 +39,43 @@ public class EditorIconsTests
     // ---- group slots ----
 
     /// <summary>
-    /// Exactly the four variant groups carry the marker-and-flyout mechanism (select joined
+    /// Exactly the five variant groups carry the marker-and-flyout mechanism (select joined
     /// in wave 2f, the size toggle in 2h — the fourth review's "клик — список 8/16/32" rides
-    /// the same machinery); a stub can never be a group. Counts updated in wave 2g: the
-    /// owner's third review added the wand as the select group's third variant, so the old
-    /// "select has 2" pin was pinning behavior the owner cancelled — shape alone stays at two.
-    /// The size toggle is also the ONLY slot whose short click opens the flyout
-    /// (<see cref="EditorIcons.ClickOpensFlyout"/>): tool groups act on a click, the size
-    /// list's only act IS choosing.
+    /// the same machinery, and the brush toggle rides it in the brush wave); a stub can never
+    /// be a group. Counts updated in wave 2g: the owner's third review added the wand as the
+    /// select group's third variant, so the old "select has 2" pin was pinning behavior the
+    /// owner cancelled — shape alone stays at two, and the brush list is as long as the
+    /// session's ladder. The two SIZE slots are also the only ones whose short click opens the
+    /// flyout (<see cref="EditorIcons.ClickOpensFlyout"/>): tool groups act on a click, a
+    /// size list's only act IS choosing.
+    ///
+    /// <para>Break recipe: put <see cref="EditorButton.BrushToggle"/> back into the tool-group
+    /// half of <c>ClickOpensFlyout</c> (i.e. return only <c>SizeToggle</c>) and the third
+    /// assertion goes red for it — a brush click would then fall through to
+    /// <see cref="EditorIcons.ClickGroupSlot"/>, which has no brush case, so the button would
+    /// be visibly dead. Give the brush a literal 4 in <c>GroupVariantCount</c> instead of
+    /// <see cref="SpriteEditorSession.BrushSizeCount"/> and nothing goes red today — which is
+    /// precisely why the count is read from the session here too, and not written out.</para>
     /// </summary>
     [Fact]
-    public void ExactlyTheFourGroupSlotsCarryVariants()
+    public void ExactlyTheFiveGroupSlotsCarryVariants()
     {
         foreach (EditorButton button in AllButtons)
         {
             bool group = button is EditorButton.ToolSelect or EditorButton.ToolShape
-                or EditorButton.ToolTransform or EditorButton.SizeToggle;
+                or EditorButton.ToolTransform or EditorButton.SizeToggle
+                or EditorButton.BrushToggle;
             Assert.Equal(group, EditorIcons.IsGroupSlot(button));
+            int expected = button switch
+            {
+                EditorButton.ToolShape => 2,
+                EditorButton.BrushToggle => SpriteEditorSession.BrushSizeCount,
+                _ => group ? 3 : 0,
+            };
+            Assert.Equal(expected, EditorIcons.GroupVariantCount(button));
             Assert.Equal(
-                group ? button == EditorButton.ToolShape ? 2 : 3 : 0,
-                EditorIcons.GroupVariantCount(button));
-            Assert.Equal(button == EditorButton.SizeToggle, EditorIcons.ClickOpensFlyout(button));
+                button is EditorButton.SizeToggle or EditorButton.BrushToggle,
+                EditorIcons.ClickOpensFlyout(button));
             if (group)
             {
                 Assert.False(EditorIcons.IsStub(button));
@@ -69,13 +85,19 @@ public class EditorIconsTests
 
     /// <summary>
     /// The text-faced buttons and only them (wave 2h): the size toggle wears its current
-    /// size — RegionCells 1/2/4 → "8"/"16"/"32", moving with Tab and the list alike — and
-    /// the layer tabs their 1-based numbers; every other button answers null and keeps its
-    /// glyph. A text-faced button must never reach IconFor — that is the throw pinned at the
-    /// end, so the renderer's ButtonText-first branch cannot be silently bypassed.
+    /// size — RegionCells 1/2/4 → "8"/"16"/"32", moving with Tab and the list alike — the
+    /// brush toggle its current brush side, and the layer tabs their 1-based numbers; every
+    /// other button answers null and keeps its glyph. A text-faced button must never reach
+    /// IconFor — that is the throw pinned at the end, so the renderer's ButtonText-first branch
+    /// cannot be silently bypassed.
+    ///
+    /// <para>Break recipe: drop the <see cref="EditorButton.BrushToggle"/> arm from
+    /// <c>EditorIcons.ButtonText</c> and two assertions go red at once — the face stops being
+    /// the brush size, and the "textFaced" sweep starts demanding a glyph for a button whose
+    /// <c>IconFor</c> throws, which is the very crash this whole file exists for.</para>
     /// </summary>
     [Fact]
-    public void TextFacesBelongToTheSizeToggleAndLayerTabsOnly()
+    public void TextFacesBelongToTheTwoSizeTogglesAndLayerTabsOnly()
     {
         string root = Path.Combine(Path.GetTempPath(), "quarp-icons-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(root);
@@ -87,13 +109,16 @@ public class EditorIconsTests
             Assert.Equal("16", EditorIcons.ButtonText(EditorButton.SizeToggle, session));
             session.SelectRegionSize(4);
             Assert.Equal("32", EditorIcons.ButtonText(EditorButton.SizeToggle, session));
+            Assert.Equal("1", EditorIcons.ButtonText(EditorButton.BrushToggle, session));
+            session.SelectBrushSize(3);
+            Assert.Equal("3", EditorIcons.ButtonText(EditorButton.BrushToggle, session));
             for (int i = 0; i < SpriteEditorSession.LayerCount; i++)
             {
                 Assert.Equal((i + 1).ToString(), EditorIcons.ButtonText(EditorButton.LayerTab1 + i, session));
             }
             foreach (EditorButton button in AllButtons)
             {
-                bool textFaced = button == EditorButton.SizeToggle
+                bool textFaced = button is EditorButton.SizeToggle or EditorButton.BrushToggle
                     || (button >= EditorButton.LayerTab1 && button <= EditorButton.LayerTab5);
                 Assert.Equal(textFaced, EditorIcons.ButtonText(button, session) is not null);
                 if (textFaced)
@@ -127,9 +152,46 @@ public class EditorIconsTests
     {
         Assert.Throws<ArgumentOutOfRangeException>(() => EditorIcons.VariantIcon(EditorButton.ToolPencil, 0));
         Assert.Throws<ArgumentOutOfRangeException>(() => EditorIcons.VariantIcon(EditorButton.ToolShape, 2));
-        // The size toggle is a group but its faces are text, not glyphs — the renderer must
-        // branch on ButtonText/SizeLabel, never end up here.
+        // The two size toggles are groups but their faces are text, not glyphs — the renderer
+        // must branch on VariantText, never end up here.
         Assert.Throws<ArgumentOutOfRangeException>(() => EditorIcons.VariantIcon(EditorButton.SizeToggle, 0));
+        Assert.Throws<ArgumentOutOfRangeException>(() => EditorIcons.VariantIcon(EditorButton.BrushToggle, 0));
+    }
+
+    /// <summary>
+    /// <c>VariantText</c> is the one owner of "does this flyout variant wear text": exactly the
+    /// two size lists answer with a label, every glyph slot answers null, and the two answers
+    /// are complementary — a variant that answered both or neither would be a variant the
+    /// flyout cannot draw. The labels themselves are the slots' own faces (8/16/32 and 1-4).
+    ///
+    /// <para>Break recipe: return a label for <see cref="EditorButton.ToolShape"/> too and its
+    /// null assertion goes red; drop the <see cref="EditorButton.BrushToggle"/> arm and its
+    /// label assertion goes red — and, in production, <c>DrawFlyout</c> would ask
+    /// <c>VariantIcon</c> for a brush glyph that does not exist and take the window down on the
+    /// first frame the brush list is open.</para>
+    /// </summary>
+    [Fact]
+    public void OnlyTheTwoSizeListsWearTextInTheirFlyouts()
+    {
+        Assert.Equal("8", EditorIcons.VariantText(EditorButton.SizeToggle, 0));
+        Assert.Equal("32", EditorIcons.VariantText(EditorButton.SizeToggle, 2));
+        for (int i = 0; i < SpriteEditorSession.BrushSizeCount; i++)
+        {
+            Assert.Equal(
+                SpriteEditorSession.BrushSizeAt(i).ToString(),
+                EditorIcons.VariantText(EditorButton.BrushToggle, i));
+        }
+        foreach (EditorButton slot in new[]
+        {
+            EditorButton.ToolSelect, EditorButton.ToolShape, EditorButton.ToolTransform,
+        })
+        {
+            for (int i = 0; i < EditorIcons.GroupVariantCount(slot); i++)
+            {
+                Assert.Null(EditorIcons.VariantText(slot, i));
+                Assert.True(Enum.IsDefined(EditorIcons.VariantIcon(slot, i)));
+            }
+        }
     }
 
     /// <summary>Every flyout variant has an ASCII tooltip naming its key path — the 3-second contract extends to variants.</summary>
@@ -139,7 +201,7 @@ public class EditorIconsTests
         foreach (EditorButton slot in new[]
         {
             EditorButton.ToolSelect, EditorButton.ToolShape, EditorButton.ToolTransform,
-            EditorButton.SizeToggle,
+            EditorButton.SizeToggle, EditorButton.BrushToggle,
         })
         {
             for (int i = 0; i < EditorIcons.GroupVariantCount(slot); i++)
@@ -149,6 +211,8 @@ public class EditorIconsTests
                 Assert.All(tooltip, c => Assert.InRange(c, ' ', '~'));
             }
         }
+        // The brush list names TIC-80's own two keys where the sizes are chosen.
+        Assert.Contains("=", EditorIcons.VariantTooltip(EditorButton.BrushToggle, 0), StringComparison.Ordinal);
         Assert.Contains("F", EditorIcons.VariantTooltip(EditorButton.ToolTransform, (int)TransformVariant.FlipH), StringComparison.Ordinal);
         Assert.Contains("5", EditorIcons.VariantTooltip(EditorButton.ToolShape, (int)ShapeVariant.Oval), StringComparison.Ordinal);
     }
@@ -260,5 +324,9 @@ public class EditorIconsTests
         Assert.Contains("COLOR 5", tooltip, StringComparison.Ordinal);
         Assert.Contains(",", tooltip, StringComparison.Ordinal);
         Assert.Contains(".", tooltip, StringComparison.Ordinal);
+        // Two inks since the two-colour wave: which button loads which is the one thing a marked
+        // palette cannot explain by itself, so it is said here.
+        Assert.Contains("LCLICK", tooltip, StringComparison.Ordinal);
+        Assert.Contains("RCLICK", tooltip, StringComparison.Ordinal);
     }
 }

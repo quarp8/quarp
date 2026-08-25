@@ -49,6 +49,37 @@ namespace Quarp.Shell.Desktop.Tests;
 /// colour wears a ring, the selected sheet cell wears a bright frame, the three rules are where
 /// the arithmetic says — so a failure tells whoever reads it whether the screen is broken or
 /// merely redrawn.</para>
+///
+/// <para><b>Re-pinned 2026-08-25, wave S1 (brush sizes and two inks).</b> All three hashes
+/// moved, and both causes were named BEFORE the numbers were read, then confirmed by looking at
+/// the running window: (1) the twelfth slot of the tool column was empty and now carries the
+/// brush-size button (console x 10-19, y 61-70) — REFERENCES-EDITORS §8 item 12; (2) the palette
+/// gained a second selected colour, drawn as a pixel INSIDE the swatch's body while the first
+/// stays a ring around it — §8 item 7, TIC-80's <c>color</c>/<c>color2</c> — and on a fresh
+/// session both inks are 0, so swatch 0 gains one pixel. Every <c>Pget</c> probe in this file
+/// passed unchanged through the re-pin, which is what says the screen was redrawn and not
+/// broken; the three numbers were then read off the real build on the owner's machine, not
+/// derived from a model, and the screen was photographed and looked at before they were written
+/// down. Was / became: <c>2afc6f21dc819db1</c> / <c>722b2140ce71474e</c>,
+/// <c>62d9aec6f33cd512</c> / <c>9bbcedf3a923b791</c>, <c>2688306247f13a38</c> /
+/// <c>e977417de90e0f07</c>.</para>
+///
+/// <para><b>Re-pinned again the same day, wave S2 (the panels got an edge).</b> Cause, again
+/// named before the numbers were read and then confirmed on the running window: on a fresh cart
+/// the canvas and the sheet were <em>invisible</em> — an empty sprite is colour 0, the chrome's
+/// ground is colour 0, and neither panel had a border, so the author saw a void with a single
+/// white cursor ring floating in it. That is the defect the owner reported and the reason this
+/// file now also carries <c>SpriteEditorPanelEdgeTests</c>, which asks the question a hash
+/// cannot: "is the edge of the canvas a different colour from the ground when the sprite is
+/// empty?" TIC-80 answers it with a one-pixel <c>rectb</c> outside the box
+/// (<c>sprite.c</c>, <c>drawCanvas</c>) and so do we; the sheet's empty cells wear a dim ring
+/// each, which is our own addition and is argued where it is drawn. The palette and the flag
+/// block moved one column right, because the middle column's twentieth pixel — idle until now —
+/// paid for the canvas frame's right side. Every <c>Pget</c> probe here passed through this
+/// change too, after the four palette probes were moved the same one column.
+/// Was / became: <c>722b2140ce71474e</c> / <c>d7586acedcbd9269</c>,
+/// <c>9bbcedf3a923b791</c> / <c>a440fd38a44e731a</c>, <c>e977417de90e0f07</c> /
+/// <c>a110ff917226f080</c>.</para>
 /// </summary>
 public class SpriteEditorScreenGoldenTests : IDisposable
 {
@@ -109,9 +140,14 @@ public class SpriteEditorScreenGoldenTests : IDisposable
         Assert.Equal((byte)3, console.Pget(20, 11));
         // The palette's fifth swatch is the console's blue, in its own body; colour 0 is the one
         // in hand, so its cell — and only its cell — wears a bright ring.
-        Assert.Equal((byte)4, console.Pget(85, 17));
-        Assert.Equal((byte)3, console.Pget(84, 11));
-        Assert.Equal((byte)8, console.Pget(84, 21));
+        // The three probes moved one column right with the palette itself: the middle column's
+        // twentieth pixel, which stood idle to the RIGHT of these blocks, was spent on the
+        // canvas frame's right side (x=84), so palette and flags are now flush right at 85..103.
+        // Column 84 is therefore frame, not swatch, and asking it about a ring would be asking
+        // the wrong pixel — see SpriteEditorLayout.CanvasFrame for where the pixel came from.
+        Assert.Equal((byte)4, console.Pget(86, 17));
+        Assert.Equal((byte)3, console.Pget(85, 11));
+        Assert.Equal((byte)8, console.Pget(85, 21));
         // The sheet window: sprite 0 is the selected region, so its cell wears a bright frame,
         // and the sprite itself is empty inside it.
         Assert.Equal((byte)3, console.Pget(104, 11));
@@ -134,7 +170,7 @@ public class SpriteEditorScreenGoldenTests : IDisposable
             Assert.InRange(pixel, (byte)0, (byte)15);
         }
 
-        Assert.Equal("2afc6f21dc819db1", FrameHash.Of(screen.Framebuffer));
+        Assert.Equal("d7586acedcbd9269", FrameHash.Of(screen.Framebuffer));
     }
 
     /// <summary>
@@ -170,13 +206,14 @@ public class SpriteEditorScreenGoldenTests : IDisposable
         Assert.Equal((byte)0, console.Pget(29, 12));
         // The same art in the sheet window at 1:1 — the diagonal's second pixel.
         Assert.Equal((byte)8, console.Pget(105, 12));
-        // The ring followed the colour: off swatch 0, onto swatch 8.
-        Assert.Equal((byte)0, console.Pget(84, 11));
-        Assert.Equal((byte)3, console.Pget(84, 21));
+        // The ring followed the colour: off swatch 0, onto swatch 8. One column right of where
+        // it used to be asked, for the reason written above the twin probes in the first test.
+        Assert.Equal((byte)0, console.Pget(85, 11));
+        Assert.Equal((byte)3, console.Pget(85, 21));
         // The notice is unchanged — sprite 000 is still the map's empty tile, drawn on or not.
         Assert.Equal((byte)8, console.Pget(2, 79));
 
-        Assert.Equal("62d9aec6f33cd512", FrameHash.Of(screen.Framebuffer));
+        Assert.Equal("a440fd38a44e731a", FrameHash.Of(screen.Framebuffer));
     }
 
     /// <summary>
@@ -222,7 +259,7 @@ public class SpriteEditorScreenGoldenTests : IDisposable
         // on screen, which is the whole reason the prompt lives on one reserved line.
         Assert.Equal((byte)8, console.Pget(21, 12));
 
-        Assert.Equal("2688306247f13a38", FrameHash.Of(screen.Framebuffer));
+        Assert.Equal("a110ff917226f080", FrameHash.Of(screen.Framebuffer));
     }
 
     /// <summary>

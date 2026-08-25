@@ -110,6 +110,19 @@ public static class MusicEditorInput
         // 16). Home is deliberately unbound here: it flips two graphics faces on the sprite and
         // map screens, and a fifth stop cannot be reached by a two-way toggle — the ring is what
         // Alt is for.
+        // F1..F5 jump straight to a named editor — TIC-80's own five keys for exactly this
+        // (REFERENCES-EDITORS §8 item 16). Read beside the tab strip's Alt+arrows and before
+        // everything else for the same reason those are: travel is a question about WHICH
+        // SCREEN, and it must not be answered by a screen that is already being left. The five
+        // routers carry the same four lines because Alt+Left/Right is routed the same way — one
+        // line per screen — and a key that worked on one editor and not on its neighbour is
+        // worse than a key that does not exist. <see cref="EditorIcons.EditorTabForNumber"/> is
+        // the single owner of "which number is which tab"; nothing here counts tabs.
+        if (EditorIcons.EditorTabForNumber(commands.EditorTabJump) is ShellMode named)
+        {
+            shell.Modes.SwitchEditorTab(named);
+            return;
+        }
         if (commands.EditorTabPrev || commands.EditorTabNext)
         {
             shell.Modes.CycleEditorTab(commands.EditorTabNext ? 1 : -1);
@@ -122,7 +135,7 @@ public static class MusicEditorInput
             return;
         }
 
-        Keys(session, view, layout, commands);
+        Keys(shell, session, view, layout, commands);
         Pointer(shell, session, view, layout, mouse, elapsedSeconds);
         view.Sync(layout, session);
     }
@@ -132,8 +145,8 @@ public static class MusicEditorInput
     /// flag), then the digits, then everything that moves the cursor or the window.
     /// </summary>
     private static void Keys(
-        MusicEditorSession session, MusicEditorView view, in MusicEditorLayout layout,
-        in ShellCommands commands)
+        in EditorShell shell, MusicEditorSession session, MusicEditorView view,
+        in MusicEditorLayout layout, in ShellCommands commands)
     {
         if (commands.EditorUndo)
         {
@@ -147,17 +160,22 @@ public static class MusicEditorInput
         {
             session.Save();
         }
+        // The clipboard chords, now through the MACHINE's clipboard as hex text
+        // (REFERENCES-EDITORS §8 item 2; TIC-80's music editor routes its own tracker copy
+        // through the same system hex buffer, §6.1). The read-only guard moved down into the
+        // session, where it can say WHY on the message line instead of the chord silently doing
+        // nothing — the refusal is the feature this wave owes the author.
         if (commands.EditorCopy)
         {
-            session.CopySelection();
+            shell.CopyText(session.CopySelectionToText());
         }
-        if (commands.EditorCut && !session.BankReadOnly)
+        if (commands.EditorCut)
         {
-            session.CutSelection();
+            shell.CopyText(session.CutSelectionToText());
         }
-        if (commands.EditorPaste && !session.BankReadOnly)
+        if (commands.EditorPaste)
         {
-            session.PasteAt(session.CursorPattern, session.CursorChannel);
+            session.PasteFromText(session.CursorPattern, session.CursorChannel, shell.PasteText());
         }
         if (commands.CodeSelectAll)
         {

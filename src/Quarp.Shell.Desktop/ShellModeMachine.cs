@@ -136,6 +136,31 @@ public sealed class ShellModeMachine
     public MapEditorView? MapView { get; private set; }
 
     /// <summary>
+    /// The sprite screen's view — the canvas grid switch and the sheet-block drag. Unlike its
+    /// four siblings it is <b>never null and never replaced</b>: it holds no reference to a
+    /// session and nothing in it is a fact about a particular cartridge, so there is nothing for
+    /// a close to invalidate. Making it non-null buys the routers and the renderer one fewer
+    /// null check on a path that runs sixty times a second, and it lets the grid switch survive
+    /// a trip to the library the way a preference should.
+    /// </summary>
+    public SpriteEditorView SpriteView { get; } = new();
+
+    /// <summary>
+    /// How every screen of this shell spells a bank index — the one live copy of
+    /// <see cref="IndexFormat"/>, flipped by Ctrl+H from any editor screen
+    /// (REFERENCES-EDITORS §8 item 20). It lives here, on the one object that outlives every
+    /// session and that all five routers already hold, because the whole point of the feature is
+    /// that the author sets it once: five per-screen copies would be five answers to one
+    /// question. Nothing about it is ever written to a cartridge, which is why it is not on a
+    /// session; and it survives <see cref="CloseEditor"/> on purpose, because a way of reading
+    /// is not a property of the cart being read.
+    /// </summary>
+    public IndexFormat Indexes { get; private set; }
+
+    /// <summary>Ctrl+H, from any of the five editor screens — the only writer of <see cref="Indexes"/>.</summary>
+    public void ToggleIndexFormat() => Indexes = Indexes.Toggled();
+
+    /// <summary>
     /// The open text of the same cart's <c>src/main.cs</c>, created lazily by the first visit to
     /// the CODE tab and then kept until the whole editor closes — so flipping tabs never costs
     /// an unsaved character. Null until that first visit: a cart whose code is never opened must
@@ -813,6 +838,10 @@ public sealed class ShellModeMachine
     {
         string? edited = _editorFolder;
         Editor = null;
+        // The sprite view outlives the session (see SpriteView), so the ONE thing in it that is
+        // about a gesture rather than a preference is closed by hand: a drag left open by an
+        // editor that went away must not still be open when the next cart's sheet appears.
+        SpriteView.EndTileBlock();
         MapEditor = null;
         MapView = null;
         CodeEditor = null;

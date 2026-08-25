@@ -527,12 +527,27 @@ public readonly struct SpriteEditorLayout
     /// Highlight rectangles for a canonical square region. A region crossing a lane boundary
     /// (<see cref="SheetStrip.Rows"/> sheet rows) intentionally becomes several rectangles: it
     /// is still one model region, but its rows live in separate pieces of the strip.
+    ///
+    /// <para>Kept as the square door onto <see cref="SheetBlockHighlights"/> because it is what
+    /// a caller with one number in hand wants — the dim frame around sprite 0 is drawn through
+    /// it, and so is every existing test. Both shapes come out of one body, so the block frame
+    /// and the region frame cannot be measured differently.</para>
     /// </summary>
     public IReadOnlyList<Rectangle> SheetRegionHighlights(
-        int sheetCellX, int sheetCellY, int regionCells, int scroll)
+        int sheetCellX, int sheetCellY, int regionCells, int scroll) =>
+        SheetBlockHighlights(sheetCellX, sheetCellY, regionCells, regionCells, scroll);
+
+    /// <summary>
+    /// Highlight rectangles for a canonical N×M block of the sheet — the free rectangle a drag
+    /// across the sheet window marks (REFERENCES-EDITORS §8 item 3). Same lane-splitting rule as
+    /// the square case above, which it generalizes: the block is one rectangle in the model and
+    /// may be several in the strip's presentation of it.
+    /// </summary>
+    public IReadOnlyList<Rectangle> SheetBlockHighlights(
+        int sheetCellX, int sheetCellY, int width, int height, int scroll)
     {
         var highlights = new List<Rectangle>(2);
-        int sheetEndY = sheetCellY + regionCells;
+        int sheetEndY = sheetCellY + height;
         int cell = SheetScale * VirtualConsole.SpriteSize;
         for (int y = sheetCellY; y < sheetEndY;)
         {
@@ -542,13 +557,36 @@ public readonly struct SpriteEditorLayout
             var piece = new Rectangle(
                 Sheet.X + (stripColumn * VirtualConsole.SpriteSize - scroll) * SheetScale,
                 Sheet.Y + stripRow * cell,
-                regionCells * cell,
+                width * cell,
                 (laneEndY - y) * cell);
             highlights.Add(piece);
             y = laneEndY;
         }
         return highlights;
     }
+
+    /// <summary>
+    /// Console point to the nearest strip cell of the sheet window — the block drag's twin of
+    /// <see cref="ClampCanvasPixel"/>, and there for the same reason: a drag whose pointer
+    /// leaves the window must keep sizing the block along its edge instead of freezing or
+    /// tearing. Floored, not truncated, so a pointer left of the window counts as its first
+    /// visible column rather than sticking a whole cell wide of it.
+    ///
+    /// <para>Resolved against <paramref name="scroll"/> — the very offset the strip is drawn at
+    /// — because this window scrolls horizontally where the map screen's palette does not. A
+    /// clamp that ignored it would mark the sprites the author is not looking at.</para>
+    /// </summary>
+    public void ClampSheetStripCell(int x, int y, int scroll, out int column, out int row)
+    {
+        int cell = VirtualConsole.SpriteSize * SheetScale;
+        column = Math.Clamp(
+            FloorDiv(x - Sheet.X + scroll * SheetScale, cell), 0, SheetStrip.Columns - 1);
+        row = Math.Clamp(FloorDiv(y - Sheet.Y, cell), 0, SheetStrip.Rows - 1);
+    }
+
+    /// <summary>Division that floors toward minus infinity — C# truncates toward zero, and a pointer one pixel left of the window must be its first cell, not its zeroth twice.</summary>
+    private static int FloorDiv(int value, int divisor) =>
+        value >= 0 ? value / divisor : -((-value + divisor - 1) / divisor);
 
     /// <summary>Console point to a visible palette index, or false. Sixteen rectangle checks, on a click, not per frame.</summary>
     public bool TrySwatch(int x, int y, out int color)

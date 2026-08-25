@@ -133,6 +133,23 @@ public readonly struct ShellCommands
     public bool EditorGridToggle { get; init; }
 
     /// <summary>
+    /// Any editor screen: <c>Ctrl+H</c> — print bank indexes in hexadecimal or in decimal
+    /// (REFERENCES-EDITORS §8 item 20). PICO-8's own key for its own switch, in its own words:
+    /// "CTRL-H to toggle hex view (shows sprite index in hexadecimal)" (§2.3), and it is offered
+    /// there in <em>both</em> graphics editors, which is why this field is not named for one
+    /// screen — every router reads it and <see cref="IndexFormat"/> is the one thing it moves.
+    ///
+    /// <para><b>The key was checked by name before it was taken.</b> <c>Keys.H</c> occurs once
+    /// in this file, in <c>PianoRows</c>, and that whole row is read only when neither Ctrl nor
+    /// Shift is down — so the chord was free. PICO-8's <em>other</em> key from the same
+    /// paragraph, <c>CTRL-G</c> for the grid, was <b>not</b> free: <see cref="CodeFindNext"/> is
+    /// Ctrl+G on the code screen. That is why the canvas grid one item up took the map's
+    /// <c>`</c> (<see cref="EditorGridToggle"/>) instead — one gesture for two palettes, and no
+    /// chord taken twice.</para>
+    /// </summary>
+    public bool EditorHexToggle { get; init; }
+
+    /// <summary>
     /// Map editor: Space is held — the temporary-pan modifier (TIC-80 <c>map.c</c>:
     /// <c>bool space = tic_api_key(tic, tic_key_space)</c>, and a left drag under it pans the
     /// viewport). A level, not an edge: the gesture it modifies lasts as long as the button
@@ -612,6 +629,10 @@ public sealed class ShellCommandReader
             // other editor letter — no chord lands on it today, and the guard is what keeps
             // that true when one does.
             EditorGridToggle = !ctrl && Pressed(keyboard, Keys.OemTilde),
+            // PICO-8's hex-view chord (REFERENCES-EDITORS §8 item 20, §2.3). Ctrl+H was
+            // unclaimed: the only other reader of this physical key is the piano row below,
+            // which is gated on `ctrl || shift ? 0` and therefore cannot see a chord at all.
+            EditorHexToggle = ctrl && Pressed(keyboard, Keys.H),
             EditorPanModifier = keyboard.IsKeyDown(Keys.Space),
             EditorTilesModifier = shift,
             EditorPaintDown = paintDown,

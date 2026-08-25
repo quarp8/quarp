@@ -1024,13 +1024,13 @@ public sealed class QuarpGame : Game
         {
             SpriteEditorRenderer.Draw(
                 _shellScreen, _modes.Editor!, _hover.Target, _hover.TooltipVisible,
-                _flyout.OpenSlot, _sheetScroll, timeSeconds);
+                _flyout.OpenSlot, _sheetScroll, timeSeconds, _modes.SpriteView, _modes.Indexes);
         }
         else if (_modes.Mode == ShellMode.MapEditor)
         {
             MapEditorRenderer.Draw(
                 _shellScreen, _modes.MapEditor!, _modes.Editor!, _modes.MapView!,
-                _hover.Target, _hover.TooltipVisible);
+                _hover.Target, _hover.TooltipVisible, _modes.Indexes);
         }
         else if (_modes.Mode == ShellMode.CodeEditor)
         {
@@ -1042,13 +1042,13 @@ public sealed class QuarpGame : Game
         {
             SfxEditorRenderer.Draw(
                 _shellScreen, _modes.SfxEditor!, _modes.SfxView!,
-                _hover.Target, _hover.TooltipVisible);
+                _hover.Target, _hover.TooltipVisible, _modes.Indexes);
         }
         else if (_modes.Mode == ShellMode.MusicEditor)
         {
             MusicEditorRenderer.Draw(
                 _shellScreen, _modes.MusicEditor!, _modes.MusicView!,
-                _hover.Target, _hover.TooltipVisible);
+                _hover.Target, _hover.TooltipVisible, _modes.Indexes);
         }
         else if (_modes.Mode == ShellMode.Menu)
         {

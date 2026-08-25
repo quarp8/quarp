@@ -561,6 +561,50 @@ public sealed class SpriteEditorSession
     /// <summary>Region side in pixels — what canvas-local coordinates are validated against.</summary>
     public int RegionPixels => RegionCells * VirtualConsole.SpriteSize;
 
+    /// <summary>
+    /// How many sheet cells wide the <b>marked block</b> is — the free N×M rectangle a drag
+    /// across the sheet window marks (REFERENCES-EDITORS §8 item 3: TIC-80's
+    /// <c>map-&gt;sheet.rect</c>, PICO-8's "shift+drag in the sprite navigator"), the twin of
+    /// <see cref="MapEditorSession.BlockWidth"/> one screen over. One until a drag or
+    /// Ctrl+Shift+arrows says otherwise.
+    ///
+    /// <para><b>Why this is a SECOND fact and not a wider <see cref="RegionCells"/>.</b> The
+    /// square region is the CANVAS: <see cref="RegionPixels"/> validates every canvas-local
+    /// coordinate, <see cref="SpriteEditorLayout"/> divides a fixed 64x64 box by it to get a
+    /// whole-integer zoom, the selection mask is allocated <c>RegionPixels * RegionPixels</c>,
+    /// and <see cref="RotateClockwise"/> turns it in place — an operation that only exists for a
+    /// square. Widening that one field to N×M would touch every one of those, hand the canvas a
+    /// non-square box (two zooms, or a fractional one, which ARCHITECTURE §5 forbids), and break
+    /// the 8/16/32 ladder Tab and the size toggle walk. The block is a different question —
+    /// "how much of the SHEET is marked" — and it gets its own pair of numbers, exactly as the
+    /// map screen keeps <c>SelectedSprite</c> and <c>BlockWidth</c>/<c>BlockHeight</c> apart.</para>
+    ///
+    /// <para><b>The price of that choice, said out loud.</b> Two facts now answer "how many
+    /// sprites are in hand", and they must not be allowed to disagree. They are held together by
+    /// one invariant, enforced in <see cref="SelectRegionBlock"/> and nowhere else: <b>the block
+    /// always contains the region</b> — never narrower or shorter than <see cref="RegionCells"/>,
+    /// and reset to exactly <c>RegionCells × RegionCells</c> by every door that names a single
+    /// cell (<see cref="SelectRegionCell"/>) or changes the zoom
+    /// (<see cref="SelectRegionSize"/>). So the flag row, which folds over the block, still
+    /// covers every sprite the canvas is editing, and a screen that never drags a rectangle
+    /// behaves exactly as it did before this wave. What the author does NOT get for the extra
+    /// fact: the canvas still shows the block's anchor cell and its square region, not the whole
+    /// marked rectangle. Marking 5x2 sprites marks them for the flag row and for the eye; it
+    /// does not zoom the canvas out to 5x2, because that is the operation the paragraph above
+    /// says this shell cannot afford.</para>
+    ///
+    /// <para><b>The unit is a SHEET cell, unlike the map's.</b> That screen keeps its block in
+    /// <em>picker</em> cells and resolves them through <see cref="SheetStrip"/> one layer up,
+    /// because a map tile is just a number. Here the block is a rectangle of the sheet itself —
+    /// the flag fold and the region anchor are both stated in sheet cells — so the view clamps
+    /// the drag inside one strip lane before it arrives (see <c>SpriteEditorView</c>) and this
+    /// class never needs to know the strip exists.</para>
+    /// </summary>
+    public int BlockWidth { get; private set; } = 1;
+
+    /// <summary>How many sheet cells tall the marked block is — <see cref="BlockWidth"/>'s other half.</summary>
+    public int BlockHeight { get; private set; } = 1;
+
     /// <summary>Sprite number of the region's anchor cell — the "#NNN" the header shows, same numbering Spr(n) uses.</summary>
     public int SpriteIndex => RegionCellY * GridCells + RegionCellX;
 
@@ -581,21 +625,28 @@ public sealed class SpriteEditorSession
     }
 
     /// <summary>
-    /// Bits raised on <b>every</b> sprite of the selected region — TIC-80's <c>and</c> in
+    /// Bits raised on <b>every</b> sprite of the marked block — TIC-80's <c>and</c> in
     /// <c>drawFlags</c> (REFERENCES-EDITORS §2.1), the fold over the same block
-    /// <c>getSpriteIndexes</c> returns there. At <see cref="RegionCells"/> 1 this is
-    /// <see cref="Flags"/> itself; at 2 or 4 it is what makes the panel's three states
-    /// possible, and it is also what decides which way a click on a toggle goes
-    /// (see <see cref="ToggleRegionFlag"/>).
+    /// <c>getSpriteIndexes</c> returns there. With one cell in hand this is
+    /// <see cref="Flags"/> itself; over a bigger region or a dragged rectangle it is what makes
+    /// the panel's three states possible, and it is also what decides which way a click on a
+    /// toggle goes (see <see cref="ToggleRegionFlag"/>).
+    ///
+    /// <para><b>The fold follows <see cref="BlockWidth"/>, not <see cref="RegionCells"/>, since
+    /// the free-rectangle wave</b> — and on a screen that never drags a rectangle the two are
+    /// the same numbers, because the block is reset to the square region by every door that
+    /// names a single cell. That is the whole of what makes the second fact safe here: it can
+    /// only ever be <em>wider</em> than what the canvas edits, never narrower, so no sprite the
+    /// author is drawing on can fall out of the fold.</para>
     /// </summary>
     public byte RegionFlagsAll
     {
         get
         {
             int all = 0xFF;
-            for (int dy = 0; dy < RegionCells; dy++)
+            for (int dy = 0; dy < BlockHeight; dy++)
             {
-                for (int dx = 0; dx < RegionCells; dx++)
+                for (int dx = 0; dx < BlockWidth; dx++)
                 {
                     all &= _flags[RegionSprite(dx, dy)];
                 }
@@ -604,15 +655,15 @@ public sealed class SpriteEditorSession
         }
     }
 
-    /// <summary>Bits raised on <b>at least one</b> sprite of the selected region — TIC-80's <c>or</c>, the panel's "some of them" dot.</summary>
+    /// <summary>Bits raised on <b>at least one</b> sprite of the marked block — TIC-80's <c>or</c>, the panel's "some of them" dot.</summary>
     public byte RegionFlagsAny
     {
         get
         {
             int any = 0;
-            for (int dy = 0; dy < RegionCells; dy++)
+            for (int dy = 0; dy < BlockHeight; dy++)
             {
-                for (int dx = 0; dx < RegionCells; dx++)
+                for (int dx = 0; dx < BlockWidth; dx++)
                 {
                     any |= _flags[RegionSprite(dx, dy)];
                 }
@@ -779,6 +830,35 @@ public sealed class SpriteEditorSession
         }
         RegionCellX = nextX;
         RegionCellY = nextY;
+        // One cell is one region: every path that names a single sheet cell — a click on the
+        // sheet window, Shift+arrows through EditorSheetStep, a size change re-clamping itself —
+        // arrives here, so a marked block cannot survive one of them and silently widen the next
+        // flag click. Growing it back is SelectRegionBlock's job and nothing else's. This is the
+        // map screen's rule verbatim (MapEditorSession.SelectSprite resets its block to 1x1); the
+        // only difference is the value it resets to, because on this screen the SQUARE REGION is
+        // what a single cell means and the block may never be smaller than it.
+        BlockWidth = RegionCells;
+        BlockHeight = RegionCells;
+    }
+
+    /// <summary>
+    /// The sheet drag's door: the block's top-left sheet cell and its size in sheet cells
+    /// (REFERENCES-EDITORS §8 item 3, TIC-80's <c>map-&gt;sheet.rect</c>). The anchor travels
+    /// through <see cref="SelectRegionCell"/>, so a drag moves the canvas to the block's corner
+    /// and drops a stale mask exactly as a click does — and because that door resets the block,
+    /// the size is written afterwards and not before.
+    ///
+    /// <para>Everything is clamped rather than thrown: this is the far end of a mouse drag, and
+    /// the pointer is free to leave the window mid-gesture. The floor is
+    /// <see cref="RegionCells"/> — see <see cref="BlockWidth"/> for the invariant and its
+    /// price — and the ceiling is the sheet's own edge, so a block can never name a cell the
+    /// bank does not have.</para>
+    /// </summary>
+    public void SelectRegionBlock(int cellX, int cellY, int width, int height)
+    {
+        SelectRegionCell(cellX, cellY);
+        BlockWidth = Math.Clamp(width, RegionCells, GridCells - RegionCellX);
+        BlockHeight = Math.Clamp(height, RegionCells, GridCells - RegionCellY);
     }
 
     /// <summary>Canvas cursor, region-local — see <see cref="SetCursor"/> for why it lives here.</summary>
@@ -1900,7 +1980,7 @@ public sealed class SpriteEditorSession
     /// doors, one owner of the assignment: a second place that touched <c>_flags</c> is exactly
     /// what the wave's order forbade.</para>
     /// </summary>
-    public void SetFlags(byte value) => WriteRegionFlags(1, _ => value);
+    public void SetFlags(byte value) => WriteRegionFlags(1, 1, _ => value);
 
     /// <summary>One checkbox in the flag panel: flips a single bit of the selected sprite, through <see cref="SetFlags"/> so there is one write door.</summary>
     public void ToggleFlag(int bit)
@@ -1931,11 +2011,11 @@ public sealed class SpriteEditorSession
         int mask = 1 << bit;
         if ((RegionFlagsAll & mask) == 0)
         {
-            WriteRegionFlags(RegionCells, current => (byte)(current | mask));
+            WriteRegionFlags(BlockWidth, BlockHeight, current => (byte)(current | mask));
         }
         else
         {
-            WriteRegionFlags(RegionCells, current => (byte)(current & ~mask));
+            WriteRegionFlags(BlockWidth, BlockHeight, current => (byte)(current & ~mask));
         }
     }
 
@@ -2050,31 +2130,38 @@ public sealed class SpriteEditorSession
     private Snapshot TakeSnapshot() => new(CloneStack(_layers), (byte[])_flags.Clone());
 
     /// <summary>
-    /// Sprite number of one cell of the selected region, from its anchor. Safe without a bounds
-    /// check by the type comment's region invariant: the anchor is clamped to
-    /// <c>GridCells - RegionCells</c> by its only two writers, so a region can never hang off
-    /// the sheet and <c>dx, dy &lt; RegionCells</c> can never leave the bank.
+    /// Sprite number of one cell of the marked block, from the region's anchor. Safe without a
+    /// bounds check by the type comment's region invariant plus the block's own: the anchor is
+    /// clamped to <c>GridCells - RegionCells</c> by its only two writers and the block is
+    /// clamped to <c>GridCells - anchor</c> by <see cref="SelectRegionBlock"/>, so neither can
+    /// hang off the sheet and <c>dx &lt; BlockWidth</c>, <c>dy &lt; BlockHeight</c> can never
+    /// leave the bank.
     /// </summary>
     private int RegionSprite(int dx, int dy) => (RegionCellY + dy) * GridCells + RegionCellX + dx;
 
     /// <summary>
     /// The <b>one</b> writer of the flag bank, and the one pusher of a flag undo step — both
     /// <see cref="SetFlags"/> (a block of one cell) and <see cref="ToggleRegionFlag"/> (the
-    /// whole region) come through here, so "one write door" survived the panel gaining a
+    /// whole marked block) come through here, so "one write door" survived the panel gaining a
     /// second public verb. Applies <paramref name="transform"/> to every sprite of the
-    /// <paramref name="cells"/>-square block anchored at the region, as <b>one</b> operation:
-    /// one <see cref="InterruptGesture"/>, one snapshot, one <see cref="Version"/> bump, one
-    /// Ctrl+Z. A transform that changes no byte of the block is not a step and not dirt,
-    /// exactly like a stroke that painted the color already at every pixel it touched — which
-    /// is why the block is scanned before anything is written rather than after.
+    /// <paramref name="width"/> x <paramref name="height"/> block anchored at the region, as
+    /// <b>one</b> operation: one <see cref="InterruptGesture"/>, one snapshot, one
+    /// <see cref="Version"/> bump, one Ctrl+Z. A transform that changes no byte of the block is
+    /// not a step and not dirt, exactly like a stroke that painted the color already at every
+    /// pixel it touched — which is why the block is scanned before anything is written rather
+    /// than after.
+    ///
+    /// <para>Two dimensions and no longer one square side: the free-rectangle wave made the
+    /// marked block N×M (REFERENCES-EDITORS §8 item 3), and a door that still took one number
+    /// would have had to pick which of the two to obey.</para>
     /// </summary>
-    private void WriteRegionFlags(int cells, Func<byte, byte> transform)
+    private void WriteRegionFlags(int width, int height, Func<byte, byte> transform)
     {
         InterruptGesture();
         bool changed = false;
-        for (int dy = 0; dy < cells && !changed; dy++)
+        for (int dy = 0; dy < height && !changed; dy++)
         {
-            for (int dx = 0; dx < cells && !changed; dx++)
+            for (int dx = 0; dx < width && !changed; dx++)
             {
                 byte current = _flags[RegionSprite(dx, dy)];
                 changed = transform(current) != current;
@@ -2086,9 +2173,9 @@ public sealed class SpriteEditorSession
         }
         _undo.Add(TakeSnapshot());
         _redo.Clear();
-        for (int dy = 0; dy < cells; dy++)
+        for (int dy = 0; dy < height; dy++)
         {
-            for (int dx = 0; dx < cells; dx++)
+            for (int dx = 0; dx < width; dx++)
             {
                 int sprite = RegionSprite(dx, dy);
                 _flags[sprite] = transform(_flags[sprite]);

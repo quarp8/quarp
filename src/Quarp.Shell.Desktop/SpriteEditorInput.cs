@@ -85,6 +85,9 @@ public static class SpriteEditorInput
         in EditorShell shell, in ShellCommands commands, in EditorMouse mouse, double elapsedSeconds)
     {
         SpriteEditorSession editor = shell.Modes.Editor!;
+        // The screen's view state — the canvas grid switch and the sheet-block drag. Never null
+        // (see ShellModeMachine.SpriteView), so no path below has to guard it.
+        SpriteEditorView view = shell.Modes.SpriteView;
         // The same layout the renderer will draw this frame — geometry has one owner.
         var layout = SpriteEditorLayout.Compute(
             shell.BackBufferWidth, shell.BackBufferHeight, editor.RegionCells);
@@ -182,6 +185,15 @@ public static class SpriteEditorInput
         // unrelated blocks read it and a second copy is a second thing to get wrong.
         SpriteEditorInk keyInk =
             commands.EditorSecondaryInk ? SpriteEditorInk.Secondary : SpriteEditorInk.Primary;
+        // Ctrl+H: the shell-wide hex/dec switch for bank indexes (REFERENCES-EDITORS §8 item 20,
+        // PICO-8's CTRL-H). Every one of the five routers carries this same line, and that is the
+        // point of the feature rather than duplication to be tidied away: the state has ONE owner
+        // (ShellModeMachine.Indexes, an IndexFormat) and the key must reach it from wherever the
+        // author happens to be standing, the same shape F1..F5 and Alt+arrows already have here.
+        if (commands.EditorHexToggle)
+        {
+            shell.Modes.ToggleIndexFormat();
+        }
         if (commands.EditorUndo)
         {
             editor.Undo();
@@ -218,6 +230,23 @@ public static class SpriteEditorInput
         // The whole digit policy (select / repeat-cycles-variant / stubs stay dead) is
         // EditorIcons.PressToolDigit's — this line only delivers the key.
         EditorIcons.PressToolDigit(editor, commands.EditorToolDigit);
+        if (commands.EditorGridToggle)
+        {
+            // ` — the very key the map screen answers for the very same verb, one gesture over
+            // two panels (REFERENCES-EDITORS §8 item 11). PICO-8 spends CTRL-G on its own canvas
+            // grid, and that chord is not free here: Ctrl+G is the code screen's find-next.
+            // There is no button to go with it — the tool column's twelve slots are twelve
+            // buttons already — so on this screen the grid is key-only, and its tooltip has
+            // nowhere to be announced.
+            view.ToggleGrid();
+        }
+        if (commands.EditorBlockDx != 0 || commands.EditorBlockDy != 0)
+        {
+            // Ctrl+Shift+arrows size the marked block — the keyboard twin of dragging a
+            // rectangle across the sheet window, and the map screen's chord for the map screen's
+            // version of the same gesture (REFERENCES-EDITORS §8 item 3).
+            view.StepTileBlock(editor, commands.EditorBlockDx, commands.EditorBlockDy);
+        }
         if (commands.EditorRegionCycle)
         {
             editor.CycleRegionSize();
@@ -305,8 +334,14 @@ public static class SpriteEditorInput
         // thing, not both. The guard sits here, in the editor, and not in the shared reader —
         // see ShellCommandReader's note about the library losing Shift+Down to that mistake.
         bool steppedSheet = commands.EditorSheetDx != 0 || commands.EditorSheetDy != 0;
-        int dx = steppedSheet ? 0 : (commands.MenuRight ? 1 : 0) - (commands.MenuLeft ? 1 : 0);
-        int dy = steppedSheet ? 0 : (commands.MenuDown ? 1 : 0) - (commands.MenuUp ? 1 : 0);
+        // An arrow that sized the block is spent on the block, exactly as one that stepped the
+        // sheet is spent on the sheet: the bare-arrow fields fire under any modifier, so the
+        // frame that means "grow the block" must not also walk the canvas cursor. The map
+        // screen's guard, word for word, because it is the same gesture.
+        bool aimedAtSheet = steppedSheet
+            || commands.EditorBlockDx != 0 || commands.EditorBlockDy != 0;
+        int dx = aimedAtSheet ? 0 : (commands.MenuRight ? 1 : 0) - (commands.MenuLeft ? 1 : 0);
+        int dy = aimedAtSheet ? 0 : (commands.MenuDown ? 1 : 0) - (commands.MenuUp ? 1 : 0);
         if (dx != 0 || dy != 0)
         {
             editor.MoveCursor(dx, dy);
@@ -452,11 +487,14 @@ public static class SpriteEditorInput
                 // only says which bit the pointer landed on.
                 editor.ToggleRegionFlag(flagBit);
             }
-            else if (layout.TrySheetCell(mouse.X, mouse.Y, shell.SheetScroll.Offset, out int cellX, out int cellY))
+            else if (layout.TrySheetCell(mouse.X, mouse.Y, shell.SheetScroll.Offset, out _, out _))
             {
-                // Layout reverses the presentation-strip mapping; the session still receives
-                // its canonical 16x16 sheet cell and therefore remains view-agnostic.
-                editor.SelectRegionCell(cellX, cellY);
+                // A press on the sheet opens a block drag (REFERENCES-EDITORS §8 item 3). A
+                // press that never moves ends as a 1x1 block — the single-cell click this
+                // replaced — so the drag is a generalization of it and not a second way to
+                // choose a sprite. The view reverses the presentation-strip mapping; the session
+                // still receives canonical 16x16 sheet cells and stays view-agnostic.
+                view.BeginTileBlock(editor, layout, mouse.X, mouse.Y, shell.SheetScroll.Offset);
             }
             else if (layout.SheetSlider.Contains(mouse.X, mouse.Y))
             {
@@ -469,6 +507,13 @@ public static class SpriteEditorInput
                 BeginCanvasGesture(
                     editor, pressX, pressY, SpriteEditorInk.Primary, commands.EditorShapeFill);
             }
+        }
+        else if (mouse.LeftDown && view.TileBlockGestureActive)
+        {
+            // Checked before the slider and the canvas: a sheet drag owns the button until it is
+            // released, even when the pointer wanders off the window (the strip cell is clamped,
+            // so the block keeps sizing along the sheet's edge).
+            view.UpdateTileBlock(editor, layout, mouse.X, mouse.Y, shell.SheetScroll.Offset);
         }
         else if (mouse.LeftDown && shell.SheetScroll.Dragging)
         {
@@ -546,6 +591,7 @@ public static class SpriteEditorInput
         if (mouse.LeftReleased)
         {
             shell.SheetScroll.EndDrag();     // wherever the pointer wandered, the drag dies with the button
+            view.EndTileBlock();             // and so does the sheet block's
             EndCanvasGesture(editor);
         }
         if (mouse.RightReleased)

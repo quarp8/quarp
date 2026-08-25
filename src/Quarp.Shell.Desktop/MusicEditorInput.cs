@@ -148,6 +148,15 @@ public static class MusicEditorInput
         in EditorShell shell, MusicEditorSession session, MusicEditorView view,
         in MusicEditorLayout layout, in ShellCommands commands)
     {
+        // Ctrl+H: the shell-wide hex/dec switch for bank indexes (REFERENCES-EDITORS §8 item 20,
+        // PICO-8's CTRL-H). Every one of the five routers carries this same line, and that is the
+        // point of the feature rather than duplication to be tidied away: the state has ONE owner
+        // (ShellModeMachine.Indexes, an IndexFormat) and the key must reach it from wherever the
+        // author happens to be standing, the same shape F1..F5 and Alt+arrows already have here.
+        if (commands.EditorHexToggle)
+        {
+            shell.Modes.ToggleIndexFormat();
+        }
         if (commands.EditorUndo)
         {
             session.Undo();

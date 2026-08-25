@@ -101,7 +101,7 @@ public static class SfxEditorRenderer
     /// <returns>The layout used, so a test can assert against exactly what was drawn.</returns>
     public static SfxEditorLayout Draw(
         ShellScreen screen, SfxEditorSession session, SfxEditorView view,
-        HoverTarget? hover, bool tooltipVisible)
+        HoverTarget? hover, bool tooltipVisible, IndexFormat indexes = default)
     {
         ArgumentNullException.ThrowIfNull(session);
         ArgumentNullException.ThrowIfNull(view);
@@ -122,7 +122,7 @@ public static class SfxEditorRenderer
         DrawFields(console, layout, session, view);
         DrawButtons(console, layout, session, view, hover);
 
-        DrawStatusText(console, layout.Chrome, Coordinates(session, view), Summary(view));
+        DrawStatusText(console, layout.Chrome, Coordinates(session, view), Summary(view, indexes));
         DrawMessageLine(
             console, layout.Chrome, view.ExitPromptShown, session.SaveError, StandingNotice(session));
         DrawTooltipField(
@@ -165,10 +165,13 @@ public static class SfxEditorRenderer
     /// screen's edge by <see cref="ConsoleChromeRenderer.DrawStatusText"/>, so it stops jumping
     /// when it gains a digit — the same shape the sprite screen's <c>#003</c> and the map's have.
     /// </summary>
-    public static string Summary(SfxEditorView view)
+    public static string Summary(SfxEditorView view, IndexFormat indexes = default)
     {
         ArgumentNullException.ThrowIfNull(view);
-        return $"SFX {view.SelectedSlot:00}";
+        // The base is the shell's, not this screen's (REFERENCES-EDITORS §8 item 20): one
+        // Ctrl+H anywhere spells every bank index the same way. `default` is decimal — what this
+        // method returned before the switch existed, and what every caller without a shell gets.
+        return indexes.Slot("SFX", view.SelectedSlot);
     }
 
     /// <summary>

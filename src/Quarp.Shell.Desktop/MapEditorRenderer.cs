@@ -92,7 +92,7 @@ public static class MapEditorRenderer
     /// <returns>The layout used, so a test can assert against exactly what was drawn.</returns>
     public static MapEditorLayout Draw(
         ShellScreen screen, MapEditorSession map, SpriteEditorSession sheet, MapEditorView view,
-        HoverTarget? hover, bool tooltipVisible)
+        HoverTarget? hover, bool tooltipVisible, IndexFormat indexes = default)
     {
         ArgumentNullException.ThrowIfNull(sheet);
         MapEditorLayout layout = LayoutFor(screen, map, view);
@@ -111,8 +111,13 @@ public static class MapEditorRenderer
         DrawButtons(console, layout, map, view, hover);
         // The readouts: the cursor's cell — the pair an author would hand Mget — and the tile
         // number in hand, which is the block's anchor when a block is in hand.
+        // Both fields are spelled by the shell's one IndexFormat (Ctrl+H, REFERENCES-EDITORS §8
+        // item 20) — the same value the sprite screen prints its own two with, so the author who
+        // flipped the switch on one graphics tab finds it flipped on the other. `default` is
+        // decimal, which is what this line printed before the switch existed.
         DrawStatusText(
-            console, layout.Chrome, $"{view.CursorX:D3},{view.CursorY:D3}", $"#{map.SelectedSprite:D3}");
+            console, layout.Chrome,
+            indexes.Pair(view.CursorX, view.CursorY), indexes.Sprite(map.SelectedSprite));
         DrawMessageLine(
             console, layout.Chrome, view.ExitPromptShown, map.SaveError, StandingNotice(map));
         DrawTooltipField(

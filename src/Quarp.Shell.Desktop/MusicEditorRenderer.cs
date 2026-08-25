@@ -75,7 +75,7 @@ public static class MusicEditorRenderer
     /// <returns>The layout used, so a test can assert against exactly what was drawn.</returns>
     public static MusicEditorLayout Draw(
         ShellScreen screen, MusicEditorSession session, MusicEditorView view,
-        HoverTarget? hover, bool tooltipVisible)
+        HoverTarget? hover, bool tooltipVisible, IndexFormat indexes = default)
     {
         ArgumentNullException.ThrowIfNull(session);
         ArgumentNullException.ThrowIfNull(view);
@@ -90,7 +90,7 @@ public static class MusicEditorRenderer
         DrawOverview(console, layout, session, view);
         DrawButtons(console, layout, session, view, hover);
 
-        DrawStatusText(console, layout.Chrome, Coordinates(session, view), Summary(session));
+        DrawStatusText(console, layout.Chrome, Coordinates(session, view), Summary(session, indexes));
         DrawMessageLine(
             console, layout.Chrome, view.ExitPromptShown, session.SaveError, StandingNotice(session));
         DrawTooltipField(
@@ -124,10 +124,11 @@ public static class MusicEditorRenderer
     /// jumping when it gains a digit — the same shape the sprite screen's <c>#003</c>, the map's
     /// and the sound screen's <c>SFX 00</c> have.
     /// </summary>
-    public static string Summary(MusicEditorSession session)
+    public static string Summary(MusicEditorSession session, IndexFormat indexes = default)
     {
         ArgumentNullException.ThrowIfNull(session);
-        return $"PAT {session.CursorPattern:00}";
+        // The shell's base, not this screen's — see SfxEditorRenderer.Summary for the argument.
+        return indexes.Slot("PAT", session.CursorPattern);
     }
 
     /// <summary>

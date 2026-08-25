@@ -42,6 +42,16 @@ public static class SpriteEditorRenderer
     /// <summary>What the tooltip field says when no control is hovered — TIC-80's <c>Names[mode]</c>.</summary>
     public const string ScreenName = "SPRITES";
 
+    /// <summary>
+    /// The zoom at which a one-console-pixel grid line stops being scaffolding and starts being
+    /// the picture: below this, a boundary line covers more than a quarter of the art pixel it
+    /// stands on. Four, because the region ladder is 8/16/32 px in a fixed 64x64 box and
+    /// therefore offers zooms 8, 4 and 2 — this admits the first two and refuses the third. See
+    /// <see cref="DrawCanvasGrid"/> for the whole argument; the number is here so the argument
+    /// and the code cannot come apart.
+    /// </summary>
+    private const int PixelGridMinScale = 4;
+
     /// <summary>The layout this screen is drawn with; the router asks for the same one, so picture and clicks cannot disagree.</summary>
     public static SpriteEditorLayout LayoutFor(ShellScreen screen, SpriteEditorSession editor)
     {
@@ -62,11 +72,18 @@ public static class SpriteEditorRenderer
     /// <see cref="SheetScroll"/> — the window's slice and the slider's thumb both come from the
     /// very offset the hit tests use. <paramref name="timeSeconds"/> is the shell's draw clock,
     /// consumed only by the marching ants' phase.
+    ///
+    /// <para><paramref name="view"/> is the screen's view state (the canvas grid switch) and
+    /// <paramref name="indexes"/> the shell's hex/dec rule. Both are <b>optional and default to
+    /// the picture this screen drew before either existed</b> — no grid, decimal indexes — so a
+    /// caller that has no shell behind it (a golden master, a layout probe) is not made to invent
+    /// one, and no existing frame moved by a pixel when they were added.</para>
     /// </summary>
     /// <returns>The layout used, so a test can assert against exactly what was drawn.</returns>
     public static SpriteEditorLayout Draw(
         ShellScreen screen, SpriteEditorSession editor, HoverTarget? hover, bool tooltipVisible,
-        EditorButton? flyoutSlot, SheetScroll scroll, double timeSeconds)
+        EditorButton? flyoutSlot, SheetScroll scroll, double timeSeconds,
+        SpriteEditorView? view = null, IndexFormat indexes = default)
     {
         ArgumentNullException.ThrowIfNull(scroll);
         SpriteEditorLayout layout = LayoutFor(screen, editor);
@@ -76,7 +93,7 @@ public static class SpriteEditorRenderer
 
         DrawBands(console, layout.Chrome);
         DrawPanelFrames(console, layout);
-        DrawCanvas(console, layout, editor, timeSeconds);
+        DrawCanvas(console, layout, editor, view, timeSeconds);
         DrawButtons(console, layout, editor, hover);
         DrawSwatches(console, layout, editor);
         DrawFlags(console, layout, editor, hover);
@@ -84,7 +101,8 @@ public static class SpriteEditorRenderer
         DrawSlider(console, layout, scroll, hover);
         // The readouts: the cursor in SHEET pixels — the coordinate an author would type into
         // code — and the sprite number, which is Spr(n)'s n for the region's anchor cell.
-        DrawStatusText(console, layout.Chrome, SheetCoordinates(editor), $"#{editor.SpriteIndex:D3}");
+        DrawStatusText(
+            console, layout.Chrome, SheetCoordinates(editor, indexes), indexes.Sprite(editor.SpriteIndex));
         DrawMessageLine(
             console, layout.Chrome, editor.ExitPromptShown, editor.SaveError, StandingNotice(editor));
         DrawFlyout(console, layout, editor, flyoutSlot, hover);
@@ -118,11 +136,12 @@ public static class SpriteEditorRenderer
         Outline(console, layout.SheetFrame, Dim);
     }
 
-    /// <summary>The status line's left half, in <b>sheet</b> pixels — the coordinate an author would type into code, not a screen position.</summary>
-    private static string SheetCoordinates(SpriteEditorSession editor)
+    /// <summary>The status line's left half, in <b>sheet</b> pixels — the coordinate an author would type into code, not a screen position. Spelled in whichever base <see cref="IndexFormat"/> is holding (Ctrl+H).</summary>
+    private static string SheetCoordinates(SpriteEditorSession editor, IndexFormat indexes)
     {
         int size = VirtualConsole.SpriteSize;
-        return $"{editor.RegionCellX * size + editor.CursorX:D3},{editor.RegionCellY * size + editor.CursorY:D3}";
+        return indexes.Pair(
+            editor.RegionCellX * size + editor.CursorX, editor.RegionCellY * size + editor.CursorY);
     }
 
     /// <summary>
@@ -266,7 +285,8 @@ public static class SpriteEditorRenderer
     /// author sees is the flattened stack).
     /// </summary>
     private static void DrawCanvas(
-        VirtualConsole console, in SpriteEditorLayout layout, SpriteEditorSession editor, double timeSeconds)
+        VirtualConsole console, in SpriteEditorLayout layout, SpriteEditorSession editor,
+        SpriteEditorView? view, double timeSeconds)
     {
         int size = VirtualConsole.SpriteSize;
         int sheetX0 = editor.RegionCellX * size;
@@ -280,6 +300,8 @@ public static class SpriteEditorRenderer
                 Fill(console, PixelRect(layout, x, y), color);
             }
         }
+
+        DrawCanvasGrid(console, layout, view);
 
         // The shape preview, straight from the session's point list — the very pixels the commit
         // will plot, in the colour they will get. The preview never enters the sheet, so
@@ -303,6 +325,76 @@ public static class SpriteEditorRenderer
         // stay visible under the cursor.
         Rectangle cursor = PixelRect(layout, editor.CursorX, editor.CursorY);
         console.Rect(cursor.X, cursor.Y, cursor.Width, cursor.Height, Bright);
+    }
+
+    /// <summary>
+    /// The canvas grid (REFERENCES-EDITORS §8 item 11; PICO-8's <c>CTRL-G</c>, "toggle black
+    /// grid lines when zoomed in"). Off unless <see cref="SpriteEditorView.GridShown"/> says
+    /// otherwise, and drawn over the art but under the shape preview, the selection ants, the
+    /// stamp ghost and the cursor — it is scaffolding, and every one of those four is something
+    /// the author is doing right now.
+    ///
+    /// <para><b>WHERE THE LINES GO, and why that is not the trap it looks like.</b> The obvious
+    /// objection to a grid on this screen is the one <see cref="SpriteEditorLayout.CanvasFrame"/>
+    /// already states about the sheet window: a line on a cell boundary eats a row of somebody's
+    /// art. On the SHEET that is true and fatal — a cell there is eight console pixels holding an
+    /// 8x8 sprite, so one console pixel of line is one whole PIXEL OF THE DRAWING, gone. On the
+    /// CANVAS it is neither, and the difference is the zoom: at region size 1 the canvas is 64x64
+    /// console pixels showing an 8x8 sprite, so one art pixel is an 8x8 SQUARE of console pixels.
+    /// A one-console-pixel line laid on the boundary between two of those squares takes one
+    /// eighth of one square's width — the art pixel keeps 7/8 of its area and every bit of its
+    /// identity. Nothing is hidden, because there is nothing at that scale to hide: the line sits
+    /// <em>inside the magnification</em>, in a place that has no counterpart in the sheet at all.
+    /// This is exactly why PICO-8 qualifies its own switch with "<b>when zoomed in</b>", and it
+    /// is why the same feature is refused on the sheet window one method up (see
+    /// <c>DrawEmptyCellMarks</c>, which marks empty cells only, precisely because it may not
+    /// draw on full ones).</para>
+    ///
+    /// <para><b>So the rule is stated as a ratio, not as a taste.</b> A boundary line is drawn
+    /// only where it costs at most a quarter of the art pixel it stands on — that is
+    /// <see cref="SpriteEditorLayout.CanvasScale"/> of 4 or more, i.e. region sizes 8 px (zoom 8)
+    /// and 16 px (zoom 4). At region 32 px the zoom is 2, a line would be HALF of every pixel it
+    /// touches, and a grid that eats half the picture is not a grid; there the pixel lines are
+    /// dropped and only the SPRITE lines remain — one line every eight art pixels, marking where
+    /// the region's four-by-four block of sprites divides. That is the second half of the rule
+    /// and it is what keeps the switch honest at every zoom: the map screen's own grid button was
+    /// once allowed to draw nothing at the densest scale, and wave R3 reversed that with the
+    /// argument "a switch that cannot be seen to work" (see <c>MapEditorRenderer.DrawGrid</c>).
+    /// Here the two grids together mean the key always changes something — pixel lines at region
+    /// 8, both at region 16, sprite lines at region 32.</para>
+    ///
+    /// <para><b>The colour is <see cref="ConsoleChromeRenderer.Dim"/>, and that is a named
+    /// divergence from PICO-8's black.</b> Colour 0 is this shell's ground AND the commonest
+    /// colour in an unfinished sprite, so black lines over black art would be no lines at all —
+    /// and where the art is not black they would read as painted pixels rather than as
+    /// scaffolding, which is worse than invisible. Grey is what every structural rule on this
+    /// chrome is already drawn in: the three band rules, the canvas frame, the sheet frame, the
+    /// map screen's grid. <see cref="ConsoleChromeRenderer.Bright"/> was not available even in
+    /// principle — on this screen white means "the cell the cursor is on", and a white grid would
+    /// compete with the canvas cursor drawn a few lines below.</para>
+    /// </summary>
+    private static void DrawCanvasGrid(
+        VirtualConsole console, in SpriteEditorLayout layout, SpriteEditorView? view)
+    {
+        if (view is not { GridShown: true })
+        {
+            return;
+        }
+        // Only the INTERIOR boundaries: 0 and RegionPixels are the canvas's own edge, and the
+        // ring around it is already drawn by DrawPanelFrames. A line there would double the frame
+        // and, on the right and bottom, land one pixel inside the drawing.
+        int step = layout.CanvasScale >= PixelGridMinScale ? 1 : VirtualConsole.SpriteSize;
+        for (int i = step; i < layout.RegionPixels; i += step)
+        {
+            int x = layout.Canvas.X + i * layout.CanvasScale;
+            int y = layout.Canvas.Y + i * layout.CanvasScale;
+            console.RectFill(x, layout.Canvas.Y, 1, layout.Canvas.Height, Dim);
+            console.RectFill(layout.Canvas.X, y, layout.Canvas.Width, 1, Dim);
+        }
+        // One loop is enough for both grids: at the fine step the sprite boundaries are already
+        // among the lines drawn, and at the coarse step they are the only ones. A single-sprite
+        // region has no interior sprite boundary at all — its whole canvas IS one sprite — which
+        // is the case the loop simply does not enter.
     }
 
     /// <summary>One region pixel's square on the canvas — the single mapping the shape preview, the selection, the ghost and the cursor all share.</summary>
@@ -539,8 +631,12 @@ public static class SpriteEditorRenderer
         {
             Outline(console, Rectangle.Intersect(zero, layout.Sheet), Dim);
         }
-        foreach (Rectangle highlight in layout.SheetRegionHighlights(
-            editor.RegionCellX, editor.RegionCellY, editor.RegionCells, scroll))
+        // The MARKED BLOCK wears the bright frame, not the square region (REFERENCES-EDITORS §8
+        // item 3). On a screen where nothing has been dragged the two are the same rectangle —
+        // the block is reset to RegionCells x RegionCells by every door that names one cell — so
+        // this changed no pixel of any frame that existed before the free-rectangle wave.
+        foreach (Rectangle highlight in layout.SheetBlockHighlights(
+            editor.RegionCellX, editor.RegionCellY, editor.BlockWidth, editor.BlockHeight, scroll))
         {
             Outline(console, Rectangle.Intersect(highlight, layout.Sheet), Bright);
         }

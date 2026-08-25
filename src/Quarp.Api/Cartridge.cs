@@ -148,6 +148,28 @@ public abstract class Cartridge
     /// <summary>Resets transparency to the default: only color 0 is transparent.</summary>
     protected void Palt() => Q.Palt();
 
+    /// <summary>
+    /// In display set 0-3: master colour <paramref name="color"/> is shown as
+    /// <paramref name="shown"/>. Pal changes what you draw with next; this changes how what is
+    /// already drawn is shown — the whole frame at once, retroactively.
+    /// </summary>
+    protected void Pald(byte set, byte color, byte shown) => Q.Pald(set, color, shown);
+
+    /// <summary>Resets one display set to the identity map; the row selector is untouched.</summary>
+    protected void Pald(byte set) => Q.Pald(set);
+
+    /// <summary>Resets all four display sets to the identity map; the row selector is untouched.</summary>
+    protected void Pald() => Q.Pald();
+
+    /// <summary>Shows scanline y through display set 0-3; a row off-screen is ignored.</summary>
+    protected void Palr(int y, byte set) => Q.Palr(y, set);
+
+    /// <summary>Shows a band of rows (position plus size, as Clip takes them) through display set 0-3.</summary>
+    protected void Palr(int y, int height, byte set) => Q.Palr(y, height, set);
+
+    /// <summary>Resets the row selector: every scanline is shown through set 0 again.</summary>
+    protected void Palr() => Q.Palr();
+
     // --- input ---
 
     /// <summary>True while the button is held on this tick.</summary>

@@ -155,6 +155,13 @@ public sealed class CartSession : IDisposable
     /// </summary>
     public Framebuffer Framebuffer => Active.Framebuffer;
 
+    /// <summary>
+    /// The output state that framebuffer is shown through (<see cref="DisplayPalette"/>): it
+    /// belongs to the same console and is read on the same road to the window, so a replay being
+    /// watched is coloured by its own console's state and not by the live session's.
+    /// </summary>
+    public DisplayPalette Display => Active.Display;
+
     /// <summary>The machine the time controls act on: the replay being watched, or the live session.</summary>
     private TimeMachine Active => _playback ?? _machine;
 

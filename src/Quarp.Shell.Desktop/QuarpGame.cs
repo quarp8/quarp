@@ -992,6 +992,7 @@ public sealed class QuarpGame : Game
         Rectangle dest = _presenter.Draw(
             _spriteBatch,
             session.Framebuffer,
+            session.Display,
             GraphicsDevice.PresentationParameters.BackBufferWidth,
             GraphicsDevice.PresentationParameters.BackBufferHeight);
         // The overlay goes over the same rectangle, so its pixels line up with console
@@ -1063,6 +1064,7 @@ public sealed class QuarpGame : Game
         _presenter.Draw(
             _spriteBatch,
             _shellScreen.Framebuffer,
+            _shellScreen.Display,
             GraphicsDevice.PresentationParameters.BackBufferWidth,
             GraphicsDevice.PresentationParameters.BackBufferHeight);
         _spriteBatch.End();

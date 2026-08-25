@@ -347,6 +347,30 @@ public sealed class DrawPurityTests
             }
         """));
 
+    /// <summary>
+    /// The display stage is drawing state, not simulation state, so <c>Pald</c> and <c>Palr</c>
+    /// belong in <c>Draw</c> exactly the way <c>Pal</c> and <c>Camera</c> do: they change how the
+    /// finished frame is shown and write nothing a resimulation from tick 0 has to reproduce.
+    ///
+    /// <para>Break recipe: add <c>Pald</c> or <c>Palr</c> to <c>MutatingConsoleApi</c>'s list. This
+    /// test reddens with a QRP1004 — and every per-frame recolour, the effect the stage exists for,
+    /// becomes uncallable from the only method that runs once per frame.</para>
+    /// </summary>
+    [Fact]
+    public Task TheDisplayStageInDrawIsFine() => VerifyAsync(CartVerifier.Cart("""
+            public override void Draw()
+            {
+                Cls(1);
+                Pald(0, 7, 23);
+                Pald(1, 5, 22);
+                Palr(0, 40, 1);
+                Palr(41, 0);
+                Pald(1);
+                Pald();
+                Palr();
+            }
+        """));
+
     /// <summary>Every read the console offers. Reading is what Draw is supposed to do.</summary>
     [Fact]
     public Task ReadsInDrawAreFine() => VerifyAsync(CartVerifier.Cart("""

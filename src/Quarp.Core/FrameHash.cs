@@ -18,6 +18,15 @@ namespace Quarp.Core;
 /// bare <c>^[0-9a-f]{16}$</c> line meaning "the final frame hash", which is what M1 and M2
 /// consumers already grep for.</para>
 ///
+/// <para><b>The palette wave added a third subject, on the same terms.</b> A frame is now
+/// described by a pair — the index buffer the cartridge drew, and the output state it is shown
+/// through (<see cref="DisplayPalette"/>) — and both are hashed here, by the same digest and
+/// into the same 16-digit text form. The frame hash itself is untouched: its input is still the
+/// index buffer and nothing else, which is what keeps the eight anchors, the twelve demo hashes
+/// and every editor golden constant where they are, because the default output state is the
+/// identity map and changes no pixel. What is new is only that a third thing can be hashed, and
+/// that a picture recoloured at output time is now a fact some quantity can see.</para>
+///
 /// <para><b>Why it lives in the core and why there is only one copy.</b> The M2 criterion is
 /// literally "the frame hashes match between architectures" (ROADMAP M2, REPLAY-FORMAT §6).
 /// A hash reimplemented once per project agrees with its siblings by luck, and the day one
@@ -68,6 +77,13 @@ public static class FrameHash
     /// <summary>The tick's audio hash as a 16-hex-digit string, in the same form as a frame hash.</summary>
     public static string Of(AudioBlock block) => Format(Compute(block));
 
+    /// <summary>
+    /// The output state's hash — "how is this coloured" — as a 16-hex-digit string, in the same
+    /// form as a frame hash. See <see cref="Compute(DisplayPalette)"/> for why it is a second
+    /// quantity and not a change to the first.
+    /// </summary>
+    public static string Of(DisplayPalette display) => Format(Compute(display));
+
     /// <summary>The bytes' hash as the 16-hex-digit line the CI greps for.</summary>
     public static string Of(ReadOnlySpan<byte> data) => Format(Compute(data));
 
@@ -76,6 +92,31 @@ public static class FrameHash
     {
         ArgumentNullException.ThrowIfNull(framebuffer);
         return Compute(framebuffer.Pixels);
+    }
+
+    /// <summary>
+    /// The output state's raw 64-bit hash: the same FNV-1a, over the fixed-size record
+    /// <see cref="DisplayPalette.WriteHashBytes"/> lays out (223 bytes on QUARP-8 — a 5-byte
+    /// shape header, 4 x 32 set bytes, 90 selector bytes).
+    ///
+    /// <para><b>Why a second hash and not a wider first one.</b> The frame hash answers "what did
+    /// the cartridge draw" and is quoted by eight determinism anchors, twelve pinned demo hashes,
+    /// the cross-architecture CI job and every editor golden test; it is computed over the index
+    /// buffer and must not move by a byte. The display stage never touches the index buffer, so
+    /// folding it into that digest would move every one of those numbers for a change that draws
+    /// nothing. Splitting the question in two keeps both answers exact: same digest, same
+    /// 16-digit text form, one hasher — the rule this file's header states — and two subjects.
+    /// The proof that the split is necessary rather than tidy is a test: a frame flooded through
+    /// the display stage into a different colour has the <em>same</em> frame hash as the untinted
+    /// one and a <em>different</em> display hash.</para>
+    /// </summary>
+    public static ulong Compute(DisplayPalette display)
+    {
+        ArgumentNullException.ThrowIfNull(display);
+        Span<byte> record = stackalloc byte[display.HashLength];
+        record.Clear();
+        display.WriteHashBytes(record);
+        return Compute(record);
     }
 
     /// <summary>The audio block's raw 64-bit hash, for callers that compare rather than print.</summary>

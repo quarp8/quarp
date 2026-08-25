@@ -144,6 +144,42 @@ public interface IConsoleApi
     /// <summary>Resets transparency to the default: only color 0 is transparent (SPEC-8 §2).</summary>
     void Palt();
 
+    /// <summary>
+    /// Display stage, set part: inside set <paramref name="set"/> (0-3), master colour
+    /// <paramref name="color"/> (0-31) is <b>shown</b> as master colour <paramref name="shown"/>
+    /// (0-31).
+    /// <para><see cref="Pal(byte, byte)"/> changes what colour you <em>draw</em> with from now
+    /// on; this changes what colour the pixels already on screen are <em>shown</em> in. Nothing
+    /// in the framebuffer moves — one call recolours the whole finished frame, including what was
+    /// drawn before the call — so a fade, a night wash or a flash costs one call instead of
+    /// redrawing the scene.</para>
+    /// </summary>
+    void Pald(byte set, byte color, byte shown);
+
+    /// <summary>Resets one display set (0-3) to the identity map; the row selector is untouched.</summary>
+    void Pald(byte set);
+
+    /// <summary>Resets all four display sets to the identity map; the row selector is untouched.</summary>
+    void Pald();
+
+    /// <summary>
+    /// Display stage, row part: scanline <paramref name="y"/> is shown through set
+    /// <paramref name="set"/> (0-3). A row outside the screen is ignored, like any off-screen
+    /// write. This is what makes a horizon, a heat band or a two-palette split screen a property
+    /// of the picture rather than of the drawing code.
+    /// </summary>
+    void Palr(int y, byte set);
+
+    /// <summary>
+    /// Shows <paramref name="height"/> scanlines from <paramref name="y"/> through set
+    /// <paramref name="set"/> — position plus size, the shape <see cref="Clip(int, int, int, int)"/> uses, clamped to
+    /// the screen; a non-positive height does nothing.
+    /// </summary>
+    void Palr(int y, int height, byte set);
+
+    /// <summary>Resets the row selector: every scanline is shown through set 0 again.</summary>
+    void Palr();
+
     // --- input (SPEC-8 §5: 2 players max) ---
 
     /// <summary>True while the button is held on this tick; an unknown player reads false.</summary>

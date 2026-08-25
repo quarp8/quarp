@@ -67,6 +67,9 @@ public sealed class TimeMachine
     /// <summary>The framebuffer to present — stable across rebuilds, unlike a recreated console's.</summary>
     public Framebuffer Framebuffer => _console.Framebuffer;
 
+    /// <summary>The output state that framebuffer is shown through; travels with it, same identity, same lifetime.</summary>
+    public DisplayPalette Display => _console.Display;
+
     /// <summary>The input log: recorded by <see cref="Advance(InputState)"/>, replayed by everything else.</summary>
     public ReplayLog Log => _log;
 

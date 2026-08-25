@@ -49,6 +49,13 @@ public sealed class ShellScreen
     /// <summary>What the presenter puts on the window — the same type <see cref="CartSession.Framebuffer"/> is.</summary>
     public Framebuffer Framebuffer => _console.Framebuffer;
 
+    /// <summary>
+    /// The output state this screen is shown through. Tool screens leave it at identity — see
+    /// <see cref="Begin"/> — so the shell's pixels reach the window exactly as its framebuffer
+    /// has them, and the editor golden hashes stay facts about drawing alone.
+    /// </summary>
+    public DisplayPalette Display => _console.Display;
+
     /// <summary>Screen width in console pixels; 160 on profile 8.</summary>
     public int Width => _console.ScreenWidth;
 
@@ -64,11 +71,18 @@ public sealed class ShellScreen
         FramePlacement.Compute(windowWidth, windowHeight, Width, Height);
 
     /// <summary>
-    /// Resets the drawing state — camera, clip, palette remap, transparency — to the console's
-    /// defaults before a screen starts painting. Screens are allowed to use all four (a list
-    /// that clips its rows, a panel that shifts the camera); this is what keeps one screen's
-    /// leftovers from bending the next screen's pixels, which on a shared surface would be a
-    /// bug that only appears after a particular mode switch.
+    /// Resets the drawing state — camera, clip, palette remap, transparency — and the output
+    /// state — the display sets and the row selector — to the console's defaults before a screen
+    /// starts painting. Screens are allowed to use all of it (a list that clips its rows, a panel
+    /// that shifts the camera); this is what keeps one screen's leftovers from bending the next
+    /// screen's pixels, which on a shared surface would be a bug that only appears after a
+    /// particular mode switch.
+    ///
+    /// <para>The display stage is reset here for a sharper reason than tidiness: it is the one
+    /// piece of console state whose leftovers would be invisible to every test in the suite. The
+    /// editor goldens hash the index buffer, so a tool screen left tinted would hash exactly
+    /// right and look wrong on the window. Resetting it here — and asserting it in a test — is
+    /// what keeps "the shell's output state is identity" a checked fact rather than a habit.</para>
     /// </summary>
     public void Begin()
     {
@@ -76,5 +90,7 @@ public sealed class ShellScreen
         _console.Clip();
         _console.Pal();
         _console.Palt();
+        _console.Pald();
+        _console.Palr();
     }
 }

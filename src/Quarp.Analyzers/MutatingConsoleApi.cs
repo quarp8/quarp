@@ -42,6 +42,11 @@ namespace Quarp.Analyzers;
 ///   <item><c>Camera</c>, <c>Clip</c>, <c>Pal</c>, <c>Palt</c> change how later drawing is
 ///     transformed, not what the simulation computes; re-applying them at the top of every
 ///     <c>Draw</c> is the documented idiom (<c>carts/snake</c> does exactly that);</item>
+///   <item><c>Pald</c> and <c>Palr</c> (the display stage, ADR-034) change how the finished
+///     frame is <em>shown</em> and write no pixel and no simulation byte at all — a rewind
+///     repaints the landing frame and the cartridge sets them again from the same <c>Draw</c>.
+///     They belong in <c>Draw</c> more than anywhere else: a per-frame recolour is what the
+///     stage exists for;</item>
 ///   <item>every read — <c>Pget</c>, <c>Mget</c>, <c>Fget</c>, <c>Sget</c>, <c>Dget</c>,
 ///     <c>Btn</c>, <c>Btnp</c>, <c>Ticks</c> — writes nothing;</item>
 /// </list>

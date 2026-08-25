@@ -13,7 +13,12 @@ namespace Quarp.Core;
 /// Cartridge exceptions are never swallowed — they propagate to the caller (the shell
 /// decides what to show).
 /// Drawing model: camera offset first, then clip rectangle, then palette remap; every
-/// pixel write funnels through one clipped plot helper.
+/// pixel write funnels through one clipped plot helper. A second, retroactive palette stage
+/// (<see cref="Pald(byte, byte, byte)"/>, <see cref="Palr(int, byte)"/> — the state is
+/// <see cref="Display"/>) sits after all
+/// of that, at output time: it decides how the finished buffer is shown and writes nothing into
+/// it, which is why the frame hash cannot see it and <see cref="FrameHash.Of(DisplayPalette)"/>
+/// exists.
 /// Rewind and hot-reload live one layer up, in <see cref="TimeMachine"/>; what the console
 /// contributes is the ability to be put back exactly as it started — <see cref="ResetAssets"/>,
 /// <see cref="LoadPersistent"/> and the seed on <see cref="AttachCart"/> restore all three
@@ -54,6 +59,12 @@ public sealed class VirtualConsole : IConsoleApi
 
     private readonly byte[] _palMap = new byte[Palette.VisibleCount];
     private readonly bool[] _palt = new bool[Palette.VisibleCount];
+
+    // The second, retroactive palette stage: four 32-to-32 sets plus a per-row selector, applied
+    // at output time over the finished frame. Owned here, next to _palMap, because it is console
+    // state and not shell state: the shell only reads it on its way to the window.
+    private readonly DisplayPalette _display;
+
     private readonly int[] _persistent = new int[PersistentSlots];
 
     // The sound chip. Its bank is cartridge data (no boot image needed — nothing can write it
@@ -82,6 +93,18 @@ public sealed class VirtualConsole : IConsoleApi
     public ConsoleProfile Profile { get; }
 
     public Framebuffer Framebuffer { get; }
+
+    /// <summary>
+    /// The output state the framebuffer is shown through: four display sets and the row selector
+    /// (<see cref="DisplayPalette"/>). Exposed so the shell's one road to the window can read it
+    /// and so tests and tools can hash it; cartridges reach it only through <see cref="Pald(byte, byte, byte)"/>
+    /// and <see cref="Palr(int, byte)"/>.
+    ///
+    /// <para>Its identity never changes for the life of the console — the shell caches it beside
+    /// <see cref="Framebuffer"/> — and its <em>contents</em> are drawing state, reset with camera,
+    /// clip and the palettes whenever a cartridge is attached.</para>
+    /// </summary>
+    public DisplayPalette Display => _display;
 
     /// <summary>
     /// Screen width in pixels, as the cartridge sees it. The same number three ways —
@@ -141,6 +164,7 @@ public sealed class VirtualConsole : IConsoleApi
         _width = Framebuffer.Width;
         _height = Framebuffer.Height;
         _pixels = Framebuffer.Pixels;
+        _display = new DisplayPalette(profile);
         LoadAssets(sheet, map, flags);
         LoadAudio(sfx, music);
         ResetRuntimeState(0);
@@ -285,6 +309,8 @@ public sealed class VirtualConsole : IConsoleApi
         Clip();
         Pal();
         Palt();
+        Pald();
+        Palr();
         Srand(seed);
         _apu.Reset();
         _input = default;
@@ -867,6 +893,35 @@ public sealed class VirtualConsole : IConsoleApi
         Array.Clear(_palt);
         _palt[0] = true;
     }
+
+    // --- the display stage: Pal decides what is drawn, these decide what is shown (SPEC-8 §2) ---
+
+    /// <summary>
+    /// Inside display set <paramref name="set"/> (0-3), shows master colour
+    /// <paramref name="color"/> (0-31) as master colour <paramref name="shown"/> (0-31).
+    /// Retroactive: it recolours the finished frame at output time, pixels drawn before the call
+    /// included, and it never touches the framebuffer.
+    /// </summary>
+    public void Pald(byte set, byte color, byte shown) => _display.Remap(set, color, shown);
+
+    /// <summary>Puts one display set back to the identity map; the row selector is untouched.</summary>
+    public void Pald(byte set) => _display.ResetSet(set);
+
+    /// <summary>Puts all four display sets back to the identity map; the row selector is untouched.</summary>
+    public void Pald() => _display.ResetSets();
+
+    /// <summary>Shows scanline <paramref name="y"/> through display set <paramref name="set"/>; a row off-screen is ignored.</summary>
+    public void Palr(int y, byte set) => _display.AssignRow(y, set);
+
+    /// <summary>
+    /// Shows <paramref name="height"/> scanlines from <paramref name="y"/> through display set
+    /// <paramref name="set"/> — position plus size, as <see cref="Clip(int, int, int, int)"/> takes them, clamped to
+    /// the screen; a non-positive height does nothing.
+    /// </summary>
+    public void Palr(int y, int height, byte set) => _display.AssignRows(y, height, set);
+
+    /// <summary>Resets the row selector: every scanline is shown through set 0 again.</summary>
+    public void Palr() => _display.ResetRows();
 
     // --- input ---
 

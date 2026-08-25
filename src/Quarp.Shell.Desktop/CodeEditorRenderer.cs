@@ -1,100 +1,127 @@
 using Microsoft.Xna.Framework;
-using Microsoft.Xna.Framework.Graphics;
-using static Quarp.Shell.Desktop.EditorChromeRenderer;
+using Quarp.Core;
+using static Quarp.Shell.Desktop.ConsoleChromeRenderer;
 
 namespace Quarp.Shell.Desktop;
 
 /// <summary>
-/// Draws the code editor screen in the shell standard, applied to text: the icon-only tab strip
-/// and the status bar as tinted full-width bands, the find/go-to tool column left of the page,
-/// the line-number gutter, the text itself in the console's own 3x5 type, the selection as a
-/// band under the glyphs, a blinking caret, the vertical scrollbar, the reserved prompt line and
-/// the hover tooltips. Host UI like its two siblings — window-native resolution,
-/// <see cref="Quarp.Core.Palette.Master32"/> colours, the system font and the icon strip — and
-/// just as unable to touch a framebuffer or a hash: no cartridge runs while this draws.
+/// Draws the code editor <b>into the console's own framebuffer</b> (wave R4, ADR-029): the top
+/// band with the exit button, the tooltip field and the five editor tabs; the one-wide tool
+/// column; the 11x36 page of text with its selection bands and blinking caret; the vertical
+/// scrollbar at the right edge; the status line and the one message line.
 ///
-/// <para>Everything the three editor screens paint the same way comes from
-/// <see cref="EditorChromeRenderer"/>; this class owns the page. All geometry comes from
-/// <see cref="CodeEditorLayout"/>, the same struct <see cref="CodeEditorInput"/> hit-tests the
-/// mouse against, so a glyph cannot be drawn in one place and clicked in another.</para>
+/// <para><b>What this file used to be.</b> Until this wave it owned a <c>GraphicsDevice</c>, a
+/// font atlas and an icon atlas, and painted at the window's native resolution through a
+/// <c>SpriteBatch</c> — 28 lines of 90 columns at 1280x720. All of that is gone. Every pixel now
+/// goes through <c>Cls</c>, <c>RectFill</c>, <c>Rect</c>, <c>Print</c> and <c>Pset</c> on a
+/// <see cref="ShellScreen"/> — the same calls a cartridge makes — and the result is presented by
+/// the same <see cref="ConsolePresenter"/> the cartridge's frame goes through. The class is
+/// static for the same reason <see cref="MapEditorRenderer"/> is: with no device resource to own
+/// there is nothing to construct and nothing to dispose.</para>
+///
+/// <para><b>What the move cost, in the one number that matters.</b> The page is
+/// <b>eleven lines by thirty-six columns</b> — 396 characters, against the 2520 the host screen
+/// showed at 1280x720. <see cref="CodeEditorLayout"/> carries the whole arithmetic and the four
+/// decisions behind it (which font, where the eleventh line came from, why there is no
+/// line-number gutter, what the tool column costs). ADR-029 accepted this as the price of a
+/// 90-row console before any of it was written.</para>
+///
+/// <para><b>Nothing was dropped, and here is the roll call</b> (the wave's law: if a control
+/// went under a key, it gets named). Find: its button, <c>Ctrl+F</c>, <c>Ctrl+G</c> or
+/// <c>Enter</c> to walk, <c>Shift+Enter</c> back. Go to line: its button and <c>Ctrl+L</c>.
+/// Save, undo, redo: buttons in the tool column and their usual chords. Selection: the mouse
+/// drag, <c>Shift</c> with any movement key, <c>Ctrl+A</c>. Clipboard: <c>Ctrl+C</c> /
+/// <c>Ctrl+X</c> / <c>Ctrl+V</c>. Travel: arrows, <c>Ctrl+arrows</c> by word, Home/End,
+/// <c>Ctrl+Home/End</c>, PgUp/PgDn, the wheel over the text and the scrollbar. The one control
+/// that <em>left</em> is the line-number gutter, and with it the click that put the caret at a
+/// line's start — that click is Home, and the pixels became six more columns of code.</para>
 ///
 /// <para><b>No syntax highlighting in this wave, and it is not an oversight.</b> LIKO-12 has it
-/// (<c>Libraries.SyntaxHighlighter</c> with a nine-colour theme) and TIC-80 has it per language;
-/// both colour a language they own the lexer for. Ours is C#, our palette has sixteen entries of
-/// which four are already spoken for by chrome, and the honest implementations are a real
-/// tokenizer (Roslyn is already a dependency of <c>Quarp.CartKit</c> — but it lives on the other
-/// side of a module boundary and lexing per frame is a cost nobody has measured) or a regex
-/// guess that will mis-colour verbatim strings and interpolation the first day. That is a
-/// decision with a shape of its own, named in the report as this wave's chief candidate, not a
-/// line to be smuggled into a renderer.</para>
+/// (<c>Libraries.SyntaxHighlighter</c>, a nine-colour theme) and TIC-80 has it per language;
+/// both colour a language they own the lexer for. Ours is C#, our palette has sixteen slots of
+/// which five are already spoken for by chrome, and the honest implementations are a real
+/// tokenizer (Roslyn is a dependency of <c>Quarp.CartKit</c> — but it lives on the other side of
+/// a module boundary and lexing per frame is a cost nobody has measured) or a regex guess that
+/// will mis-colour verbatim strings and interpolation on the first day. That is a decision with
+/// a shape of its own, not a line to be smuggled into a renderer.</para>
 ///
 /// <para><b>The caret blinks on the draw clock</b>, like the sprite editor's marching ants:
-/// <paramref name="elapsedSeconds"/> is host time, it reaches no simulation and no hash, and
-/// the blink stops (the caret stays lit) while the exit prompt is up, because a blinking caret
-/// under a question the author is answering reads as an invitation to type.</para>
+/// <c>timeSeconds</c> is host time, it reaches no simulation and no hash, and the blink stops
+/// (the caret stays lit) while the exit prompt is up, because a blinking caret under a question
+/// the author is answering reads as an invitation to type. A golden test passes 0, which is a
+/// lit caret.</para>
+///
+/// <para><b>Not the cartridge's console.</b> The framebuffer written here belongs to the shell
+/// (<see cref="ShellScreen"/>); the golden master the CI compares between architectures is
+/// <see cref="CartSession"/>'s, and no call in this file can reach it.</para>
 /// </summary>
-public sealed class CodeEditorRenderer : IDisposable
+public static class CodeEditorRenderer
 {
     /// <summary>Caret blinks per second — TIC-80's own rate, and the one every terminal uses.</summary>
     private const double BlinkHz = 2.0;
 
-    private readonly GraphicsDevice _device;
-    private readonly EditorChromeRenderer _chrome;
+    /// <summary>What the tooltip field says when no control is hovered — TIC-80's <c>Names[mode]</c>.</summary>
+    public const string ScreenName = "CODE";
 
-    public CodeEditorRenderer(GraphicsDevice device)
+    /// <summary>The layout this screen is drawn with; the router asks for the same one, so picture and clicks cannot disagree.</summary>
+    public static CodeEditorLayout LayoutFor(ShellScreen screen)
     {
-        ArgumentNullException.ThrowIfNull(device);
-        _device = device;
-        _chrome = new EditorChromeRenderer(device);
+        ArgumentNullException.ThrowIfNull(screen);
+        return CodeEditorLayout.Compute(screen.Width, screen.Height);
     }
 
     /// <summary>
-    /// One frame of the code editor. Owns the whole surface (clears, begins and ends the batch)
-    /// like the other two host screens. <paramref name="view"/> is the very scroll the router's
-    /// hit tests read, so the picture and the clicks cannot disagree; <paramref name="hover"/>
-    /// and <paramref name="tooltipVisible"/> come from the shell's <see cref="IconHoverTracker"/>
-    /// — frame highlight now, label after its three seconds; <paramref name="elapsedSeconds"/> is
-    /// the window's total draw time, and only the caret's blink reads it.
+    /// One frame of the code editor. Owns the whole surface: it resets the console's drawing
+    /// state and clears, so nothing another screen left behind can bend these pixels.
+    /// <paramref name="view"/> is the very scroll the router's hit tests read, so the picture
+    /// and the clicks cannot disagree; <paramref name="hover"/> and
+    /// <paramref name="tooltipVisible"/> come from the shell's <see cref="IconHoverTracker"/> —
+    /// the hovered control's frame lights up immediately, the text label only after the
+    /// tracker's three seconds, and the label lands in the top band rather than under the
+    /// pointer (<see cref="ConsoleChrome.TooltipChars"/> explains why);
+    /// <paramref name="timeSeconds"/> is the window's draw clock, and only the caret's blink
+    /// reads it.
     /// </summary>
-    public void Draw(
-        SpriteBatch batch, int width, int height, CodeEditorSession session, CodeEditorView view,
-        HoverTarget? hover, bool tooltipVisible, double elapsedSeconds)
+    /// <returns>The layout used, so a test can assert against exactly what was drawn.</returns>
+    public static CodeEditorLayout Draw(
+        ShellScreen screen, CodeEditorSession session, CodeEditorView view,
+        HoverTarget? hover, bool tooltipVisible, double timeSeconds)
     {
-        ArgumentNullException.ThrowIfNull(batch);
         ArgumentNullException.ThrowIfNull(session);
         ArgumentNullException.ThrowIfNull(view);
-        var layout = CodeEditorLayout.Compute(width, height);
+        CodeEditorLayout layout = LayoutFor(screen);
+        VirtualConsole console = screen.Console;
+        screen.Begin();
+        console.Cls(Ink);
 
-        _device.Clear(Ink);
-        batch.Begin(samplerState: SamplerState.PointClamp);
-
-        _chrome.DrawBands(batch, layout.Chrome);
-        _chrome.DrawFrame(batch, layout.Text, layout.Ui, Dim);
-
-        DrawSelection(batch, layout, session, view);
-        DrawGutterAndText(batch, layout, session, view);
-        DrawCaret(batch, layout, session, view, elapsedSeconds);
-        DrawScrollBar(batch, layout, session, view);
-        DrawButtons(batch, layout, session, view, hover);
-
-        int bytes = session.ByteCount;
-        _chrome.DrawStatusText(
-            batch, layout.Chrome, Coordinates(session), $"SIZE {bytes}/{CodeEditorSession.MaxByteCount}",
-            bytes > CodeEditorSession.MaxByteCount ? Error : (Color?)null);
-        _chrome.DrawPromptLine(
-            batch, layout.Chrome, view.ExitPromptShown, session.SaveError, StandingNotice(session, view));
-        DrawTooltip(batch, layout, width, height, hover, tooltipVisible);
-
-        batch.End();
+        DrawBands(console, layout.Chrome);
+        DrawSelection(console, layout, session, view);
+        DrawText(console, layout, session, view);
+        DrawCaret(console, layout, session, view, timeSeconds);
+        DrawScrollBar(console, layout, session, view);
+        DrawButtons(console, layout, session, view, hover);
+        // The readouts: where the caret is, in the numbers a compiler error names, and how much
+        // of the code budget is spent.
+        DrawStatusText(console, layout.Chrome, Coordinates(session), Budget(session));
+        DrawMessageLine(
+            console, layout.Chrome, view.ExitPromptShown, session.SaveError, StandingNotice(session, view));
+        DrawTooltipField(
+            console, layout.Chrome,
+            tooltipVisible && hover is HoverTarget target && target.Button is EditorButton button
+                ? EditorIcons.CodeTooltip(button)
+                : null,
+            ScreenName);
+        return layout;
     }
-
-    public void Dispose() => _chrome.Dispose();
 
     /// <summary>
     /// The status band's left field: where the caret is, in the numbers the author sees.
     /// TIC-80's <c>line %i/%i col %i</c> and LIKO-12's <c>LINE x/y CHAR a/b</c> agree on the
     /// shape and disagree on the second pair; we take TIC-80's, because "which column am I in"
-    /// is what a compiler error names and "how long is this line" is not.
+    /// is what a compiler error names and "how long is this line" is not. Unchanged by the move
+    /// to the console: at its widest — a 9999-line file with the caret past column 99 — it is 22
+    /// characters, and the budget field beside it is at most 13, which leaves the 39-character
+    /// line four to spare.
     /// </summary>
     public static string Coordinates(CodeEditorSession session)
     {
@@ -103,13 +130,42 @@ public sealed class CodeEditorRenderer : IDisposable
     }
 
     /// <summary>
+    /// The status band's right field: TIC-80's <c>size %i/%i</c> with the word <c>SIZE</c> cut
+    /// off it. The word costs five of the line's 39 characters and the pair beside it can want
+    /// 22 — 22 + 18 is 40, one more than there is — so the ratio stands alone, right-aligned to
+    /// the screen's edge where a number that gains a digit does not shove its neighbour.
+    ///
+    /// <para><b>The other half of TIC-80's field did not survive and is named here.</b> Its
+    /// <c>drawStatus</c> turns the size red past the limit; the console's status painter
+    /// (<see cref="ConsoleChromeRenderer.DrawStatusText"/>) takes no colour, because one owner
+    /// of the status line for four screens is worth more than one screen's red. The overflow is
+    /// still announced, on the message line, by <see cref="StandingNotice"/> — which says how
+    /// many bytes over and what happens, and is a sentence rather than a hue.</para>
+    /// </summary>
+    public static string Budget(CodeEditorSession session)
+    {
+        ArgumentNullException.ThrowIfNull(session);
+        return $"{session.ByteCount}/{CodeEditorSession.MaxByteCount}";
+    }
+
+    /// <summary>
     /// The screen's standing line under the prompt and the save error, in precedence order: the
     /// footer field that is up (it IS this line while it lives — TIC-80 puts find and goto on
     /// the status row the same way, and LIKO-12 replaces its line counter with <c>ISRCH:</c>),
-    /// otherwise the over-budget warning. The limit is reported and never enforced
-    /// (<see cref="CodeEditorSession"/>'s own contract: an editor that stops accepting text is an
-    /// editor that loses it), so this line and the red size field are the whole of the screen's
-    /// opinion about it.
+    /// otherwise the over-budget warning.
+    ///
+    /// <para><b>Re-cut for forty columns, and the cut carries the keys.</b> A field that is
+    /// still empty spends the line teaching its two keys ("FIND: TYPE, ENTER WALKS, ESC
+    /// CLOSES", 35 characters); the moment there is something to search for, the line is the
+    /// search term, because that is what the author needs to see and a term long enough to fill
+    /// 39 columns would have pushed the hints off anyway. The host screen printed both at once
+    /// on a line that was 90 characters wide.</para>
+    ///
+    /// <para>The limit is reported and never enforced (<see cref="CodeEditorSession"/>'s own
+    /// contract: an editor that stops accepting text is an editor that loses it), so this line
+    /// and the size field are the whole of the screen's opinion about it. Its text keeps both
+    /// halves of the host screen's — how far over, and that the cart will not load — inside 39
+    /// characters, which the old one missed by twenty.</para>
     /// </summary>
     public static string? StandingNotice(CodeEditorSession session, CodeEditorView view)
     {
@@ -117,14 +173,18 @@ public sealed class CodeEditorRenderer : IDisposable
         ArgumentNullException.ThrowIfNull(view);
         if (view.FindShown)
         {
-            return $"FIND: {view.FindText}   ENTER NEXT   ESC CLOSES";
+            return view.FindText.Length == 0
+                ? "FIND: TYPE, ENTER WALKS, ESC CLOSES"
+                : $"FIND: {view.FindText}";
         }
         if (view.GoToShown)
         {
-            return $"GO TO LINE: {view.GoToText}   ENTER JUMPS   ESC CLOSES";
+            return view.GoToText.Length == 0
+                ? "GO TO LINE: A NUMBER, ENTER JUMPS"
+                : $"GO TO LINE: {view.GoToText}";
         }
         int over = session.ByteCount - CodeEditorSession.MaxByteCount;
-        return over > 0 ? $"OVER THE CODE LIMIT BY {over} BYTES - THIS CART WILL NOT LOAD" : null;
+        return over > 0 ? $"{over} BYTES OVER LIMIT - WILL NOT LOAD" : null;
     }
 
     /// <summary>
@@ -133,8 +193,8 @@ public sealed class CodeEditorRenderer : IDisposable
     /// column of band, which is how every editor shows "the newline is selected too" — without
     /// it a selected empty line would be invisible.
     /// </summary>
-    private void DrawSelection(
-        SpriteBatch batch, in CodeEditorLayout layout, CodeEditorSession session, CodeEditorView view)
+    private static void DrawSelection(
+        VirtualConsole console, in CodeEditorLayout layout, CodeEditorSession session, CodeEditorView view)
     {
         if (!session.HasSelection)
         {
@@ -154,23 +214,19 @@ public sealed class CodeEditorRenderer : IDisposable
             {
                 continue;
             }
-            batch.Draw(
-                _chrome.White, layout.RowSpanRect(line, from, to, view.FirstLine, view.FirstColumn),
-                ActiveBg);
+            Fill(console, layout.RowSpanRect(line, from, to, view.FirstLine, view.FirstColumn), ActiveBg);
         }
     }
 
     /// <summary>
-    /// The gutter and the page, one visible row at a time. Numbers are dim except the caret's
-    /// own, which is the cheapest possible "you are here" and the one LIKO-12 spends a whole
-    /// status line on; the text is clipped to the window by substring rather than by a scissor
-    /// rectangle, because the font draws one quad per character and a character off the right
-    /// edge is a quad nobody should pay for.
+    /// The page, one visible row at a time. The text is clipped to the field by substring rather
+    /// than by a clip rectangle, because <c>Print</c> plots one glyph per character and a
+    /// character off the right edge is a glyph nobody should pay for — and because a clip
+    /// rectangle is console-wide state this screen would then have to put back.
     /// </summary>
-    private void DrawGutterAndText(
-        SpriteBatch batch, in CodeEditorLayout layout, CodeEditorSession session, CodeEditorView view)
+    private static void DrawText(
+        VirtualConsole console, in CodeEditorLayout layout, CodeEditorSession session, CodeEditorView view)
     {
-        int scale = layout.TextScale;
         for (int row = 0; row < layout.VisibleLines; row++)
         {
             int index = view.FirstLine + row;
@@ -178,35 +234,31 @@ public sealed class CodeEditorRenderer : IDisposable
             {
                 break;
             }
-            int y = layout.Text.Y + row * layout.LineHeight;
-            string number = $"{index + 1}";
-            _chrome.Font.Draw(
-                batch, number,
-                layout.Gutter.Right - layout.Ui - PixelFontAtlas.MeasureWidth(number, scale), y, scale,
-                index == session.CursorLine ? Bright : Dim);
-
             string line = session.Lines[index];
             if (view.FirstColumn >= line.Length)
             {
                 continue;
             }
             int count = Math.Min(line.Length - view.FirstColumn, layout.VisibleColumns);
-            _chrome.Font.Draw(
-                batch, line.Substring(view.FirstColumn, count), layout.Text.X, y, scale, Text);
+            console.Print(
+                line.Substring(view.FirstColumn, count),
+                layout.Text.X,
+                layout.Text.Y + row * layout.LineHeight,
+                Text);
         }
     }
 
     /// <summary>
-    /// The caret: a bar on the left edge of the cell it sits in, one text pixel wide, blinking
-    /// at <see cref="BlinkHz"/> off the draw clock. Drawn only when it is actually inside the
-    /// window — the view's follow rule normally guarantees that, but the wheel is allowed to
-    /// scroll away from it, and a caret painted on the frame's edge would be a lie.
+    /// The caret: a one-pixel bar on the left edge of the cell it sits in, the cell's full
+    /// height, blinking at <see cref="BlinkHz"/> off the draw clock. Drawn only when it is
+    /// actually inside the page — the view's follow rule normally guarantees that, but the wheel
+    /// is allowed to scroll away from it, and a caret painted on the frame's edge would be a lie.
     /// </summary>
-    private void DrawCaret(
-        SpriteBatch batch, in CodeEditorLayout layout, CodeEditorSession session, CodeEditorView view,
-        double elapsedSeconds)
+    private static void DrawCaret(
+        VirtualConsole console, in CodeEditorLayout layout, CodeEditorSession session,
+        CodeEditorView view, double timeSeconds)
     {
-        bool lit = view.ExitPromptShown || (int)(elapsedSeconds * BlinkHz) % 2 == 0;
+        bool lit = view.ExitPromptShown || (int)(timeSeconds * BlinkHz) % 2 == 0;
         if (!lit)
         {
             return;
@@ -219,36 +271,35 @@ public sealed class CodeEditorRenderer : IDisposable
             return;
         }
         Rectangle cell = layout.CellRect(line, column, view.FirstLine, view.FirstColumn);
-        batch.Draw(
-            _chrome.White, new Rectangle(cell.X, cell.Y, Math.Max(1, layout.TextScale), cell.Height),
-            Bright);
+        console.RectFill(cell.X, cell.Y, 1, cell.Height, Bright);
     }
 
     /// <summary>
-    /// The scrollbar: a dim track the height of the page with a bright thumb on it. It is the
+    /// The scrollbar: a dim track the height of the page with a brighter thumb on it, drawn from
+    /// the very <see cref="CodeEditorLayout.ScrollThumbRect"/> the drag inverts. It is the
     /// mouse's only long-distance road through a file (the wheel walks, the thumb jumps), and
     /// the one place the author can see how much of the buffer is off screen — the same job the
-    /// map's minimap does for a map eighty screens wide.
+    /// map's position bar does for a map eighty screens wide. It brightens while it is being
+    /// carried.
     /// </summary>
-    private void DrawScrollBar(
-        SpriteBatch batch, in CodeEditorLayout layout, CodeEditorSession session, CodeEditorView view)
+    private static void DrawScrollBar(
+        VirtualConsole console, in CodeEditorLayout layout, CodeEditorSession session, CodeEditorView view)
     {
-        batch.Draw(_chrome.White, layout.ScrollBar, StripBg);
-        _chrome.DrawFrame(batch, layout.ScrollBar, Math.Max(1, layout.Ui / 2), Dim);
-        batch.Draw(
-            _chrome.White, layout.ScrollThumbRect(view.FirstLine, session.LineCount),
+        Outline(console, layout.ScrollBar, Dim);
+        Fill(
+            console, layout.ScrollThumbRect(view.FirstLine, session.LineCount),
             view.ScrollDragActive ? Bright : Text);
     }
 
     /// <summary>
-    /// Every icon-button through the one mechanism <see cref="EditorChromeRenderer.DrawButton"/>
+    /// Every icon-button through the one mechanism <see cref="ConsoleChromeRenderer.DrawButton"/>
     /// owns. The only decision this screen makes is which buttons read as active: its own tab,
     /// and whichever footer field is up — so the find button lights while the find line lives,
     /// which is what tells the author that Esc has something to close.
     /// </summary>
-    private void DrawButtons(
-        SpriteBatch batch, in CodeEditorLayout layout, CodeEditorSession session, CodeEditorView view,
-        HoverTarget? hover)
+    private static void DrawButtons(
+        VirtualConsole console, in CodeEditorLayout layout, CodeEditorSession session,
+        CodeEditorView view, HoverTarget? hover)
     {
         foreach (EditorButtonPlace place in layout.Buttons)
         {
@@ -260,22 +311,20 @@ public sealed class CodeEditorRenderer : IDisposable
                 Dirty: session.IsDirty,
                 CanUndo: session.CanUndo,
                 CanRedo: session.CanRedo);
-            _chrome.DrawButton(
-                batch, layout.Chrome, place, state, EditorIcons.IconFor(place.Id), text: null);
+            DrawButton(console, place, state, EditorIcons.IconFor(place.Id), text: null);
         }
     }
 
-    /// <summary>The tooltip's code half: one lookup in <see cref="EditorIcons.CodeTooltip"/>; the box belongs to the shared painter.</summary>
-    private void DrawTooltip(
-        SpriteBatch batch, in CodeEditorLayout layout, int width, int height,
-        HoverTarget? hover, bool tooltipVisible)
+    /// <summary>One filled rectangle, a layout rectangle unpacked into the console's call.</summary>
+    private static void Fill(VirtualConsole console, Rectangle rect, byte color) =>
+        console.RectFill(rect.X, rect.Y, rect.Width, rect.Height, color);
+
+    /// <summary>One outline, skipped when the rectangle came back empty.</summary>
+    private static void Outline(VirtualConsole console, Rectangle rect, byte color)
     {
-        if (hover is not HoverTarget target || target.Button is not EditorButton button || !tooltipVisible)
+        if (rect.Width > 0 && rect.Height > 0)
         {
-            return;
+            console.Rect(rect.X, rect.Y, rect.Width, rect.Height, color);
         }
-        _chrome.DrawTooltip(
-            batch, layout.Chrome, width, height,
-            EditorIcons.CodeTooltip(button), layout.ButtonRect(button));
     }
 }

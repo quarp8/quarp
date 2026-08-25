@@ -110,6 +110,24 @@ public readonly struct ConsoleChrome
     /// <summary>Top row of the sheet slider's track, directly under the content.</summary>
     public int SliderY => ContentBottom;
 
+    /// <summary>
+    /// One past the last row of the slider's track — 78 on a 90-row console, the very row
+    /// <see cref="FooterRuleY"/> sits on.
+    ///
+    /// <para><b>And the content floor of a screen that places no horizontal slider at all.</b>
+    /// The three rows between <see cref="ContentBottom"/> and here are reserved for one control
+    /// and one only: the horizontal position bar the sprite screen puts under its sheet window
+    /// and the map screen under its viewport. A screen that has no such bar — the code screen,
+    /// whose long road through a file is the <em>vertical</em> scrollbar at its right edge — may
+    /// run its content down to this row instead, and the arithmetic says why it matters: 64 rows
+    /// hold ten lines of the 4x6 font and 67 hold eleven, so those three pixels are a tenth of
+    /// everything that screen exists to show. The number stays owned here, with the rest of the
+    /// vertical budget, rather than being computed as "ContentBottom plus three" by whoever
+    /// wants it; the day a screen grows a bar it goes back to <see cref="ContentBottom"/> and
+    /// nothing else moves.</para>
+    /// </summary>
+    public int SliderBottom => SliderY + SliderHeight;
+
     /// <summary>The rule above the message line.</summary>
     public int FooterRuleY => ScreenHeight - FooterRuleUp;
 

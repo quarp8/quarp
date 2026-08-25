@@ -72,9 +72,11 @@ public static class CodeEditorInput
         ArgumentNullException.ThrowIfNull(typed);
         CodeEditorSession session = shell.Modes.CodeEditor!;
         CodeEditorView view = shell.Modes.CodeView!;
-        // The same layout the renderer will draw this frame — geometry has one owner. Sync
-        // re-clamps the scroll against it (a resize changes how many lines fit) before any hit
-        // test below divides by it.
+        // The same layout the renderer will draw this frame — geometry has one owner. Since
+        // wave R4 the two numbers are CONSOLE pixels (160x90), because the shell hands this
+        // screen its own surface exactly as it hands the sprite and map screens theirs; the
+        // router cannot tell the difference and must not. Sync re-clamps the scroll against it
+        // before any hit test below divides by it.
         var layout = CodeEditorLayout.Compute(shell.BackBufferWidth, shell.BackBufferHeight);
         view.Sync(layout, session);
 
@@ -357,10 +359,16 @@ public static class CodeEditorInput
     }
 
     /// <summary>
-    /// The mouse: hover, wheel, then the press chain — buttons, the scrollbar, the text, the
-    /// gutter — and the drags that follow it. Every one of these has the keyboard twin the
-    /// parity law demands: the buttons their hotkeys, the bar and the wheel PageUp/PageDown and
-    /// the arrows, the text click the arrows, the drag Shift+arrows.
+    /// The mouse: hover, wheel, then the press chain — buttons, the scrollbar, the text — and
+    /// the drags that follow it. Every one of these has the keyboard twin the parity law
+    /// demands: the buttons their hotkeys, the bar and the wheel PageUp/PageDown and the arrows,
+    /// the text click the arrows, the drag Shift+arrows.
+    ///
+    /// <para>The chain lost a link in wave R4: the line-number gutter, and with it the click
+    /// that put the caret at a line's start. The gutter is not on the console screen at all
+    /// (<see cref="CodeEditorLayout"/> spends its six columns on code, as all three references
+    /// do), so there is nothing left to hit-test; the verb it carried is Home, which it always
+    /// also was.</para>
     /// </summary>
     private static void Pointer(
         in EditorShell shell, CodeEditorSession session, CodeEditorView view,
@@ -372,8 +380,10 @@ public static class CodeEditorInput
                 : null,
             elapsedSeconds);
 
-        if (mouse.WheelDelta != 0
-            && (layout.Text.Contains(mouse.X, mouse.Y) || layout.Gutter.Contains(mouse.X, mouse.Y)))
+        // Over the text field only. The gutter used to count too; wave R4 took the gutter off
+        // this screen entirely (CodeEditorLayout's type note carries the six columns it bought),
+        // so the field is the whole of what the wheel answers to.
+        if (mouse.WheelDelta != 0 && layout.Text.Contains(mouse.X, mouse.Y))
         {
             // The wheel moves the WINDOW and leaves the caret where it is — the one place the
             // view is allowed to part company with the caret, and the reason Sync follows the
@@ -402,11 +412,6 @@ public static class CodeEditorInput
                 // Shift+click extends, exactly as Shift+arrow does (TIC-80's processMouse).
                 session.SetCursor(line, column, commands.CodeExtend);
                 view.BeginTextDrag();
-            }
-            else if (layout.Gutter.Contains(mouse.X, mouse.Y))
-            {
-                // A number is a handle on its line: the caret lands at its start.
-                session.SetCursor(view.FirstLine + (mouse.Y - layout.Text.Y) / layout.LineHeight, 0);
             }
         }
         else if (mouse.LeftDown && view.ScrollDragActive)

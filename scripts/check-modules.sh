@@ -179,12 +179,17 @@ LAYERS=(
   # SpriteBatch — только ShellScreen и вызовы ядра. Вместе с текстурами ушли и два кэша
   # версий, которые файл держал, чтобы их не перезаливать: держать нечего.
   "MapEditorRenderer.cs|2"     # пиксели экрана карты — в консоли, не в окне
+  # CodeEditorRenderer переехал сюда из «рендера» в волне R4 по тому же признаку, что
+  # LibraryRenderer в R1, SpriteEditorRenderer в R2 и MapEditorRenderer в R3: ни GraphicsDevice,
+  # ни Texture2D, ни SpriteBatch, ни PixelFontAtlas — только ShellScreen и вызовы ядра.
+  # Проверяемая примета слоя 2 выполняется буквально: CodeEditorScreenGoldenTests строит его
+  # без GraphicsDevice.
+  "CodeEditorRenderer.cs|2"    # пиксели экрана кода — в консоли, не в окне
 
   # --- 3 «рендер»: владеет ресурсом устройства ---
   "PixelFontAtlas.cs|3"        # текстурная полоса глифов
   "EditorIconAtlas.cs|3"       # текстурная полоса иконок
   "EditorChromeRenderer.cs|3"  # пиксели общей рамы (хостовой)
-  "CodeEditorRenderer.cs|3"    # пиксели экрана кода
   "SfxEditorRenderer.cs|3"     # пиксели экрана звука
   "ConsolePresenter.cs|3"      # единственная дорога кадра: буфер -> текстура -> окно
   "ShellOverlay.cs|3"          # текстовый слой поверх кадра

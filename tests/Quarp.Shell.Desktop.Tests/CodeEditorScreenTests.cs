@@ -1,6 +1,7 @@
 using Microsoft.Xna.Framework;
 using Microsoft.Xna.Framework.Input;
 using Quarp.CartKit;
+using Quarp.Core;
 using Quarp.Shell.Desktop;
 using Xunit;
 
@@ -27,6 +28,18 @@ namespace Quarp.Shell.Desktop.Tests;
 /// as its neighbour mirrors it and for the same reason: the mode can change <em>inside</em> a
 /// frame (a click on the exit tab, a Discard on the prompt) and the next frame must land on the
 /// other screen. It consults the same single owner of "which mode is on screen" the shell does.</para>
+///
+/// <para><b>Re-pinned in wave R4, whole file, and here is the one sentence that explains every
+/// changed number below.</b> ADR-029 moved this screen off the window and onto the console, so
+/// the surface it is laid out on is 160x90 instead of 1280x720 and <b>every pixel in this file
+/// is a console pixel</b>. Nothing about what the screen <em>does</em> changed — the same
+/// router, the same session, the same view, the same button contract — but three kinds of
+/// assertion had to move with the surface: the harness now hands the router the console's two
+/// numbers (as <c>QuarpGame.ConsoleEditorContext</c> does), the layout is computed at 160x90,
+/// and a click aimed at a column that no longer exists on a 36-column page had to be re-aimed.
+/// Each of those carries its own note at the assertion. What this file deliberately does NOT do
+/// any more is pin pixels: the picture itself is a framebuffer now, and
+/// <c>CodeEditorScreenGoldenTests</c> hashes it.</para>
 /// </summary>
 public class CodeEditorScreenTests : IDisposable
 {
@@ -43,7 +56,10 @@ public class CodeEditorScreenTests : IDisposable
     private const int WindowWidth = 1280;
     private const int WindowHeight = 720;
 
-    /// <summary>The console's own screen — the surface the sprite editor is laid out on since wave R2.</summary>
+    /// <summary>
+    /// The console's own screen — the surface the sprite (R2), map (R3) and code (R4) editors
+    /// are laid out on. Every mouse point in this file is a console pixel because of it.
+    /// </summary>
     private const int ConsoleWidth = 160;
 
     private const int ConsoleHeight = 90;
@@ -88,21 +104,27 @@ public class CodeEditorScreenTests : IDisposable
 
         /// <summary>
         /// Rebuilt per frame, like the window's. Since wave R2 the two numbers are <b>the size
-        /// of the surface the screen on show is laid out on</b>, and the sprite editor's surface
-        /// is the console itself (ADR-029): 160x90, not the back buffer. <c>QuarpGame</c> makes
-        /// exactly this switch — see <c>ConsoleEditorContext</c> — so a frame here means what a
-        /// frame there means. The consequence for whoever writes a test against the sprite
-        /// screen: <b>its mouse points are console pixels</b>, taken straight off the layout's
-        /// own rectangles. Production reaches the same numbers by putting the window's point
-        /// through <see cref="EditorMouse.ToConsole"/>, whose own arithmetic is pinned in
+        /// of the surface the screen on show is laid out on</b>, and since wave R4 the code
+        /// editor's surface is the console itself (ADR-029) exactly as the sprite and map
+        /// screens' are: 160x90, not the back buffer. <c>QuarpGame</c> makes exactly this
+        /// switch — see <c>ConsoleEditorContext</c> — so a frame here means what a frame there
+        /// means. The consequence for whoever writes a test against this screen: <b>its mouse
+        /// points are console pixels</b>, taken straight off the layout's own rectangles.
+        /// Production reaches the same numbers by putting the window's point through
+        /// <see cref="EditorMouse.ToConsole"/>, whose own arithmetic is pinned in
         /// <c>EditorMouseReaderTests</c> rather than re-run here.
+        ///
+        /// <para>The sound screen is the one mode left that is still measured against the back
+        /// buffer, so it is the exception written here rather than the rule; this harness never
+        /// enters it, and the branch exists so that the day it does, the frame it gets is the
+        /// one the window would give it.</para>
         /// </summary>
         internal EditorShell Context =>
-            Modes.Mode == ShellMode.Editor
-                ? new(Modes, Flyout, Hover, SheetScroll, ConsoleWidth, ConsoleHeight)
-                : new(Modes, Flyout, Hover, SheetScroll, WindowWidth, WindowHeight);
+            Modes.Mode == ShellMode.SfxEditor
+                ? new(Modes, Flyout, Hover, SheetScroll, WindowWidth, WindowHeight)
+                : new(Modes, Flyout, Hover, SheetScroll, ConsoleWidth, ConsoleHeight);
 
-        internal CodeEditorLayout Layout => CodeEditorLayout.Compute(WindowWidth, WindowHeight);
+        internal CodeEditorLayout Layout => CodeEditorLayout.Compute(ConsoleWidth, ConsoleHeight);
 
         internal CodeEditorSession Session => Modes.CodeEditor!;
 
@@ -176,20 +198,25 @@ public class CodeEditorScreenTests : IDisposable
         }
 
         /// <summary>
-        /// Since wave R2 the two screens no longer place their tabs on the same pixels: the
-        /// sprite editor moved to the console's own 160x90 frame (ADR-029) while this one is
-        /// still on the host frame. So the rectangle has to come from the layout of the screen
-        /// ON SHOW, not from this screen's layout — clicking the code tab's host rectangle
-        /// while standing on the sprite screen lands on empty console pixels and does nothing,
-        /// which is exactly how this helper failed when the sprite editor moved.
+        /// The rectangle comes from the layout of the screen ON SHOW, not from this screen's
+        /// layout. Since wave R4 all three screens this harness can stand on are measured on the
+        /// console's own 160x90 frame and their six tabs land on identical pixels — but a tool
+        /// button does not (each screen places its own tool block), so asking the screen you are
+        /// actually standing on stays the only correct question. It is also how this helper
+        /// failed when the sprite editor moved in R2, which is why it asks at all.
         /// </summary>
         internal void ClickButton(EditorButton button)
         {
-            Rectangle rect = Modes.Mode == ShellMode.Editor
-                ? SpriteEditorLayout
+            Rectangle rect = Modes.Mode switch
+            {
+                ShellMode.Editor => SpriteEditorLayout
                     .Compute(ConsoleWidth, ConsoleHeight, Modes.Editor!.RegionCells)
-                    .ButtonRect(button)
-                : Layout.ButtonRect(button);
+                    .ButtonRect(button),
+                ShellMode.MapEditor => MapEditorLayout
+                    .Compute(ConsoleWidth, ConsoleHeight)
+                    .ButtonRect(button),
+                _ => Layout.ButtonRect(button),
+            };
             Click(rect.X + rect.Width / 2, rect.Y + rect.Height / 2);
         }
     }
@@ -237,53 +264,59 @@ public class CodeEditorScreenTests : IDisposable
     // ==================================================================================
 
     /// <summary>
-    /// Everything the screen draws is inside the window, nothing overlaps anything else, and
-    /// the text box holds a whole number of characters by a whole number of lines — at the
-    /// shell's default window and at a quarter of it.
+    /// Everything the screen draws is inside the <b>console</b>, nothing overlaps anything else,
+    /// and the text box holds a whole number of characters by a whole number of lines.
     ///
-    /// <para>Break recipe: delete the <c>+ ui</c> that lifts the text off the gutter in
-    /// <see cref="CodeEditorLayout.Compute"/>, or the <c>- ui</c> that keeps it off the
-    /// scrollbar, and the disjointness assertions go red; drop the <c>/ charWidth * charWidth</c>
-    /// trim and the whole-multiple ones do.</para>
+    /// <para><b>Re-pinned in wave R4, and this is what changed.</b> This used to be a
+    /// <c>[Theory]</c> over two window sizes, because the screen was measured against a window;
+    /// ADR-029 moved it onto the console, so there is exactly one size to check and its numbers
+    /// are constants rather than functions. The gutter assertions are gone with the gutter —
+    /// <see cref="CodeEditorLayout"/>'s type note carries the arithmetic that spent its six
+    /// columns on code, as all three reference consoles do — and the text-scale assertion is
+    /// gone with the second text scale: on the console the system font has one size.</para>
+    ///
+    /// <para>Break recipe, and each of these was checked to actually fire rather than assumed:
+    /// take the text field back to <c>chrome.ContentBottom</c> instead of
+    /// <see cref="ConsoleChrome.SliderBottom"/> and the eleven becomes ten; widen
+    /// <c>ToolColumns</c> to two, or the scrollbar past three pixels, and the thirty-six drops;
+    /// drop either <c>/ CellWidth * CellWidth</c> trim and the whole-multiple assertions go.
+    /// Deleting the one-pixel <c>ScrollBarGap</c> is deliberately NOT on that list: at 160 the
+    /// cell trim already leaves that pixel free (144 of 145 either way), so the constant is
+    /// insurance for a console of another width and nothing here can see it — which is worth
+    /// knowing before someone writes a test that claims otherwise.</para>
     /// </summary>
-    [Theory]
-    [InlineData(1280, 720)]
-    [InlineData(640, 360)]
-    public void EverythingSitsInsideTheWindowAndNothingOverlaps(int width, int height)
+    [Fact]
+    public void EverythingSitsInsideTheConsoleAndNothingOverlaps()
     {
-        var layout = CodeEditorLayout.Compute(width, height);
-        var window = new Rectangle(0, 0, width, height);
+        var layout = CodeEditorLayout.Compute(ConsoleWidth, ConsoleHeight);
+        var console = new Rectangle(0, 0, ConsoleWidth, ConsoleHeight);
 
-        Assert.True(window.Contains(layout.Text), "the text field is off screen");
-        Assert.True(window.Contains(layout.Gutter), "the gutter is off screen");
-        Assert.True(window.Contains(layout.ScrollBar), "the scrollbar is off screen");
-        Assert.True(window.Contains(layout.StatusBar));
-        Assert.False(layout.Text.Intersects(layout.Gutter));
+        Assert.True(console.Contains(layout.Text), "the text field is off screen");
+        Assert.True(console.Contains(layout.ScrollBar), "the scrollbar is off screen");
+        Assert.True(console.Contains(layout.StatusBar));
         Assert.False(layout.Text.Intersects(layout.ScrollBar));
-        Assert.False(layout.Gutter.Intersects(layout.ScrollBar));
 
-        // Everything stops above the reserved prompt line — the exit question must never hide
+        // Everything stops above the reserved message line — the exit question must never hide
         // under the page.
         Assert.True(layout.Text.Bottom <= layout.PromptY);
-        Assert.True(layout.Gutter.Bottom <= layout.PromptY);
         Assert.True(layout.ScrollBar.Bottom <= layout.PromptY);
 
-        // Whole cells, and at least one of each.
-        Assert.True(layout.TextScale >= 2);
+        // Whole cells, and the exact page wave R4 argued for.
         Assert.Equal(0, layout.Text.Width % layout.CharWidth);
         Assert.Equal(0, layout.Text.Height % layout.LineHeight);
-        Assert.True(layout.VisibleLines >= 1);
-        Assert.True(layout.VisibleColumns >= 1);
+        Assert.Equal(SystemFont.CellWidth, layout.CharWidth);
+        Assert.Equal(SystemFont.CellHeight, layout.LineHeight);
+        Assert.Equal(11, layout.VisibleLines);
+        Assert.Equal(36, layout.VisibleColumns);
 
-        // Every button this screen owns is placed, inside the window, and clear of everything.
+        // Every button this screen owns is placed, inside the console, and clear of everything.
         Assert.Equal(AllButtons.Count(EditorIcons.BelongsToCodeEditor), layout.Buttons.Count);
         Assert.All(layout.Buttons, place => Assert.True(EditorIcons.BelongsToCodeEditor(place.Id)));
         for (int i = 0; i < layout.Buttons.Count; i++)
         {
             Rectangle rect = layout.Buttons[i].Rect;
-            Assert.True(window.Contains(rect), $"{layout.Buttons[i].Id} is off screen");
+            Assert.True(console.Contains(rect), $"{layout.Buttons[i].Id} is off screen");
             Assert.False(rect.Intersects(layout.Text), $"{layout.Buttons[i].Id} sits on the text");
-            Assert.False(rect.Intersects(layout.Gutter), $"{layout.Buttons[i].Id} sits on the gutter");
             Assert.False(rect.Intersects(layout.ScrollBar), $"{layout.Buttons[i].Id} sits on the scrollbar");
             for (int j = i + 1; j < layout.Buttons.Count; j++)
             {
@@ -293,52 +326,69 @@ public class CodeEditorScreenTests : IDisposable
     }
 
     /// <summary>
-    /// This screen stands in the SAME frame as its remaining sibling: identical scale, margins,
-    /// bands, prompt verbs and — the part the mouse depends on — identical rectangles for the
-    /// six tabs and the three status buttons. That is what lets a test (and an author's hand)
-    /// aim at a tab without first asking which editor is on screen.
+    /// This screen stands in the SAME frame as the two screens that moved before it: identical
+    /// button size, margin, bands, prompt verbs and — the part the mouse depends on — identical
+    /// rectangles for the exit button and the five editor tabs. That is what lets an author's
+    /// hand aim at a tab without first asking which editor is on screen.
     ///
-    /// <para><b>Re-pinned in wave R2.</b> The sibling used to be the sprite editor as well as
-    /// the map. The sprite screen has left this frame entirely — ADR-029 moved it onto the
-    /// console, where its exit tab is ten console pixels wide rather than 1152 window pixels
-    /// across — so comparing the two would be comparing coordinates in two different units. The
-    /// map is the reference now, and the day the code screen makes the same move this test goes
-    /// with the frame it was measuring.</para>
+    /// <para><b>Re-pinned twice, and both times because a screen moved.</b> Until wave R2 this
+    /// test compared the code screen with the sprite and map screens in the HOST frame; R2 and
+    /// R3 took those two onto the console, so the reference became the sound screen, the last
+    /// other tenant of the host frame. Wave R4 has now taken this screen onto the console too,
+    /// which flips the comparison the whole way round: the siblings are the sprite and map
+    /// screens again, in <see cref="ConsoleChrome"/>, and the sound screen is the one this
+    /// screen no longer shares a coordinate system with. Asking whether its exit tab equals
+    /// theirs would be asking whether 1152 equals 10 — a question with a wrong answer and no
+    /// meaning — so the last line asserts the inequality instead, which is what stops a later
+    /// hand from "fixing" it by dragging one screen back.</para>
+    ///
+    /// <para><b>Save, Undo and Redo are deliberately NOT compared any more.</b> In the host
+    /// frame they were chrome — a right-aligned row in the status band, on the same pixels for
+    /// every screen. The console's status band is five pixels tall and an icon-button is ten, so
+    /// on the console each screen carries those three in its own tool block: the sprite and map
+    /// screens at the foot of a two-wide column, this one at the foot of a one-wide column.
+    /// Their pixels differ by construction and asserting them equal would be asserting a
+    /// coincidence.</para>
     ///
     /// <para>Break recipe: give <see cref="CodeEditorLayout"/> its own copy of the chrome
-    /// arithmetic instead of calling <see cref="EditorChrome.Compute"/> — every assertion here
-    /// goes red, which is exactly what the simplification wave made impossible.</para>
+    /// arithmetic instead of calling <see cref="ConsoleChrome.Compute"/> — every assertion here
+    /// goes red, which is exactly what one owner of the frame makes impossible.</para>
     /// </summary>
     [Fact]
     public void TheCodeScreenStandsInTheSameChromeAsItsSiblings()
     {
-        // The map used to be the reference here. It left the host chrome in wave R3 (ADR-029),
-        // so the sound screen is the sibling now — and when it leaves too, this test leaves with
-        // the host chrome itself, which is the point of measuring one screen against another
-        // rather than against a copied constant.
-        var code = CodeEditorLayout.Compute(WindowWidth, WindowHeight);
-        var other = SfxEditorLayout.Compute(WindowWidth, WindowHeight);
+        var code = CodeEditorLayout.Compute(ConsoleWidth, ConsoleHeight);
+        var sprite = SpriteEditorLayout.Compute(ConsoleWidth, ConsoleHeight, regionCells: 1);
+        var map = MapEditorLayout.Compute(ConsoleWidth, ConsoleHeight);
 
-        Assert.Equal(other.Ui, code.Ui);
-        Assert.Equal(other.Margin, code.Margin);
-        Assert.Equal(other.ButtonSize, code.ButtonSize);
-        Assert.Equal(other.TabStrip, code.TabStrip);
-        Assert.Equal(other.StatusBar, code.StatusBar);
-        Assert.Equal(other.PromptY, code.PromptY);
+        Assert.Equal(ConsoleChrome.ButtonSize, code.ButtonSize);
+        Assert.Equal(sprite.ButtonSize, code.ButtonSize);
+        Assert.Equal(sprite.Margin, code.Margin);
+        Assert.Equal(sprite.TabStrip, code.TabStrip);
+        Assert.Equal(sprite.StatusBar, code.StatusBar);
+        Assert.Equal(sprite.PromptY, code.PromptY);
+        Assert.Equal(map.TabStrip, code.TabStrip);
+        Assert.Equal(map.StatusBar, code.StatusBar);
+        Assert.Equal(map.PromptY, code.PromptY);
         foreach (EditorPromptVerb verb in Enum.GetValues<EditorPromptVerb>())
         {
-            Assert.Equal(other.PromptVerbRect(verb), code.PromptVerbRect(verb));
+            Assert.Equal(sprite.PromptVerbRect(verb), code.PromptVerbRect(verb));
+            Assert.Equal(map.PromptVerbRect(verb), code.PromptVerbRect(verb));
         }
         EditorButton[] shared =
         {
             EditorButton.ExitTab, EditorButton.CodeTab, EditorButton.SpritesTab,
             EditorButton.TilemapTab, EditorButton.SoundTab, EditorButton.MusicTab,
-            EditorButton.Save, EditorButton.Undo, EditorButton.Redo,
         };
         foreach (EditorButton button in shared)
         {
-            Assert.Equal(other.ButtonRect(button), code.ButtonRect(button));
+            Assert.Equal(sprite.ButtonRect(button), code.ButtonRect(button));
+            Assert.Equal(map.ButtonRect(button), code.ButtonRect(button));
         }
+        // And the host frame is a DIFFERENT frame, on purpose: the one screen left in it carries
+        // tabs hundreds of window pixels wide wherever the window is.
+        var sound = SfxEditorLayout.Compute(WindowWidth, WindowHeight);
+        Assert.NotEqual(sound.ButtonRect(EditorButton.ExitTab), code.ButtonRect(EditorButton.ExitTab));
     }
 
     // ==================================================================================
@@ -358,7 +408,7 @@ public class CodeEditorScreenTests : IDisposable
     [Fact]
     public void TheViewScrollsExactlyEnoughToShowTheCaret()
     {
-        var layout = CodeEditorLayout.Compute(WindowWidth, WindowHeight);
+        var layout = CodeEditorLayout.Compute(ConsoleWidth, ConsoleHeight);
         string source = string.Join(
             "\n", Enumerable.Range(0, 200).Select(i => $"line {i} " + new string('x', 200)));
         (CodeEditorSession session, CodeEditorView view) = Document(source);
@@ -446,8 +496,11 @@ public class CodeEditorScreenTests : IDisposable
         Assert.Equal(3, harness.Session.CursorLine);
         Assert.Equal(7, harness.Session.CursorColumn);
 
-        // Line 1 is "public class Demo" — seventeen characters; column 40 is nothing but air.
-        Rectangle air = layout.CellRect(1, 40, 0, 0);
+        // Line 1 is "public class Demo" — seventeen characters; column 30 is nothing but air.
+        // (It used to be column 40. The console's page is 36 columns wide — CodeEditorLayout's
+        // type note has the arithmetic — so column 40 is no longer a place on this screen at
+        // all, and a click aimed there would land on the scrollbar instead of on the line.)
+        Rectangle air = layout.CellRect(1, 30, 0, 0);
         harness.Click(air.X + 2, air.Y + 2);
 
         Assert.Equal(1, harness.Session.CursorLine);
@@ -848,7 +901,7 @@ public class CodeEditorScreenTests : IDisposable
     [Fact]
     public void EveryPlacedLiveCodeButtonChangesSomethingObservable()
     {
-        foreach (EditorButtonPlace place in CodeEditorLayout.Compute(WindowWidth, WindowHeight).Buttons)
+        foreach (EditorButtonPlace place in CodeEditorLayout.Compute(ConsoleWidth, ConsoleHeight).Buttons)
         {
             ShellModeMachine machine = MachineWithCode(out _, "abc");
             Prepare(machine.CodeEditor!);
@@ -894,6 +947,19 @@ public class CodeEditorScreenTests : IDisposable
     /// The status line's two fields, named: TIC-80's <c>line X/Y col Z</c> on the left and its
     /// <c>size N/MAX</c> on the right. Break recipe: make either 0-based and the text changes
     /// under an author who is comparing it with a compiler error.
+    ///
+    /// <para><b>Wave R4 cut one word out of the right-hand field and this is where it is
+    /// recorded.</b> The console's status line holds 39 characters; the caret pair can want 22
+    /// of them and <c>SIZE 262144/262144</c> wants 18, which is one too many. The word went and
+    /// the ratio stayed — see <see cref="CodeEditorRenderer.Budget"/> for the whole argument,
+    /// including the red-on-overflow that went with it and where its meaning reappeared. Both
+    /// fields at their widest now fit the line with four characters to spare, which is the
+    /// assertion below.</para>
+    ///
+    /// <para>The standing line was re-cut for the same 39 columns: a field that is still empty
+    /// spends the line teaching its keys, and from the first character typed the line is the
+    /// term. Both shapes are asserted, because the host screen printed one string that was
+    /// neither.</para>
     /// </summary>
     [Fact]
     public void TheStatusLineReadsTheCaretAndTheBudget()
@@ -902,9 +968,34 @@ public class CodeEditorScreenTests : IDisposable
         session.SetCursor(1, 2);
 
         Assert.Equal("LINE 2/3 COL 3", CodeEditorRenderer.Coordinates(session));
+        Assert.Equal("8/262144", CodeEditorRenderer.Budget(session));
         Assert.Null(CodeEditorRenderer.StandingNotice(session, view));
+
+        // The two fields at their worst still fit the console's 39-character line, which is the
+        // whole reason the word SIZE is not in the second one.
+        const string WidestCoordinates = "LINE 9999/9999 COL 999";
+        const string WidestBudget = "262144/262144";
+        Assert.Equal(22, WidestCoordinates.Length);
+        Assert.Equal(13, WidestBudget.Length);
+        Assert.True(
+            WidestCoordinates.Length + WidestBudget.Length
+                <= CodeEditorLayout.Compute(ConsoleWidth, ConsoleHeight).Chrome.LineChars);
 
         view.OpenFind();
         Assert.StartsWith("FIND:", CodeEditorRenderer.StandingNotice(session, view), StringComparison.Ordinal);
+        Assert.Contains("ESC CLOSES", CodeEditorRenderer.StandingNotice(session, view), StringComparison.Ordinal);
+        view.TypeIntoField('a');
+        Assert.Equal("FIND: a", CodeEditorRenderer.StandingNotice(session, view));
+
+        view.OpenGoTo();
+        Assert.StartsWith("GO TO LINE:", CodeEditorRenderer.StandingNotice(session, view), StringComparison.Ordinal);
+        view.TypeIntoField('7');
+        Assert.Equal("GO TO LINE: 7", CodeEditorRenderer.StandingNotice(session, view));
+
+        // Every one of those lines fits what the message band can print, which is what stops a
+        // sentence from ending mid-word at the screen's edge.
+        ConsoleChrome chrome = CodeEditorLayout.Compute(ConsoleWidth, ConsoleHeight).Chrome;
+        Assert.True(
+            CodeEditorRenderer.StandingNotice(session, view)!.Length <= chrome.LineChars);
     }
 }

@@ -73,7 +73,6 @@ public sealed class QuarpGame : Game
     private SpriteBatch _spriteBatch = null!;
     private ConsolePresenter _presenter = null!;
     private ShellOverlay _overlay = null!;
-    private CodeEditorRenderer _codeUi = null!;
     private SfxEditorRenderer _sfxUi = null!;
     private MainMenuRenderer _menuUi = null!;
     private AudioOutput? _audio;
@@ -228,7 +227,6 @@ public sealed class QuarpGame : Game
         _spriteBatch = new SpriteBatch(GraphicsDevice);
         _presenter = new ConsolePresenter(GraphicsDevice, _profile);
         _overlay = new ShellOverlay(GraphicsDevice, _profile.Width, _profile.Height);
-        _codeUi = new CodeEditorRenderer(GraphicsDevice);
         _sfxUi = new SfxEditorRenderer(GraphicsDevice);
         _menuUi = new MainMenuRenderer(GraphicsDevice);
 
@@ -300,13 +298,21 @@ public sealed class QuarpGame : Game
                     gameTime.ElapsedGameTime.TotalSeconds);
                 break;
             case ShellMode.CodeEditor:
-                // The one screen that also needs the CHARACTER stream, not just the key frame:
+                // The third screen off the window's coordinate system (wave R4): same two
+                // conversions its two neighbours get, through the same single owner. What only
+                // this screen needs on top is the CHARACTER stream, not just the key frame:
                 // typing wants the author's keyboard layout, dead keys and auto-repeat, which
                 // only Window.TextInput knows. The buffer is handed over as a plain list and
                 // cleared below with the frame, so the router sees exactly what arrived since
                 // the previous frame — in order, once. See CodeEditorInput's type comment.
                 CodeEditorInput.Update(
-                    EditorContext(), commands, mouse, _typedChars, gameTime.ElapsedGameTime.TotalSeconds);
+                    ConsoleEditorContext(),
+                    commands,
+                    mouse.ToConsole(_shellScreen.Placement(
+                        GraphicsDevice.PresentationParameters.BackBufferWidth,
+                        GraphicsDevice.PresentationParameters.BackBufferHeight)),
+                    _typedChars,
+                    gameTime.ElapsedGameTime.TotalSeconds);
                 break;
             case ShellMode.SfxEditor:
                 SfxEditorInput.Update(EditorContext(), commands, mouse, gameTime.ElapsedGameTime.TotalSeconds);
@@ -712,8 +718,9 @@ public sealed class QuarpGame : Game
     /// The whole of what the editor input routers (wave 3c) are allowed to see of this window:
     /// the shell state they steer, plus the back buffer as two numbers. Built per call because
     /// a resize changes the size mid-session — and built here, in the one class that owns a
-    /// graphics device, so that <see cref="SpriteEditorInput"/> and <see cref="MapEditorInput"/>
-    /// can name no MonoGame type at all and therefore run in a headless test.
+    /// graphics device, so that the editor routers can name no MonoGame type at all and
+    /// therefore run in a headless test. Since wave R4 only the sound screen's router reads this
+    /// one; the other three take <see cref="ConsoleEditorContext"/>.
     /// </summary>
     private EditorShell EditorContext() =>
         new(
@@ -725,11 +732,12 @@ public sealed class QuarpGame : Game
             GraphicsDevice.PresentationParameters.BackBufferHeight);
 
     /// <summary>
-    /// The same context for the one screen that is drawn on the console (wave R2): the surface
-    /// it measures itself against is the shell's own framebuffer, not the back buffer, so the
-    /// two numbers it receives are 160 and 90. The router cannot tell the difference and must
-    /// not — it lays out and hit-tests in the surface it is given, which is exactly why the same
-    /// type serves both the console screen and the three that have not moved yet.
+    /// The same context for the three screens that are drawn on the console (waves R2-R4): the
+    /// surface they measure themselves against is the shell's own framebuffer, not the back
+    /// buffer, so the two numbers they receive are 160 and 90. A router cannot tell the
+    /// difference and must not — it lays out and hit-tests in the surface it is given, which is
+    /// exactly why the same type serves both the console screens and the one that has not moved
+    /// yet.
     /// </summary>
     private EditorShell ConsoleEditorContext() =>
         new(_modes, _flyout, _hover, _sheetScroll, _shellScreen.Width, _shellScreen.Height);
@@ -744,24 +752,13 @@ public sealed class QuarpGame : Game
             case ShellMode.Library:
             case ShellMode.Editor:
             case ShellMode.MapEditor:
-                // Three screens on one road since wave R3: all are drawn into the shell's own
-                // console and presented by the same presenter the cartridge's frame goes
-                // through. The draw clock feeds the sprite screen's marching ants — chrome
-                // animating in host time, like the tooltip delay; no simulation or hash sees it.
-                RenderShellScreen(gameTime.TotalGameTime.TotalSeconds);
-                break;
             case ShellMode.CodeEditor:
-                // Same draw clock the sprite editor's marching ants ride: host chrome animating
-                // in host time (here, the caret's blink); no simulation or hash can see it.
-                _codeUi.Draw(
-                    _spriteBatch,
-                    GraphicsDevice.PresentationParameters.BackBufferWidth,
-                    GraphicsDevice.PresentationParameters.BackBufferHeight,
-                    _modes.CodeEditor!,
-                    _modes.CodeView!,
-                    _hover.Target,
-                    _hover.TooltipVisible,
-                    gameTime.TotalGameTime.TotalSeconds);
+                // Four screens on one road since wave R4: all are drawn into the shell's own
+                // console and presented by the same presenter the cartridge's frame goes
+                // through. The draw clock feeds the sprite screen's marching ants and the code
+                // screen's caret blink — chrome animating in host time, like the tooltip delay;
+                // no simulation or hash sees it.
+                RenderShellScreen(gameTime.TotalGameTime.TotalSeconds);
                 break;
             case ShellMode.SfxEditor:
                 _sfxUi.Draw(
@@ -833,11 +830,12 @@ public sealed class QuarpGame : Game
     /// this method and <see cref="RenderFrame"/> is which framebuffer is presented and whether
     /// the pause indicator has anything to say.
     ///
-    /// <para>Three screens live here as of wave R3: the library (wave R1), the sprite editor
-    /// (R2) and the map editor (R3). Which one is drawn is the mode's business and nothing else
-    /// changes — same console, same presenter, same whole-integer scale. The two remaining
-    /// editors (code and sound) still paint themselves at the window's resolution and are
-    /// dispatched separately in <see cref="Draw"/>; they join this method one wave at a time.</para>
+    /// <para>Four screens live here as of wave R4: the library (wave R1), the sprite editor
+    /// (R2), the map editor (R3) and the code editor (R4). Which one is drawn is the mode's
+    /// business and nothing else changes — same console, same presenter, same whole-integer
+    /// scale. One editor is left at the window's resolution — sound — and it is still dispatched
+    /// separately in <see cref="Draw"/>; it joins this method in its own wave, and
+    /// <see cref="EditorChrome"/> dies with it.</para>
     /// </summary>
     private void RenderShellScreen(double timeSeconds)
     {
@@ -856,6 +854,12 @@ public sealed class QuarpGame : Game
             MapEditorRenderer.Draw(
                 _shellScreen, _modes.MapEditor!, _modes.Editor!, _modes.MapView!,
                 _hover.Target, _hover.TooltipVisible);
+        }
+        else if (_modes.Mode == ShellMode.CodeEditor)
+        {
+            CodeEditorRenderer.Draw(
+                _shellScreen, _modes.CodeEditor!, _modes.CodeView!,
+                _hover.Target, _hover.TooltipVisible, timeSeconds);
         }
         else
         {
@@ -908,7 +912,6 @@ public sealed class QuarpGame : Game
             _modes.Session?.Dispose();
             _overlay?.Dispose();
             _presenter?.Dispose();
-            _codeUi?.Dispose();
             _menuUi?.Dispose();
             _sfxUi?.Dispose();
             _audio?.Dispose();

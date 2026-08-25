@@ -103,6 +103,27 @@ public enum MapRegion
     Slider,
 }
 
+/// <summary>
+/// The buttonless controls of the <b>code</b> screen — the fourth twin of
+/// <see cref="SfxRegion"/>, <see cref="MusicRegion"/> and <see cref="MapRegion"/>, and it exists
+/// for the same reason (REFERENCES-EDITORS §8 item 15): a control with no button has nowhere to
+/// hang its hotkey, and on 160x90 the label on the control IS the documentation. Two, because
+/// this screen is a page of text and the one rail that travels it — and between them they carry
+/// every key this editor owns that no button of the tool column names (the arrows and their
+/// three modifiers, Tab, Ctrl+A, the wheel, F11).
+/// </summary>
+public enum CodeRegion
+{
+    /// <summary>Not on any of this screen's buttonless controls.</summary>
+    None,
+
+    /// <summary>The text field — the 11x36 page the caret lives on (15x40 with the chrome off).</summary>
+    Text,
+
+    /// <summary>The vertical scrollbar at the right edge: the mouse's only long-distance road through a file.</summary>
+    ScrollBar,
+}
+
 public readonly record struct HoverTarget
 {
     /// <summary>The hovered icon-button, or null when the target is a swatch, a flyout variant or the slider.</summary>
@@ -132,32 +153,39 @@ public readonly record struct HoverTarget
     /// <summary>Which buttonless control of the map screen is under the pointer; <see cref="MapRegion.None"/> for everything else.</summary>
     public MapRegion Map { get; init; }
 
+    /// <summary>Which buttonless control of the code screen is under the pointer; <see cref="CodeRegion.None"/> for everything else.</summary>
+    public CodeRegion Code { get; init; }
+
     public static HoverTarget OfButton(EditorButton button) =>
-        new() { Button = button, Swatch = -1, FlyoutSlot = null, FlyoutVariant = -1, Slider = false, Flag = -1, Sfx = SfxRegion.None, Music = MusicRegion.None, Map = MapRegion.None };
+        new() { Button = button, Swatch = -1, FlyoutSlot = null, FlyoutVariant = -1, Slider = false, Flag = -1, Sfx = SfxRegion.None, Music = MusicRegion.None, Map = MapRegion.None, Code = CodeRegion.None };
 
     public static HoverTarget OfSwatch(int swatch) =>
-        new() { Button = null, Swatch = swatch, FlyoutSlot = null, FlyoutVariant = -1, Slider = false, Flag = -1, Sfx = SfxRegion.None, Music = MusicRegion.None, Map = MapRegion.None };
+        new() { Button = null, Swatch = swatch, FlyoutSlot = null, FlyoutVariant = -1, Slider = false, Flag = -1, Sfx = SfxRegion.None, Music = MusicRegion.None, Map = MapRegion.None, Code = CodeRegion.None };
 
     public static HoverTarget OfFlyoutVariant(EditorButton slot, int variant) =>
-        new() { Button = null, Swatch = -1, FlyoutSlot = slot, FlyoutVariant = variant, Slider = false, Flag = -1, Sfx = SfxRegion.None, Music = MusicRegion.None, Map = MapRegion.None };
+        new() { Button = null, Swatch = -1, FlyoutSlot = slot, FlyoutVariant = variant, Slider = false, Flag = -1, Sfx = SfxRegion.None, Music = MusicRegion.None, Map = MapRegion.None, Code = CodeRegion.None };
 
     public static HoverTarget OfSlider() =>
-        new() { Button = null, Swatch = -1, FlyoutSlot = null, FlyoutVariant = -1, Slider = true, Flag = -1, Sfx = SfxRegion.None, Music = MusicRegion.None, Map = MapRegion.None };
+        new() { Button = null, Swatch = -1, FlyoutSlot = null, FlyoutVariant = -1, Slider = true, Flag = -1, Sfx = SfxRegion.None, Music = MusicRegion.None, Map = MapRegion.None, Code = CodeRegion.None };
 
     /// <summary>The sound screen's buttonless controls; every other field is filled so kinds cannot collide.</summary>
     public static HoverTarget OfSfxRegion(SfxRegion region) =>
-        new() { Button = null, Swatch = -1, FlyoutSlot = null, FlyoutVariant = -1, Slider = false, Flag = -1, Sfx = region, Music = MusicRegion.None, Map = MapRegion.None };
+        new() { Button = null, Swatch = -1, FlyoutSlot = null, FlyoutVariant = -1, Slider = false, Flag = -1, Sfx = region, Music = MusicRegion.None, Map = MapRegion.None, Code = CodeRegion.None };
 
     /// <summary>A buttonless control of the music screen is under the pointer.</summary>
     public static HoverTarget OfMusicRegion(MusicRegion region) =>
-        new() { Button = null, Swatch = -1, FlyoutSlot = null, FlyoutVariant = -1, Slider = false, Flag = -1, Sfx = SfxRegion.None, Music = region, Map = MapRegion.None };
+        new() { Button = null, Swatch = -1, FlyoutSlot = null, FlyoutVariant = -1, Slider = false, Flag = -1, Sfx = SfxRegion.None, Music = region, Map = MapRegion.None, Code = CodeRegion.None };
 
     /// <summary>A buttonless control of the map screen is under the pointer.</summary>
     public static HoverTarget OfMapRegion(MapRegion region) =>
-        new() { Button = null, Swatch = -1, FlyoutSlot = null, FlyoutVariant = -1, Slider = false, Flag = -1, Sfx = SfxRegion.None, Music = MusicRegion.None, Map = region };
+        new() { Button = null, Swatch = -1, FlyoutSlot = null, FlyoutVariant = -1, Slider = false, Flag = -1, Sfx = SfxRegion.None, Music = MusicRegion.None, Map = region, Code = CodeRegion.None };
+
+    /// <summary>A buttonless control of the code screen is under the pointer.</summary>
+    public static HoverTarget OfCodeRegion(CodeRegion region) =>
+        new() { Button = null, Swatch = -1, FlyoutSlot = null, FlyoutVariant = -1, Slider = false, Flag = -1, Sfx = SfxRegion.None, Music = MusicRegion.None, Map = MapRegion.None, Code = region };
 
     public static HoverTarget OfFlag(int bit) =>
-        new() { Button = null, Swatch = -1, FlyoutSlot = null, FlyoutVariant = -1, Slider = false, Flag = bit, Sfx = SfxRegion.None, Music = MusicRegion.None, Map = MapRegion.None };
+        new() { Button = null, Swatch = -1, FlyoutSlot = null, FlyoutVariant = -1, Slider = false, Flag = bit, Sfx = SfxRegion.None, Music = MusicRegion.None, Map = MapRegion.None, Code = CodeRegion.None };
 }
 
 /// <summary>

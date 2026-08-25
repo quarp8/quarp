@@ -100,9 +100,12 @@ public static class SpriteEditorRenderer
         DrawSheet(console, layout, editor, scroll.Offset);
         DrawSlider(console, layout, scroll, hover);
         // The readouts: the cursor in SHEET pixels — the coordinate an author would type into
-        // code — and the sprite number, which is Spr(n)'s n for the region's anchor cell.
+        // code — the flag byte of the sprite on the canvas, and the sprite number, which is
+        // Spr(n)'s n for the region's anchor cell.
         DrawStatusText(
-            console, layout.Chrome, SheetCoordinates(editor, indexes), indexes.Sprite(editor.SpriteIndex));
+            console, layout.Chrome,
+            $"{SheetCoordinates(editor, indexes)}  {FlagsReadout(editor)}",
+            indexes.Sprite(editor.SpriteIndex));
         DrawMessageLine(
             console, layout.Chrome, editor.ExitPromptShown, editor.SaveError, StandingNotice(editor));
         DrawFlyout(console, layout, editor, flyoutSlot, hover);
@@ -142,6 +145,45 @@ public static class SpriteEditorRenderer
         int size = VirtualConsole.SpriteSize;
         return indexes.Pair(
             editor.RegionCellX * size + editor.CursorX, editor.RegionCellY * size + editor.CursorY);
+    }
+
+    /// <summary>
+    /// The eight flag toggles as <b>one byte</b> — REFERENCES-EDITORS §8 item 8's other half.
+    /// TIC-80 stands a two-digit hex field right under its eight flag circles
+    /// (<c>src/studio/editors/sprite.c</c>, <c>drawFlags</c>: "под ними — hex-поле на 2 цифры",
+    /// §2.1) and we had the circles without the number. The circles answer "is bit 3 up"; the
+    /// byte answers "does this sprite carry the same mask as the tile next door" and "which mask
+    /// am I about to copy onto the block" — two questions eight separate lamps make you spell out
+    /// bit by bit, and the answer an author writes down beside his <c>Fget</c> calls.
+    ///
+    /// <para><b>Where it went, and why nothing moved to make room.</b> The screen's middle column
+    /// is full to the pixel (see <see cref="SpriteEditorLayout"/>: palette, flags, five layer
+    /// tabs, and the four rows left under them are one short of a five-row glyph), so the number
+    /// went to the one place in this layout that already had room and already belonged to it —
+    /// the status band, beside the cursor's sheet coordinate and the sprite number. Both of those
+    /// are facts about the sprite on the canvas and so is this one. Nothing was resized, moved or
+    /// spent: the widest the line can now read is <c>0x07,0x0C  FLG 0xFF</c> plus <c>0x03</c>,
+    /// which is 22 of the band's 39 characters.</para>
+    ///
+    /// <para><b>It does NOT obey <see cref="IndexFormat"/> (Ctrl+H), and that is the decision
+    /// rather than an oversight.</b> That switch owns "how a bank <em>index</em> becomes text" —
+    /// a sprite number, a slot number, a coordinate — and its whole justification is that the
+    /// same cell can be read as 18 or as 0x12. A flag byte is not an index into anything: it is
+    /// eight independent bits, and the only spelling in which a human can see which of them are
+    /// up is the one where each hex digit is exactly four of them. Printing 165 for
+    /// <c>1010 0101</c> would be a correct number and a useless one, so the base here is a
+    /// property of the datum and not of the reader's mood. The <c>0x</c> prefix is kept for the
+    /// same reason <see cref="IndexFormat"/> keeps it: with the sprite number beside it in either
+    /// base, a bare <c>12</c> would be two plausible readings of one field.</para>
+    /// </summary>
+    public static string FlagsReadout(SpriteEditorSession editor)
+    {
+        ArgumentNullException.ThrowIfNull(editor);
+        // The SELECTED sprite's byte, not the block's fold: the two are the same number for a
+        // single cell (the ordinary case) and, where they differ, the panel's three states are
+        // what says "some of them" — a byte cannot, and a byte that quietly meant "the bits all
+        // eight share" would read as the flags of a sprite that does not exist.
+        return $"FLG 0x{editor.Flags:X2}";
     }
 
     /// <summary>

@@ -56,6 +56,23 @@ namespace Quarp.Shell.Desktop;
 /// cancelled, it is unfunded: when it comes it comes as a mode of its own, with a layout, a
 /// router and a golden picture, and not as three lines smuggled into a renderer.</para>
 ///
+/// <para><b>No search-and-replace, and this one is a refusal rather than an unfunded want.</b>
+/// The rule this project reads the niche by is "what do the three references do"; on replace all
+/// three answer the same way, which is that they do not have it. TIC-80's code editor has six
+/// modes and replace is not among them (<c>code.c</c>: <c>TEXT_EDIT_MODE</c>,
+/// <c>TEXT_DRAG_CODE</c>, <c>TEXT_FIND_MODE</c>, <c>TEXT_GOTO_MODE</c>,
+/// <c>TEXT_BOOKMARK_MODE</c>, <c>TEXT_OUTLINE_MODE</c>), and its toolbar's eight buttons are
+/// hand, find, goto, bookmark, outline, font, shadow and run. LIKO-12's <c>code.lua</c> has
+/// <c>Ctrl+I</c> incremental search and <c>Ctrl+K</c> "repeat the search" and nothing else that
+/// writes. PICO-8's manual lists <c>CTRL-F</c> "to search for text in the current tab",
+/// <c>CTRL-G</c> "to repeat the last search again" and <c>CTRL-L</c> "to jump to a line number"
+/// — search, repeat, jump; no replace. (REFERENCES-EDITORS §4.1, §4.2, §4.3, and §8 item 14,
+/// which asks for "поиск / переход к строке / список функций" and not for replace.) Three of
+/// three, so building it here would be this shell inventing a control the niche does not have,
+/// on the smallest code page in that niche, with an author who has <c>Ctrl+G</c> and can type.
+/// If it is ever wanted it comes as a decision of its own with a second footer tenant and a
+/// confirmation rule for "replace all", not as a fourth branch smuggled into a find line.</para>
+///
 /// <para><b>No syntax highlighting in this wave, and it is not an oversight.</b> LIKO-12 has it
 /// (<c>Libraries.SyntaxHighlighter</c>, a nine-colour theme) and TIC-80 has it per language;
 /// both colour a language they own the lexer for. Ours is C#, our palette has sixteen slots of
@@ -142,11 +159,35 @@ public static class CodeEditorRenderer
             console, layout.Chrome, view.ExitPromptShown, session.SaveError, StandingNotice(session, view));
         DrawTooltipField(
             console, layout.Chrome,
-            tooltipVisible && hover is HoverTarget target && target.Button is EditorButton button
-                ? EditorIcons.CodeTooltip(button)
-                : null,
+            tooltipVisible && hover is HoverTarget target ? TooltipText(target) : null,
             ScreenName);
         return layout;
+    }
+
+    /// <summary>
+    /// The hover label for whichever kind of target is under the pointer: a button gets
+    /// <see cref="EditorIcons.CodeTooltip"/>, and the two controls that are <em>not</em> buttons
+    /// — the page of text and the scrollbar — get <see cref="EditorIcons.CodeRegionTooltip"/>,
+    /// which is where this screen's keyless gestures are announced (REFERENCES-EDITORS §8 item
+    /// 15). The cut to the field's width belongs to <see cref="ConsoleChrome.FitTooltip"/>, the
+    /// only thing that knows how wide the field is.
+    ///
+    /// <para><b>A target this screen does not recognise means "no label", never an exception</b> —
+    /// the rule the sound, music and map renderers already carry, repeated here verbatim rather
+    /// than reasoned about again. A hover target is measured against ONE screen's layout but the
+    /// tracker outlives the screen (see <see cref="IconHoverTracker.Clear"/>): a frame is
+    /// input-then-draw and a keyboard tab switch lands between the two halves, so this method can
+    /// be handed a sound-screen region with no button and no code region. Returning null there
+    /// costs a tooltip for one frame; throwing costs the console, inside <c>Draw</c>, where
+    /// nothing useful can catch it.</para>
+    /// </summary>
+    public static string? TooltipText(in HoverTarget target)
+    {
+        if (target.Button is EditorButton button)
+        {
+            return EditorIcons.CodeTooltip(button);
+        }
+        return target.Code is CodeRegion.None ? null : EditorIcons.CodeRegionTooltip(target.Code);
     }
 
     /// <summary>

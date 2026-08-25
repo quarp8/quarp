@@ -448,10 +448,18 @@ public static class CodeEditorInput
         in EditorShell shell, CodeEditorSession session, CodeEditorView view,
         in CodeEditorLayout layout, in ShellCommands commands, in EditorMouse mouse, double elapsedSeconds)
     {
+        // Hover: buttons first, then this screen's two buttonless controls — the same order the
+        // press chain below tests them in, so the label and the click always name the same thing
+        // (MapEditorInput.Pointer's rule, one screen over). Until the closing wave this screen
+        // could only build OfButton and the scrollbar and the page itself were mute; CodeRegion
+        // is what gave them a hover kind of their own (REFERENCES-EDITORS §8 item 15), and
+        // CodeEditorLayout.RegionAt is the one hit test.
         shell.Hover.Update(
             layout.TryButton(mouse.X, mouse.Y, out EditorButton hovered)
                 ? HoverTarget.OfButton(hovered)
-                : null,
+                : layout.RegionAt(mouse.X, mouse.Y) is CodeRegion region and not CodeRegion.None
+                    ? HoverTarget.OfCodeRegion(region)
+                    : null,
             elapsedSeconds);
 
         // Over the text field only. The gutter used to count too; wave R4 took the gutter off

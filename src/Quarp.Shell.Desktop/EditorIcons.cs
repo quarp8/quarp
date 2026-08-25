@@ -1056,9 +1056,14 @@ public static class EditorIcons
     /// shape of <see cref="MapTooltip"/>, and for the same reason: three screens, one tooltip
     /// file, so "SAVE  CTRL+S" exists once and cannot drift.
     ///
-    /// <para>The code screen's one control without a button is the text field itself, and its
-    /// key paths are announced on the tab it lives under — every key on this screen is therefore
-    /// reachable from some tooltip, which is what the parity sweep checks.</para>
+    /// <para>The two controls of this screen that have no button — the page of text and the
+    /// scrollbar — got a <see cref="HoverTarget"/> kind of their own in the closing wave
+    /// (<see cref="CodeRegion"/>, the fourth twin of <see cref="SfxRegion"/>,
+    /// <see cref="MusicRegion"/> and <see cref="MapRegion"/>), so their keys are now announced
+    /// <b>on the control</b> rather than borrowed onto the tab above them; see
+    /// <see cref="CodeRegionTooltip"/>. The tab keeps the text it had — a reader who reaches for
+    /// the tab is asking "what screen am I on", and losing the movement keys off it would trade
+    /// one discoverable place for another instead of adding one.</para>
     /// </summary>
     public static string CodeTooltip(EditorButton button) => button switch
     {
@@ -1066,6 +1071,42 @@ public static class EditorIcons
             "CODE - ACTIVE   ARROWS/HOME/END/PGUP/PGDN MOVE, SHIFT SELECTS, CTRL+ARROWS BY WORD, "
             + "ALT+UP/DOWN BY DECLARATION",
         _ => Tooltip(button),
+    };
+
+    /// <summary>
+    /// The page's own label. It carries the keys that live on no button of this screen — the
+    /// selection modifier, the tab stop, select-all, the wheel and the chrome switch — because
+    /// the text field is the one control an author's pointer is always on and the one that has
+    /// no button of its own. TIC-80's own code editor answers the same question the same way:
+    /// its toolbar names only the five modes, and every editing key is documented on the surface
+    /// it acts on (REFERENCES-EDITORS §4.1).
+    /// </summary>
+    public const string CodeTextTooltip =
+        "TEXT   SHIFT+MOVE SELECTS, CTRL+A ALL, TAB INDENTS, WHEEL SCROLLS"
+        + "   F11 FULLSCREEN, SHIFT+F11 ITS STATUS ROW";
+
+    /// <summary>
+    /// The scrollbar's label — the mouse's only long-distance road through a file, and the one
+    /// place the author can see how much of the buffer is off screen. Its keyboard twin is named
+    /// on it, which is what the parity law asks of a control that is otherwise mouse-only.
+    /// </summary>
+    public const string CodeScrollBarTooltip =
+        "SCROLL   CLICK OR DRAG TO TRAVEL   WHEEL AND PGUP/PGDN WALK THE PAGE";
+
+    /// <summary>
+    /// The label of one buttonless control of the code screen — the single lookup its renderer
+    /// hangs a tooltip on, so every key this screen owns is discoverable from the pointer and the
+    /// buttonless sweep has one place to check. <see cref="CodeRegion.None"/> never reaches here:
+    /// the hover tracker is fed null instead, and <c>CodeEditorRenderer.TooltipText</c> guards a
+    /// stale target from another screen besides — see <see cref="IconHoverTracker.Clear"/> for
+    /// the crash that rule was written on.
+    /// </summary>
+    public static string CodeRegionTooltip(CodeRegion region) => region switch
+    {
+        CodeRegion.Text => CodeTextTooltip,
+        CodeRegion.ScrollBar => CodeScrollBarTooltip,
+        _ => throw new ArgumentOutOfRangeException(
+            nameof(region), region, "CodeRegion.None is not a control and has no label."),
     };
 
     /// <summary>

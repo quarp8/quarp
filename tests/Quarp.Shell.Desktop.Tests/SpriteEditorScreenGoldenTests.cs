@@ -80,6 +80,23 @@ namespace Quarp.Shell.Desktop.Tests;
 /// Was / became: <c>722b2140ce71474e</c> / <c>d7586acedcbd9269</c>,
 /// <c>9bbcedf3a923b791</c> / <c>a440fd38a44e731a</c>, <c>e977417de90e0f07</c> /
 /// <c>a110ff917226f080</c>.</para>
+///
+/// <para><b>Re-pinned 2026-08-25, wave X6 (the flag byte joined the status band).</b> Cause
+/// named before the numbers were read: REFERENCES-EDITORS §8 item 8 asks for TIC-80's number
+/// beside the eight flag circles (<c>sprite.c</c> prints the byte next to them), because eight
+/// lit-or-dark rings tell you the state one bit at a time and a byte tells you all eight at
+/// once. It went into the status band rather than the middle column: under the layer tabs there
+/// are four content rows and a glyph needs five, so the only ways in were the rows the chrome
+/// reserves for a slider or moving the tabs — neither worth a readout. The band already carried
+/// two facts about this same sprite; this is the third, and the worst case is 22 of its 39
+/// characters. It is NOT governed by the shell-wide hex/dec switch, and that is a property of
+/// the value rather than a preference: a flag byte is eight independent bits, and only base
+/// sixteen shows a human which lamps are lit — 165 is the right number and a useless one.
+/// Every probe in this file passed the change; the band's left field still starts where it did
+/// and the right field is still flush right. Was / became:
+/// <c>d7586acedcbd9269</c> / <c>9b0e89f5fc5c7705</c>,
+/// <c>a440fd38a44e731a</c> / <c>961f347605d04ad2</c>,
+/// <c>a110ff917226f080</c> / <c>af32c85410a518c8</c>.</para>
 /// </summary>
 public class SpriteEditorScreenGoldenTests : IDisposable
 {
@@ -170,7 +187,7 @@ public class SpriteEditorScreenGoldenTests : IDisposable
             Assert.InRange(pixel, (byte)0, (byte)15);
         }
 
-        Assert.Equal("d7586acedcbd9269", FrameHash.Of(screen.Framebuffer));
+        Assert.Equal("9b0e89f5fc5c7705", FrameHash.Of(screen.Framebuffer));
     }
 
     /// <summary>
@@ -213,7 +230,7 @@ public class SpriteEditorScreenGoldenTests : IDisposable
         // The notice is unchanged — sprite 000 is still the map's empty tile, drawn on or not.
         Assert.Equal((byte)8, console.Pget(2, 79));
 
-        Assert.Equal("a440fd38a44e731a", FrameHash.Of(screen.Framebuffer));
+        Assert.Equal("961f347605d04ad2", FrameHash.Of(screen.Framebuffer));
     }
 
     /// <summary>
@@ -259,7 +276,7 @@ public class SpriteEditorScreenGoldenTests : IDisposable
         // on screen, which is the whole reason the prompt lives on one reserved line.
         Assert.Equal((byte)8, console.Pget(21, 12));
 
-        Assert.Equal("a110ff917226f080", FrameHash.Of(screen.Framebuffer));
+        Assert.Equal("af32c85410a518c8", FrameHash.Of(screen.Framebuffer));
     }
 
     /// <summary>

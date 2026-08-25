@@ -611,4 +611,88 @@ public class SpriteFlagsPanelTests : IDisposable
         // One cell further along is off the row — the hit test is bounded by FlagBits.
         Assert.False(layout.TryFlag(layout.FlagPanel.Right + layout.FlagSize, layout.FlagPanel.Y, out _));
     }
+
+    // ==================================================================================
+    // 6. The byte behind the eight circles (§8 item 8).
+    // ==================================================================================
+
+    /// <summary>
+    /// TIC-80 stands a two-digit hex field under its eight flag circles (<c>sprite.c</c>,
+    /// <c>drawFlags</c> — REFERENCES-EDITORS §2.1 "под ними — hex-поле на 2 цифры"); we had the
+    /// circles and no number. <see cref="SpriteEditorRenderer.FlagsReadout"/> is that number, and
+    /// this pins the three claims it makes: it is the SELECTED sprite's byte, it is two hex
+    /// digits wide whatever the value, and it follows the toggles the moment they move.
+    ///
+    /// <para><b>Negative control, and it is the whole reason this test exists rather than an
+    /// eyeball:</b> the readout must NOT follow the shell's hex/dec switch. Ctrl+H
+    /// (<see cref="IndexFormat"/>) owns how a bank <em>index</em> is spelled — and the sprite
+    /// number beside it on the same status line does change under it, which is what proves the
+    /// switch is really on. A flag byte is a bit mask, not an index: four bits to the digit is
+    /// the only spelling that shows which lamps are up, so this field is hex in both settings.
+    /// If somebody "tidies" the readout into <c>indexes</c>, the pair of assertions below goes
+    /// red on the second one while the first still passes, which names the mistake exactly.</para>
+    ///
+    /// <para>Break recipe: return <c>editor.RegionFlagsAll</c> instead of <c>editor.Flags</c> and
+    /// the mixed-block assertion goes red; drop the <c>X2</c> and <c>FLG 0x5</c> comes back for a
+    /// value that must read <c>0x05</c>; hand the string through <c>IndexFormat</c> and the
+    /// negative control goes red.</para>
+    /// </summary>
+    [Fact]
+    public void TheFlagPanelShowsItsByteInHexAndTheHexDecSwitchDoesNotTouchIt()
+    {
+        Harness harness = OpenSpriteEditor(out _);
+
+        Assert.Equal("FLG 0x00", SpriteEditorRenderer.FlagsReadout(harness.Editor));
+
+        // Bits 0, 2, 5 and 7 up is 0xA5 — the value a reader can check digit by digit.
+        foreach (int bit in new[] { 0, 2, 5, 7 })
+        {
+            (int x, int y) = Centre(harness.Layout.FlagRect(bit));
+            harness.Click(x, y);
+        }
+        Assert.Equal((byte)0xA5, harness.Editor.Flags);
+        Assert.Equal("FLG 0xA5", SpriteEditorRenderer.FlagsReadout(harness.Editor));
+
+        // Two digits always: a value under 16 keeps its leading zero, so the field cannot change
+        // width under the author's hand.
+        harness.Editor.SetFlags(0x05);
+        Assert.Equal("FLG 0x05", SpriteEditorRenderer.FlagsReadout(harness.Editor));
+
+        // THE NEGATIVE CONTROL. The shell's hex/dec switch is really thrown — the sprite number
+        // on the same status line proves it — and the flag byte is unmoved by it.
+        var decimalFormat = default(IndexFormat);
+        IndexFormat hexFormat = decimalFormat.Toggled();
+        Assert.NotEqual(
+            decimalFormat.Sprite(harness.Editor.SpriteIndex), hexFormat.Sprite(harness.Editor.SpriteIndex));
+        Assert.Equal("FLG 0x05", SpriteEditorRenderer.FlagsReadout(harness.Editor));
+
+        // ...and it names ONE sprite — the one on the canvas — not the fold over a bigger block.
+        // With bit 0 up on sprite 0 alone, a 2x2 region's "all" byte is 0x00 and this field is
+        // still the anchor sprite's 0x05.
+        harness.Editor.SetFlags(0x05);
+        harness.Editor.SelectRegionSize(2);
+        Assert.Equal((byte)0x00, harness.Editor.RegionFlagsAll);
+        Assert.Equal("FLG 0x05", SpriteEditorRenderer.FlagsReadout(harness.Editor));
+    }
+
+    /// <summary>
+    /// The line the readout shares still fits the console's status band. The band holds 39
+    /// characters; the widest this screen can print into its left field is a hex coordinate pair
+    /// plus the flag byte, and the widest right field is a sprite number.
+    ///
+    /// <para>Break recipe: spell the byte as <c>FLAGS 0b10100101</c> and this goes red before
+    /// anyone sees the two fields collide on the screen.</para>
+    /// </summary>
+    [Fact]
+    public void TheStatusBandStillHoldsBothFieldsWithTheFlagByteOnIt()
+    {
+        var layout = SpriteEditorLayout.Compute(ConsoleWidth, ConsoleHeight, regionCells: 1);
+        const string WidestCoordinatePair = "0x07,0x0C";
+        const string WidestFlags = "FLG 0xFF";
+        const string WidestSpriteNumber = "#255";
+        Assert.Equal(8, WidestFlags.Length);
+        Assert.True(
+            WidestCoordinatePair.Length + 2 + WidestFlags.Length + WidestSpriteNumber.Length
+                <= layout.Chrome.LineChars);
+    }
 }

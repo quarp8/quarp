@@ -153,6 +153,9 @@ public class CodeEditorScreenTests : IDisposable
 
         internal void Idle() => Frame(NoKeys, string.Empty, Off, Off, ButtonState.Released);
 
+        /// <summary>One frame with the pointer parked on a console pixel and nothing pressed — a hover, and only that.</summary>
+        internal void Move(int x, int y) => Frame(NoKeys, string.Empty, x, y, ButtonState.Released);
+
         /// <summary>A key pressed and released — a real key repeats only by being pressed again.</summary>
         internal void Tap(params Keys[] down)
         {
@@ -998,5 +1001,159 @@ public class CodeEditorScreenTests : IDisposable
         ConsoleChrome chrome = CodeEditorLayout.Compute(ConsoleWidth, ConsoleHeight).Chrome;
         Assert.True(
             CodeEditorRenderer.StandingNotice(session, view)!.Length <= chrome.LineChars);
+    }
+
+    // ==================================================================================
+    // 8. Every buttonless control of the code screen names its keys (§8 item 15).
+    // ==================================================================================
+
+    /// <summary>
+    /// <b>The sweep</b>, the code screen's twin of
+    /// <c>SfxEditorTests.EveryKeylessControlAnnouncesItsKeys</c>,
+    /// <c>MusicEditorScreenTests.EveryButtonlessControlNamesItsKeys</c> and
+    /// <c>MapEditorTransformsTests.EveryButtonlessControlNamesItsKeys</c>: every value of
+    /// <see cref="CodeRegion"/> has a rectangle on the screen that shows it, that rectangle's
+    /// centre hit-tests back to that same region, and the region has a printable label. Driven
+    /// off <c>Enum.GetValues</c>, so a region added without a rectangle or without a label turns
+    /// this red on arrival — that is what makes it a sweep and not two assertions.
+    ///
+    /// <para>The named keys below are the point of the whole item: on a 160x90 console the label
+    /// on the control IS the documentation, and these gestures are announced on no button of this
+    /// screen — the tool column has find, go-to, save, undo and redo and nothing else, so
+    /// Shift-selects, Ctrl+A, Tab, the wheel and F11 have no button to be written on.</para>
+    ///
+    /// <para><b>Negative control:</b> <see cref="CodeRegion.None"/> is not a control — it has no
+    /// rectangle and no label, and asking for one throws by name rather than answering with some
+    /// other region's text. A point off every rectangle answers None, which is what makes the
+    /// positive half above mean something.</para>
+    ///
+    /// <para>Break recipe: delete the <c>CodeRegion.ScrollBar</c> arm from
+    /// <c>CodeEditorLayout.RegionRect</c> — that region's rectangle comes back empty and the
+    /// sweep names it. Delete an arm from <c>EditorIcons.CodeRegionTooltip</c> and the label
+    /// assertion throws for that region by name. Drop "F11" out of the page's text and the key
+    /// assertion goes red on the one line that names it.</para>
+    /// </summary>
+    [Fact]
+    public void EveryButtonlessControlNamesItsKeys()
+    {
+        CodeEditorLayout layout = CodeEditorLayout.Compute(ConsoleWidth, ConsoleHeight);
+        foreach (CodeRegion region in Enum.GetValues<CodeRegion>())
+        {
+            if (region == CodeRegion.None)
+            {
+                // None is not a control: it has no rectangle and, like its three siblings, no label.
+                Assert.Equal(Rectangle.Empty, layout.RegionRect(region));
+                Assert.Throws<ArgumentOutOfRangeException>(() => EditorIcons.CodeRegionTooltip(region));
+                continue;
+            }
+            Rectangle rect = layout.RegionRect(region);
+            Assert.NotEqual(Rectangle.Empty, rect);
+            Assert.Equal(region, layout.RegionAt(rect.Center.X, rect.Center.Y));
+            string label = EditorIcons.CodeRegionTooltip(region);
+            Assert.False(string.IsNullOrWhiteSpace(label));
+            // ASCII only: the system font has no other alphabet.
+            Assert.All(label, c => Assert.InRange(c, ' ', '~'));
+        }
+
+        Assert.Equal(CodeRegion.None, layout.RegionAt(Off, Off));
+
+        // The gestures that live on no button of this screen, each named on the control it acts
+        // on. This list IS the answer to "where is that documented".
+        Assert.Contains("SHIFT+MOVE", EditorIcons.CodeTextTooltip, StringComparison.Ordinal);
+        Assert.Contains("CTRL+A", EditorIcons.CodeTextTooltip, StringComparison.Ordinal);
+        Assert.Contains("TAB", EditorIcons.CodeTextTooltip, StringComparison.Ordinal);
+        Assert.Contains("WHEEL", EditorIcons.CodeTextTooltip, StringComparison.Ordinal);
+        Assert.Contains("F11", EditorIcons.CodeTextTooltip, StringComparison.Ordinal);
+        Assert.Contains("PGUP/PGDN", EditorIcons.CodeScrollBarTooltip, StringComparison.Ordinal);
+        Assert.Contains("DRAG", EditorIcons.CodeScrollBarTooltip, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The router builds those targets — the half a table of texts cannot prove. The pointer is
+    /// parked on each control through the production <see cref="CodeEditorInput.Update"/> and the
+    /// tracker is asked what it saw, so "the scrollbar is mute" would show up here even with
+    /// every label written.
+    ///
+    /// <para><b>Negative control:</b> a pointer on a BUTTON still produces a button target and
+    /// not a region, which is what keeps the two kinds from colliding — and a pointer off every
+    /// rectangle produces no target at all.</para>
+    ///
+    /// <para>Break recipe: put the <c>RegionAt</c> arm before <c>TryButton</c> in
+    /// <c>CodeEditorInput.Pointer</c>'s hover call and the button assertion goes red; delete the
+    /// arm entirely and both region assertions go red at once.</para>
+    /// </summary>
+    [Fact]
+    public void ThePointerOnEachButtonlessControlProducesItsHoverTarget()
+    {
+        Harness harness = OpenCodeEditor(out _);
+        CodeEditorLayout layout = harness.Layout;
+
+        Rectangle text = layout.Text;
+        harness.Move(text.Center.X, text.Center.Y);
+        AssertRegion(harness, CodeRegion.Text);
+
+        Rectangle bar = layout.ScrollBar;
+        harness.Move(bar.Center.X, bar.Center.Y);
+        AssertRegion(harness, CodeRegion.ScrollBar);
+
+        // Negative controls: a button is still a button, and nothing is still nothing.
+        Rectangle save = layout.ButtonRect(EditorButton.Save);
+        harness.Move(save.Center.X, save.Center.Y);
+        Assert.NotNull(harness.Hover.Target);
+        Assert.Equal(EditorButton.Save, harness.Hover.Target!.Value.Button!.Value);
+        Assert.Equal(CodeRegion.None, harness.Hover.Target!.Value.Code);
+
+        harness.Move(Off, Off);
+        Assert.Null(harness.Hover.Target);
+    }
+
+    /// <summary>What the tracker saw this frame: this region and no button — the two halves of "the label is the control's".</summary>
+    private static void AssertRegion(Harness harness, CodeRegion expected)
+    {
+        Assert.NotNull(harness.Hover.Target);
+        Assert.Equal(expected, harness.Hover.Target!.Value.Code);
+        Assert.Null(harness.Hover.Target!.Value.Button);
+    }
+
+    /// <summary>
+    /// The crash lock of 2026-08-25, applied to this screen: a hover target measured on another
+    /// screen — no button, no code region — means "no label", never an exception. A frame is
+    /// input-then-draw and a tab switch lands between the two halves, so this shape reaches
+    /// <c>Draw</c> for real (see <see cref="IconHoverTracker.Clear"/>).
+    ///
+    /// <para><b>Negative control:</b> a target this screen DOES own still gets its label, both
+    /// kinds, so the nulls above are the None arm speaking and not a method that answers null
+    /// always. And the mirror: this screen's own region seen by the four screens that already
+    /// carry the rule is null there too.</para>
+    ///
+    /// <para>Break recipe: change <c>CodeEditorRenderer.TooltipText</c>'s last line to
+    /// <c>EditorIcons.CodeRegionTooltip(target.Code)</c> with no None arm — the first assertion
+    /// goes red with the very exception that killed the console.</para>
+    /// </summary>
+    [Fact]
+    public void AHoverTargetFromAnotherScreenAsksTheCodeScreenForNoLabelInsteadOfKillingTheFrame()
+    {
+        HoverTarget foreign = HoverTarget.OfSfxRegion(SfxRegion.Octave);
+        Assert.Null(foreign.Button);
+        Assert.Equal(CodeRegion.None, foreign.Code);
+        Assert.Null(CodeEditorRenderer.TooltipText(foreign));
+
+        Assert.Null(CodeEditorRenderer.TooltipText(HoverTarget.OfMapRegion(MapRegion.Canvas)));
+        Assert.Null(CodeEditorRenderer.TooltipText(HoverTarget.OfMusicRegion(MusicRegion.Song)));
+        Assert.Null(CodeEditorRenderer.TooltipText(HoverTarget.OfSlider()));
+
+        // ...and the code screen's own targets are labelled, both kinds.
+        Assert.Equal(
+            EditorIcons.CodeTextTooltip,
+            CodeEditorRenderer.TooltipText(HoverTarget.OfCodeRegion(CodeRegion.Text)));
+        Assert.Equal(
+            EditorIcons.CodeTooltip(EditorButton.Save),
+            CodeEditorRenderer.TooltipText(HoverTarget.OfButton(EditorButton.Save)));
+
+        // And the mirror: the code screen's target seen by the four screens that carry the rule.
+        HoverTarget codeTarget = HoverTarget.OfCodeRegion(CodeRegion.Text);
+        Assert.Null(MapEditorRenderer.TooltipText(codeTarget));
+        Assert.Null(SfxEditorRenderer.TooltipText(codeTarget));
+        Assert.Null(MusicEditorRenderer.TooltipText(codeTarget));
     }
 }

@@ -394,6 +394,49 @@ public readonly struct CodeEditorLayout
         return true;
     }
 
+    /// <summary>
+    /// Console point to which <b>buttonless</b> control of this screen is under it, or
+    /// <see cref="CodeRegion.None"/> — the code screen's twin of
+    /// <see cref="SfxEditorLayout.RegionAt"/>, <see cref="MusicEditorLayout.RegionAt"/> and
+    /// <see cref="MapEditorLayout.RegionAt"/>, and it exists for the same reason
+    /// (REFERENCES-EDITORS §8 item 15): the scrollbar and the page of text itself have no button
+    /// to hang a hotkey on, and between them they carry every key this editor owns that no button
+    /// of the tool column names.
+    ///
+    /// <para><b>The order is the press chain's order</b>, control for control
+    /// (<see cref="CodeEditorInput"/> tests the bar, then the text cell), so the label under the
+    /// pointer and the click under the pointer can never name two different things. Buttons are
+    /// not here at all: the router tests <see cref="TryButton"/> first and hands
+    /// <see cref="HoverTarget.OfButton"/> instead.</para>
+    ///
+    /// <para>In fullscreen the bar is <see cref="Rectangle.Empty"/> (see <see cref="Full"/>), so
+    /// it answers None with no extra branch and the page — which is then the whole console —
+    /// answers for every point on the surface. That costs nothing: the mode draws no tooltip
+    /// field to print the label in.</para>
+    /// </summary>
+    public CodeRegion RegionAt(int x, int y)
+    {
+        if (ScrollBar.Contains(x, y))
+        {
+            return CodeRegion.ScrollBar;
+        }
+        return Text.Contains(x, y) ? CodeRegion.Text : CodeRegion.None;
+    }
+
+    /// <summary>
+    /// The rectangle a region's label names — the same box <see cref="RegionAt"/> answered from,
+    /// and <see cref="Rectangle.Empty"/> for a control this layout is not showing (the bar, in
+    /// fullscreen). Empty rather than "the rectangle it would have", by the rule
+    /// <see cref="MapEditorLayout.RegionRect"/> already states: a control that is not on screen
+    /// has no place on it.
+    /// </summary>
+    public Rectangle RegionRect(CodeRegion region) => region switch
+    {
+        CodeRegion.Text => Text,
+        CodeRegion.ScrollBar => ScrollBar,
+        _ => Rectangle.Empty,
+    };
+
     private static int FloorDiv(int value, int divisor) =>
         value >= 0 ? value / divisor : -((-value + divisor - 1) / divisor);
 }

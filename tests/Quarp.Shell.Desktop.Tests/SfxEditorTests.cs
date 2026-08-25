@@ -678,6 +678,59 @@ public class SfxEditorTests : IDisposable
         Assert.Equal(5, harness.Session.SlotLoopEnd(0));     // cursor 4, end after it
     }
 
+    /// <summary>
+    /// <b>ADR-032 in one gesture: the loop is a pair start/end, never start+size.</b> The two
+    /// references disagree here — TIC-80 (<c>sfx.c</c>) spends its <c>LOOP:</c> on
+    /// <c>set loop start</c> and <c>set loop <b>size</b></c>, PICO-8's manual says
+    /// "Loop start and end", LIKO-12 has no loop at all (REFERENCES-EDITORS §5.1, §5.3, §5.2) —
+    /// so this is a decision and the decision needs a witness. The witness is what moving the
+    /// START does to the END: with a pair, the end stays where it was put and the loop gets
+    /// shorter; with start+size, the end would slide along to keep the length. It is also the
+    /// exact cost ADR-032 accepts, written down as an assertion rather than as a memory.
+    ///
+    /// <para><b>Negative control:</b> the end marker <em>can</em> move — the right click that
+    /// owns it moves it — so the assertion that it did not move under a LEFT click means the
+    /// pair is independent, and not that the end is simply frozen. And the two numbers the screen
+    /// edits are the two numbers <c>sfx.bin</c> stores (AUDIO-FORMAT §2, half-open
+    /// <c>loopEnd</c>), which is the other half of the ADR: no translation layer, no third
+    /// spelling of one fact.</para>
+    ///
+    /// <para>Break recipe: change <c>SfxEditorView.ToggleLoopStart</c>'s <c>wanted</c> to
+    /// <c>step + (end - start)</c> — the start+size reading — and the third assertion goes red
+    /// with the end at 8 instead of 6.</para>
+    /// </summary>
+    [Fact]
+    public void MovingTheLoopStartLeavesTheEndWhereItWasBecauseTheLoopIsAPairAndNotASize()
+    {
+        Harness harness = OpenSoundEditor(out _);
+        SfxEditorLayout layout = harness.Layout;
+        for (int i = 0; i < 8; i++)
+        {
+            harness.Tap(Keys.Z);
+        }
+
+        harness.ClickRect(layout.LoopCellRect(2));
+        harness.RightClick(layout.LoopCellRect(5).Center.X, layout.LoopCellRect(5).Center.Y);
+        Assert.Equal(2, harness.Session.SlotLoopStart(0));
+        Assert.Equal(6, harness.Session.SlotLoopEnd(0));     // steps 2,3,4,5 repeat — four of them
+
+        // Move the START two steps right. A pair keeps the end at 6 and the loop becomes two
+        // steps long; a size would have carried the end to 8 to keep the four.
+        harness.ClickRect(layout.LoopCellRect(4));
+        Assert.Equal(4, harness.Session.SlotLoopStart(0));
+        Assert.Equal(6, harness.Session.SlotLoopEnd(0));
+
+        // The negative control: the end is not frozen — its own gesture still moves it.
+        harness.RightClick(layout.LoopCellRect(6).Center.X, layout.LoopCellRect(6).Center.Y);
+        Assert.Equal(4, harness.Session.SlotLoopStart(0));
+        Assert.Equal(7, harness.Session.SlotLoopEnd(0));
+
+        // And no field on this screen spells a size: the loop's label names the two markers.
+        Assert.Contains("START", EditorIcons.SfxLoopTooltip, StringComparison.Ordinal);
+        Assert.Contains("END", EditorIcons.SfxLoopTooltip, StringComparison.Ordinal);
+        Assert.DoesNotContain("SIZE", EditorIcons.SfxLoopTooltip, StringComparison.Ordinal);
+    }
+
     // ==================================================================================
     // 5. Undo: one step per action.
     // ==================================================================================

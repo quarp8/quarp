@@ -221,6 +221,8 @@ public sealed class MapEditorRenderer : IDisposable
                 Warn);
         }
 
+        DrawFloatingPaste(batch, layout, view);
+
         // The cursor — where the keyboard pencil is and what the status bar reads. A frame
         // around the cell, not over it: the tile being placed must stay visible under it.
         _chrome.DrawFrame(
@@ -228,6 +230,69 @@ public sealed class MapEditorRenderer : IDisposable
             layout.MapCellRect(view.CursorX, view.CursorY, view.CameraX, view.CameraY),
             Math.Max(1, layout.Ui / 2),
             Bright);
+    }
+
+    /// <summary>
+    /// The floating paste (wave 3e; TIC-80 <c>drawPasteData</c>): the copied block drawn over
+    /// the map at the cursor, so the author sees where it will land <em>before</em> the click
+    /// that lands it. Nothing here touches the map — the block is the view's clipboard and the
+    /// position is the view's cursor, and both stay exactly as they were until
+    /// <see cref="MapEditorPaint.PasteAt"/> writes.
+    ///
+    /// <para>Cells outside the viewport are skipped rather than drawn: the canvas rectangle is
+    /// the screen's own border, and a ghost tile painted past it would sit on the chrome. The
+    /// paste itself is clipped at the map's edge by the session, which is why a block hanging
+    /// off the corner shows only the part that will actually be written.</para>
+    /// </summary>
+    private void DrawFloatingPaste(SpriteBatch batch, in MapEditorLayout layout, MapEditorView view)
+    {
+        if (!view.PasteFloating || !view.Clipboard.HasBlock)
+        {
+            return;
+        }
+        int size = VirtualConsole.SpriteSize;
+        int width = view.Clipboard.Width;
+        int height = view.Clipboard.Height;
+        ReadOnlySpan<byte> tiles = view.Clipboard.Tiles;
+        for (int row = 0; row < height; row++)
+        {
+            int cellY = view.CursorY + row;
+            if (cellY < view.CameraY || cellY >= view.CameraY + layout.VisibleRows
+                || cellY >= MapEditorLayout.MapRows)
+            {
+                continue;
+            }
+            for (int column = 0; column < width; column++)
+            {
+                int cellX = view.CursorX + column;
+                if (cellX < view.CameraX || cellX >= view.CameraX + layout.VisibleColumns
+                    || cellX >= MapEditorLayout.MapColumns)
+                {
+                    continue;
+                }
+                byte tile = tiles[row * width + column];
+                Rectangle destination = layout.MapCellRect(cellX, cellY, view.CameraX, view.CameraY);
+                if (tile == 0)
+                {
+                    // Tile 0 is emptiness, and pasting it erases — so the ghost shows a plate
+                    // rather than nothing, or an author would read "this cell is not part of
+                    // the block" where the truth is "this cell will be cleared".
+                    batch.Draw(_chrome.White, destination, Dim);
+                    continue;
+                }
+                var source = new Rectangle(
+                    tile % VirtualConsole.SheetColumns * size,
+                    tile / VirtualConsole.SheetColumns * size,
+                    size,
+                    size);
+                batch.Draw(_sheetTexture, destination, source, Color.White);
+            }
+        }
+        _chrome.DrawFrame(
+            batch,
+            layout.MapAreaRect(view.CursorX, view.CursorY, width, height, view.CameraX, view.CameraY),
+            Math.Max(1, layout.Ui / 2),
+            Warn);
     }
 
     /// <summary>
@@ -325,8 +390,15 @@ public sealed class MapEditorRenderer : IDisposable
         // the prompt when this tile is the selected one.
         _chrome.DrawFrame(batch, layout.TileCellRect(0), Math.Max(1, layout.Ui / 2), Dim);
 
+        // The chosen block, framed (wave 3e). One rectangle for both cases: at 1x1 —
+        // every path that names a single tile — this is exactly the cell frame it used to be,
+        // and a drag across the picker grows it to the N x M the author marked (TIC-80's
+        // <c>map->sheet.rect</c>). The size comes from the session, the one owner of what the
+        // pencil puts down, so the frame cannot promise a block the pencil will not stamp.
         _chrome.DrawFrame(
-            batch, layout.TileCellRect(map.SelectedSprite), Math.Max(1, layout.Ui / 2),
+            batch,
+            layout.TileBlockRect(map.SelectedSprite, map.BlockWidth, map.BlockHeight),
+            Math.Max(1, layout.Ui / 2),
             Bright);
     }
 

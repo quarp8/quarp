@@ -47,6 +47,15 @@ public static class MapEditorInput
     ///   so the one modifier all three references agree on is the one we keep.</description></item>
     /// </list></para>
     ///
+    /// <para><b>Blocks and the clipboard (wave 3e).</b> A drag across the tile picker selects a
+    /// rectangle of tiles instead of one (TIC-80 <c>map->sheet.rect</c>, "любой размер N×M"),
+    /// Ctrl+Shift+arrows are its keyboard twin, and the pencil then stamps the whole block —
+    /// only on the lattice of its own size, which is <see cref="MapEditorPaint"/>'s rule and is
+    /// explained there. Ctrl+C / Ctrl+X / Ctrl+V copy, cut and paste the marked rectangle of the
+    /// map; a pasted block floats under the cursor until the next paint press puts it down (the
+    /// click under the mouse, Z under the keyboard — one verb, <see cref="MapEditorPaint.PasteAt"/>,
+    /// reached by both), and Esc drops it without writing anything.</para>
+    ///
     /// <para>While the exit prompt is up it owns the input — Z saves and leaves, X discards,
     /// Esc stays, and the same three verbs are clickable on the prompt line — and everything
     /// else, the pencil included, is deliberately deaf.</para>
@@ -95,6 +104,14 @@ public static class MapEditorInput
             return;
         }
 
+        if (commands.EditorTabPrev || commands.EditorTabNext)
+        {
+            // Alt+Left/Right walk the whole strip, code tab included (REFERENCES-EDITORS §8
+            // item 16). Home still flips between the two graphics faces — the key the author's
+            // hand already knows — and this is the road to the third one.
+            shell.Modes.CycleEditorTab(commands.EditorTabNext ? 1 : -1);
+            return;
+        }
         if (commands.ToStart)
         {
             shell.Modes.ToggleEditorTab();       // Home: back to the sprites of the same cart
@@ -102,6 +119,14 @@ public static class MapEditorInput
         }
         if (commands.Quit)
         {
+            if (view.PasteFloating)
+            {
+                // Esc's first meaning while a block floats: drop it (TIC-80's paste is armed
+                // until it lands or is dismissed). Nothing was written while it floated, so
+                // this leaves no undo step and no dirt — the property that makes it safe.
+                view.CancelPaste();
+                return;
+            }
             if (view.HasSelection)
             {
                 // The sprite screen's rung, one map over: a live mark eats the next Esc. Being
@@ -125,6 +150,27 @@ public static class MapEditorInput
         if (commands.EditorSave)
         {
             map.Save();
+        }
+        // The clipboard chords (wave 3e). Copy and cut read the marked rectangle and do nothing
+        // without one; paste arms the float and does nothing with an empty clipboard. All three
+        // land in MapEditorPaint, the one owner both channels reach.
+        if (commands.EditorCopy)
+        {
+            MapEditorPaint.CopySelection(map, view);
+        }
+        if (commands.EditorCut)
+        {
+            MapEditorPaint.CutSelection(map, view);
+        }
+        if (commands.EditorPaste)
+        {
+            view.BeginPaste();
+        }
+        if (commands.EditorBlockDx != 0 || commands.EditorBlockDy != 0)
+        {
+            // Ctrl+Shift+arrows size the picker's block — the keyboard twin of dragging a
+            // rectangle across the tile picker.
+            view.StepTileBlock(map, commands.EditorBlockDx, commands.EditorBlockDy);
         }
         if (commands.EditorGridToggle)
         {
@@ -187,8 +233,13 @@ public static class MapEditorInput
         {
             MapEditorTileStep.Apply(map, commands.EditorSheetDx, commands.EditorSheetDy);
         }
-        int dx = steppedPicker ? 0 : (commands.MenuRight ? 1 : 0) - (commands.MenuLeft ? 1 : 0);
-        int dy = steppedPicker ? 0 : (commands.MenuDown ? 1 : 0) - (commands.MenuUp ? 1 : 0);
+        // An arrow that sized the block is spent on the block, exactly as one that stepped the
+        // picker is spent on the picker: the bare-arrow fields fire on any modifier, so the
+        // frame that means "grow the block" must not also walk the map cursor.
+        bool aimedAtPicker = steppedPicker
+            || commands.EditorBlockDx != 0 || commands.EditorBlockDy != 0;
+        int dx = aimedAtPicker ? 0 : (commands.MenuRight ? 1 : 0) - (commands.MenuLeft ? 1 : 0);
+        int dy = aimedAtPicker ? 0 : (commands.MenuDown ? 1 : 0) - (commands.MenuUp ? 1 : 0);
         if (dx != 0 || dy != 0)
         {
             view.MoveCursor(layout, dx, dy);
@@ -202,7 +253,7 @@ public static class MapEditorInput
                 }
                 else
                 {
-                    MapEditorPaint.Continue(map, view.CursorX, view.CursorY);
+                    MapEditorPaint.ContinueBlock(map, view.CursorX, view.CursorY);
                 }
             }
         }
@@ -254,9 +305,12 @@ public static class MapEditorInput
                     return;                 // the exit or a tab may have left this mode
                 }
             }
-            else if (layout.TryTileCell(mouse.X, mouse.Y, out int sprite))
+            else if (layout.TryTileStripCell(mouse.X, mouse.Y, out _, out _))
             {
-                map.SelectSprite(sprite);
+                // A press on the picker opens a block drag (wave 3e). A press that never moves
+                // ends as a 1x1 block, which is the single-tile click this replaced — the drag
+                // is a generalization of it, not a second way to choose a tile.
+                view.BeginTileBlock(map, layout, mouse.X, mouse.Y);
             }
             else if (layout.TryMinimapCell(mouse.X, mouse.Y, out int jumpX, out int jumpY))
             {
@@ -266,6 +320,13 @@ public static class MapEditorInput
             {
                 MousePressOnCanvas(map, view, layout, mouse, panning, pressX, pressY);
             }
+        }
+        else if (mouse.LeftDown && view.TileBlockGestureActive)
+        {
+            // Checked before the canvas gestures: a picker drag owns the button until it is
+            // released, even when the pointer wanders over the map (the strip cell is clamped,
+            // so the block keeps sizing along the picker's edge).
+            view.UpdateTileBlock(map, layout, mouse.X, mouse.Y);
         }
         else if (mouse.LeftDown && view.PanActive)
         {
@@ -283,7 +344,7 @@ public static class MapEditorInput
             // painting along it instead of tearing, which is what upholds PaintTile's contract.
             layout.ClampMapCell(mouse.X, mouse.Y, view.CameraX, view.CameraY, out int dragX, out int dragY);
             view.SetCursor(layout, dragX, dragY);
-            MapEditorPaint.Continue(map, dragX, dragY);
+            MapEditorPaint.ContinueBlock(map, dragX, dragY);
         }
         else if (mouse.LeftDown && layout.TryMinimapCell(mouse.X, mouse.Y, out int dragToX, out int dragToY))
         {
@@ -294,6 +355,7 @@ public static class MapEditorInput
             MapEditorPaint.End(map);
             view.EndPan();
             view.EndSelection();
+            view.EndTileBlock();
         }
 
         // The right button erases (REFERENCES-EDITORS §7.3 — LIKO-12's tile.lua forces the
@@ -337,6 +399,13 @@ public static class MapEditorInput
     /// </summary>
     private static void KeyboardAct(MapEditorSession map, MapEditorView view)
     {
+        // A floating block outranks every tool, in both channels: the paste key and the paste
+        // click mean "put it here" whatever is in hand, which is what makes Ctrl+V's promise
+        // ("the next press places it") true under the hand tool and the bucket alike.
+        if (MapEditorPaint.PasteAt(map, view, view.CursorX, view.CursorY))
+        {
+            return;
+        }
         switch (view.Tool)
         {
             case MapEditorTool.Fill:
@@ -348,7 +417,7 @@ public static class MapEditorInput
             case MapEditorTool.Hand:
                 break;      // travel is the arrows' and [ ]'s job; the key has nothing to add
             default:
-                MapEditorPaint.Begin(map, view.CursorX, view.CursorY);
+                MapEditorPaint.BeginBlock(map, view.CursorX, view.CursorY);
                 break;
         }
     }
@@ -363,6 +432,10 @@ public static class MapEditorInput
         MapEditorSession map, MapEditorView view, in MapEditorLayout layout, in EditorMouse mouse,
         bool panning, int cellX, int cellY)
     {
+        if (MapEditorPaint.PasteAt(map, view, cellX, cellY))
+        {
+            return;         // the floating block lands on this click — KeyboardAct's twin
+        }
         if (panning || view.Tool == MapEditorTool.Hand)
         {
             view.BeginPan(
@@ -379,7 +452,7 @@ public static class MapEditorInput
                 view.BeginSelection(cellX, cellY);
                 break;
             default:
-                MapEditorPaint.Begin(map, cellX, cellY);
+                MapEditorPaint.BeginBlock(map, cellX, cellY);
                 break;
         }
     }

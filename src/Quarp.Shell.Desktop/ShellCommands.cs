@@ -83,6 +83,30 @@ public readonly struct ShellCommands
     /// <summary>Editor: Ctrl+S — save the sheet (a no-op on a clean session, by the save contract).</summary>
     public bool EditorSave { get; init; }
 
+    /// <summary>
+    /// Map editor: Ctrl+C — copy the marked rectangle of the map (TIC-80's
+    /// <c>copySelectionToClipboard</c>, REFERENCES-EDITORS §3.1). A Ctrl chord like undo, redo
+    /// and save, read here by the same <c>ctrl &amp;&amp; Pressed(...)</c> shape, so the guard
+    /// that keeps a chord from doubling as its bare key is the one guard this file already has.
+    /// No bare C is bound anywhere in the shell; the chord is stated as a chord anyway, because
+    /// the day one is bound must not be the day this quietly starts firing on it.
+    /// </summary>
+    public bool EditorCopy { get; init; }
+
+    /// <summary>
+    /// Map editor: Ctrl+X — cut (copy + empty), one undo step. The bare X is the keyboard
+    /// eyedropper (<see cref="MenuEditor"/>), which is already <c>!ctrl</c>-guarded, so the two
+    /// meanings of the key cannot collide.
+    /// </summary>
+    public bool EditorCut { get; init; }
+
+    /// <summary>
+    /// Map editor: Ctrl+V — start a floating paste, placed by the next paint press. The bare V
+    /// is the sprite editor's vertical flip (<see cref="EditorFlipV"/>), already
+    /// <c>!ctrl</c>-guarded for exactly this reason.
+    /// </summary>
+    public bool EditorPaste { get; init; }
+
     /// <summary>Editor: B — pencil ↔ bucket. Bare key, so Ctrl-guarded like every editor letter (wave 2c).</summary>
     public bool EditorToolToggle { get; init; }
 
@@ -194,6 +218,109 @@ public readonly struct ShellCommands
 
     /// <summary>Editor: Shift+Up/Down — the same step across the strip's <see cref="SheetStrip.Rows"/> rows.</summary>
     public int EditorSheetDy { get; init; }
+
+    /// <summary>
+    /// Map editor: Ctrl+Shift+Left/Right — grow or shrink the picker's block by one strip
+    /// column, -1, 0 or +1 (wave 3e). The keyboard half of dragging a rectangle across the tile
+    /// picker; without it the wave's headline feature would be mouse-only, which the
+    /// input-parity law forbids. Ctrl is what separates it from <see cref="EditorSheetDx"/>,
+    /// which moves the tile itself — and <see cref="EditorSheetDx"/> gained its own
+    /// <c>!ctrl</c> guard in the same breath, by this file's standing rule that a chord must
+    /// not double as its bare key.
+    /// </summary>
+    public int EditorBlockDx { get; init; }
+
+    /// <summary>Map editor: Ctrl+Shift+Up/Down — the same step in strip rows.</summary>
+    public int EditorBlockDy { get; init; }
+    // ---- the tab strip's keyboard half ----
+
+    /// <summary>
+    /// Any editor screen: Alt+Left — one tab left along the strip. LIKO-12's and PICO-8's own
+    /// key for exactly this (REFERENCES-EDITORS §8 item 16), and the only one that can serve all
+    /// three screens: Home already means "start of the line" in the code editor, so the two-tab
+    /// <c>Home</c> toggle could not grow a third stop.
+    ///
+    /// <para>The bare arrow still fires on the same frame — this is a modifier, not a
+    /// replacement — and each router decides which of the two it obeys, exactly as the code
+    /// screen decides between Ctrl+Left and Left.</para>
+    /// </summary>
+    public bool EditorTabPrev { get; init; }
+
+    /// <summary>Any editor screen: Alt+Right — one tab right along the strip.</summary>
+    public bool EditorTabNext { get; init; }
+
+    // ---- the code editor's own keys ----
+    //
+    // Every field below is a key edge nothing in this shell read before, named for the one
+    // screen that reads it — the same way EditorGridToggle and EditorPanModifier were added for
+    // the map. Keys the code editor shares with its siblings are NOT duplicated here: Home is
+    // ToStart, PageUp/PageDown are EditorLayerUp/Down, Tab is EditorRegionCycle, Delete is
+    // EditorClear, the arrows are MenuUp..MenuRight and Ctrl+Z/Y/S are the editor's undo, redo
+    // and save. One field per physical key edge, with per-mode meanings in its own comment, is
+    // this struct's rule (see Slower/Faster for the oldest example of it).
+
+    /// <summary>
+    /// Code editor: Enter — break the line. Its own field rather than <see cref="MenuConfirm"/>,
+    /// which also fires on a bare Z: in a text editor Z is the letter z, and a key that both
+    /// types and breaks lines is the one bug this separation exists to make impossible.
+    /// Ctrl-guarded like every other editor key, so a future Ctrl+Enter cannot double as it.
+    /// </summary>
+    public bool CodeNewLine { get; init; }
+
+    /// <summary>
+    /// Code editor: Backspace, as an <b>edge</b>. <see cref="Rewinding"/> is the same physical
+    /// key read as a level, because the game's rewind is a hold; a hold here would delete a
+    /// line a frame, which is why the two readings are two fields and each mode reads one.
+    /// </summary>
+    public bool CodeBackspace { get; init; }
+
+    /// <summary>Code editor: End — to the end of the line. Ctrl+End is <see cref="CodeDocumentEnd"/> instead.</summary>
+    public bool CodeLineEnd { get; init; }
+
+    /// <summary>Code editor: Ctrl+Home — to the start of the file (TIC-80's own chord).</summary>
+    public bool CodeDocumentStart { get; init; }
+
+    /// <summary>Code editor: Ctrl+End — to the end of the file.</summary>
+    public bool CodeDocumentEnd { get; init; }
+
+    /// <summary>Code editor: Ctrl+Left — one word left (PICO-8: "CTRL-LEFT, RIGHT to jump by word").</summary>
+    public bool CodeWordLeft { get; init; }
+
+    /// <summary>Code editor: Ctrl+Right — one word right.</summary>
+    public bool CodeWordRight { get; init; }
+
+    /// <summary>
+    /// Code editor: Shift is held — the extend-the-selection modifier for every movement key,
+    /// which is what "Shift+любое движение — выделение" means in one bit. A level, not an edge:
+    /// it modifies whatever movement arrives on the same frame.
+    /// </summary>
+    public bool CodeExtend { get; init; }
+
+    /// <summary>Code editor: Ctrl+A — select the whole buffer.</summary>
+    public bool CodeSelectAll { get; init; }
+
+    /// <summary>Code editor: Ctrl+C — copy the selection into the editor's clipboard.</summary>
+    public bool CodeCopy { get; init; }
+
+    /// <summary>Code editor: Ctrl+X — cut it.</summary>
+    public bool CodeCut { get; init; }
+
+    /// <summary>Code editor: Ctrl+V — paste. Never fires <see cref="EditorFlipV"/>, which is Ctrl-guarded.</summary>
+    public bool CodePaste { get; init; }
+
+    /// <summary>Code editor: Ctrl+F — open the find line (all three references' key). Never fires <see cref="EditorFlipH"/>.</summary>
+    public bool CodeFind { get; init; }
+
+    /// <summary>Code editor: Ctrl+G — the next occurrence (PICO-8: "CTRL-G to repeat the last search again").</summary>
+    public bool CodeFindNext { get; init; }
+
+    /// <summary>
+    /// Code editor: Ctrl+L — jump to a line number (PICO-8: "CTRL-L to jump to a line number").
+    /// TIC-80 spends Ctrl+G on this and LIKO-12 spends Ctrl+I on incremental search; taking
+    /// PICO-8's pair keeps find-next and go-to-line on two keys that mean the same thing in the
+    /// only reference that has both.
+    /// </summary>
+    public bool CodeGoToLine { get; init; }
 }
 
 /// <summary>
@@ -210,6 +337,11 @@ public sealed class ShellCommandReader
     {
         bool ctrl = keyboard.IsKeyDown(Keys.LeftControl) || keyboard.IsKeyDown(Keys.RightControl);
         bool shift = keyboard.IsKeyDown(Keys.LeftShift) || keyboard.IsKeyDown(Keys.RightShift);
+        // Alt joins the modifier row for the tab strip (REFERENCES-EDITORS §8 item 16). It
+        // modifies the arrows and nothing else, so no existing field needs a guard: the routers
+        // that care check the chord before the bare key, the way the code screen already has to
+        // for Ctrl+Left.
+        bool alt = keyboard.IsKeyDown(Keys.LeftAlt) || keyboard.IsKeyDown(Keys.RightAlt);
         // The keyboard pencil's held state is computed against each frame's own Ctrl: pressing
         // Ctrl mid-hold turns "down" into "released" (the chord takes the key), and both edges
         // below fall out of comparing the two frames' truths rather than raw key states.
@@ -238,10 +370,19 @@ public sealed class ShellCommandReader
             MenuDown = Pressed(keyboard, Keys.Down),
             MenuLeft = Pressed(keyboard, Keys.Left),
             MenuRight = Pressed(keyboard, Keys.Right),
-            EditorSheetDx = shift
+            // Shift+arrows step the tile, Ctrl+Shift+arrows size the picker's block (wave 3e).
+            // The !ctrl here is the same rule the editor letters carry: a chord must not double
+            // as its bare key, and before this wave Ctrl+Shift+Right quietly stepped the tile.
+            EditorSheetDx = shift && !ctrl
                 ? (Pressed(keyboard, Keys.Right) ? 1 : 0) - (Pressed(keyboard, Keys.Left) ? 1 : 0)
                 : 0,
-            EditorSheetDy = shift
+            EditorSheetDy = shift && !ctrl
+                ? (Pressed(keyboard, Keys.Down) ? 1 : 0) - (Pressed(keyboard, Keys.Up) ? 1 : 0)
+                : 0,
+            EditorBlockDx = shift && ctrl
+                ? (Pressed(keyboard, Keys.Right) ? 1 : 0) - (Pressed(keyboard, Keys.Left) ? 1 : 0)
+                : 0,
+            EditorBlockDy = shift && ctrl
                 ? (Pressed(keyboard, Keys.Down) ? 1 : 0) - (Pressed(keyboard, Keys.Up) ? 1 : 0)
                 : 0,
             MenuConfirm = (!ctrl && Pressed(keyboard, Keys.Z)) || Pressed(keyboard, Keys.Enter),
@@ -249,6 +390,11 @@ public sealed class ShellCommandReader
             EditorUndo = ctrl && Pressed(keyboard, Keys.Z),
             EditorRedo = ctrl && Pressed(keyboard, Keys.Y),
             EditorSave = ctrl && Pressed(keyboard, Keys.S),
+            // The map's clipboard chords (wave 3e), read exactly like undo/redo/save above —
+            // the three keys TIC-80 uses for the same three verbs (REFERENCES-EDITORS §3.1).
+            EditorCopy = ctrl && Pressed(keyboard, Keys.C),
+            EditorCut = ctrl && Pressed(keyboard, Keys.X),
+            EditorPaste = ctrl && Pressed(keyboard, Keys.V),
             // The editor letters carry the !ctrl guard for the same reason MenuConfirm does:
             // a chord must not double as its bare key, today (Ctrl+S over a future S-binding)
             // or when a chord lands on these letters later.
@@ -277,6 +423,26 @@ public sealed class ShellCommandReader
             EditorColorNext = Pressed(keyboard, Keys.OemPeriod),
             EditorLayerUp = Pressed(keyboard, Keys.PageUp),
             EditorLayerDown = Pressed(keyboard, Keys.PageDown),
+            EditorTabPrev = alt && Pressed(keyboard, Keys.Left),
+            EditorTabNext = alt && Pressed(keyboard, Keys.Right),
+            // The code editor's block. Each of these is a key edge nothing else in the shell
+            // reads; the keys it shares with its siblings are read through the shared fields
+            // above (see the block comment in ShellCommands).
+            CodeNewLine = !ctrl && Pressed(keyboard, Keys.Enter),
+            CodeBackspace = Pressed(keyboard, Keys.Back),
+            CodeLineEnd = !ctrl && Pressed(keyboard, Keys.End),
+            CodeDocumentStart = ctrl && Pressed(keyboard, Keys.Home),
+            CodeDocumentEnd = ctrl && Pressed(keyboard, Keys.End),
+            CodeWordLeft = ctrl && Pressed(keyboard, Keys.Left),
+            CodeWordRight = ctrl && Pressed(keyboard, Keys.Right),
+            CodeExtend = shift,
+            CodeSelectAll = ctrl && Pressed(keyboard, Keys.A),
+            CodeCopy = ctrl && Pressed(keyboard, Keys.C),
+            CodeCut = ctrl && Pressed(keyboard, Keys.X),
+            CodePaste = ctrl && Pressed(keyboard, Keys.V),
+            CodeFind = ctrl && Pressed(keyboard, Keys.F),
+            CodeFindNext = ctrl && Pressed(keyboard, Keys.G),
+            CodeGoToLine = ctrl && Pressed(keyboard, Keys.L),
         };
         _previous = keyboard;
         return commands;

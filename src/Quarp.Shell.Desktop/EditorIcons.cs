@@ -76,6 +76,18 @@ public enum EditorButton
     /// canvas draws its own pixel grid unconditionally and has no such choice to offer.
     /// </summary>
     GridToggle,
+
+    /// <summary>
+    /// The code editor's first tool button: open the find line (TIC-80's <c>FIND [ctrl+f]</c>,
+    /// REFERENCES-EDITORS §4.1). Code-only — the other two screens search nothing.
+    /// </summary>
+    ToolFind,
+
+    /// <summary>
+    /// The code editor's second tool button: open the go-to-line field (TIC-80's <c>GOTO</c>
+    /// button; the key is Ctrl+L, PICO-8's). Code-only for the same reason.
+    /// </summary>
+    ToolGoTo,
 }
 
 /// <summary>
@@ -111,6 +123,8 @@ public enum EditorIcon
     Eraser,
     Hand,
     Grid,
+    Find,
+    GoTo,
 }
 
 /// <summary>
@@ -409,6 +423,28 @@ public static class EditorIcons
             0b10010010,
             0b00000000,
         },
+        new byte[] // Find: a magnifier — round lens over a handle running to the lower right
+        {
+            0b00111100,
+            0b01000010,
+            0b10000001,
+            0b10000001,
+            0b01000010,
+            0b00111100,
+            0b00001100,
+            0b00000110,
+        },
+        new byte[] // GoTo: an arrow aimed right, between two lines of text — "jump to line"
+        {
+            0b11111000,
+            0b00000100,
+            0b00000010,
+            0b11111111,
+            0b00000010,
+            0b00000100,
+            0b11111000,
+            0b00000000,
+        },
     };
 
     /// <summary>How many glyphs exist — the atlas sizes its strip from this.</summary>
@@ -419,14 +455,18 @@ public static class EditorIcons
         ((_masks[(int)icon][row] >> (IconPixels - 1 - col)) & 1) != 0;
 
     /// <summary>
-    /// The buttons that are drawn but deliberately dead: the four future-editor tabs (their
-    /// portions of ADR-026 have not landed — the whole toolbar woke by wave 2f). This list is
-    /// the <b>one owner</b> of "is it a stub": the layout paints from it, the click routing
-    /// refuses from it, and <see cref="PressToolDigit"/> consults it — so waking a button is
-    /// one edit here, never a drift between what looks dead and what is dead.
+    /// The buttons that are drawn but deliberately dead: the future-editor tabs whose portions
+    /// of ADR-026 have not landed. This list is the <b>one owner</b> of "is it a stub": the
+    /// layout paints from it, the click routing refuses from it, and
+    /// <see cref="PressToolDigit"/> consults it — so waking a button is one edit here, never a
+    /// drift between what looks dead and what is dead.
+    ///
+    /// <para><b>The CODE tab left this list</b> in the code-editor screen wave: its editor
+    /// landed, so the icon is live and <see cref="TabTarget"/> routes it. Sounds and music
+    /// remain honestly dead.</para>
     /// </summary>
     public static bool IsStub(EditorButton button) => button is
-        EditorButton.CodeTab or EditorButton.SoundTab or EditorButton.MusicTab;
+        EditorButton.SoundTab or EditorButton.MusicTab;
 
     /// <summary>
     /// The live editor tab a click asks the shell to open, or null for every button that is
@@ -441,7 +481,19 @@ public static class EditorIcons
     {
         EditorButton.SpritesTab => ShellMode.Editor,
         EditorButton.TilemapTab => ShellMode.MapEditor,
+        EditorButton.CodeTab => ShellMode.CodeEditor,
         _ => null,
+    };
+
+    /// <summary>
+    /// The live editor tabs in strip order, left to right — the one list
+    /// <see cref="ShellModeMachine.CycleEditorTab"/> walks for Alt+Left/Right. It is derived
+    /// from nothing: a tab joins here the same day it stops being a stub, and the parity sweeps
+    /// notice if it does not.
+    /// </summary>
+    public static IReadOnlyList<ShellMode> LiveEditorTabs { get; } = new[]
+    {
+        ShellMode.CodeEditor, ShellMode.Editor, ShellMode.MapEditor,
     };
 
     /// <summary>
@@ -451,7 +503,8 @@ public static class EditorIcons
     /// <see cref="MapEditorLayout"/> everything <see cref="BelongsToMapEditor"/> does.
     /// </summary>
     public static bool BelongsToSpriteEditor(EditorButton button) => button is not (
-        EditorButton.ToolEraser or EditorButton.ToolHand or EditorButton.GridToggle);
+        EditorButton.ToolEraser or EditorButton.ToolHand or EditorButton.GridToggle
+        or EditorButton.ToolFind or EditorButton.ToolGoTo);
 
     /// <summary>
     /// The map editor's own button list: the shared chrome (tabs, exit, save, undo, redo), the
@@ -472,6 +525,19 @@ public static class EditorIcons
         or EditorButton.TilemapTab or EditorButton.SoundTab or EditorButton.MusicTab
         or EditorButton.ToolPencil or EditorButton.ToolHand or EditorButton.ToolSelect
         or EditorButton.ToolFill or EditorButton.ToolEraser or EditorButton.GridToggle
+        or EditorButton.Save or EditorButton.Undo or EditorButton.Redo;
+
+    /// <summary>
+    /// The code editor's own button list: the shared chrome (six tabs, exit, save, undo, redo)
+    /// and the two tools this screen has model verbs for — find and go-to-line. Everything the
+    /// code screen has nothing to do with (every drawing tool, the grid, the eraser, the layer
+    /// tabs, the size toggle, clear) stays off it, because a placed button with nothing behind
+    /// it is the defect class the button contract test closed in wave 2g.
+    /// </summary>
+    public static bool BelongsToCodeEditor(EditorButton button) => button is
+        EditorButton.ExitTab or EditorButton.CodeTab or EditorButton.SpritesTab
+        or EditorButton.TilemapTab or EditorButton.SoundTab or EditorButton.MusicTab
+        or EditorButton.ToolFind or EditorButton.ToolGoTo
         or EditorButton.Save or EditorButton.Undo or EditorButton.Redo;
 
     /// <summary>
@@ -640,6 +706,8 @@ public static class EditorIcons
         EditorButton.ToolEraser => EditorIcon.Eraser,
         EditorButton.ToolHand => EditorIcon.Hand,
         EditorButton.GridToggle => EditorIcon.Grid,
+        EditorButton.ToolFind => EditorIcon.Find,
+        EditorButton.ToolGoTo => EditorIcon.GoTo,
         // The text-faced buttons (size toggle, layer tabs) have no glyph on purpose — the
         // renderer branches on ButtonText before ever asking here, so reaching this is a bug.
         _ => throw new ArgumentOutOfRangeException(nameof(button), button, "a text-faced button has no icon (ButtonText owns its face)."),
@@ -653,9 +721,9 @@ public static class EditorIcons
     public static string Tooltip(EditorButton button) => button switch
     {
         EditorButton.ExitTab => "EXIT  ESC",
-        EditorButton.CodeTab => "CODE - IN A LATER PORTION",
-        EditorButton.SpritesTab => "SPRITES  HOME SWITCHES",
-        EditorButton.TilemapTab => "MAPS  HOME SWITCHES",
+        EditorButton.CodeTab => "CODE  ALT+LEFT/RIGHT WALK THE TABS",
+        EditorButton.SpritesTab => "SPRITES  HOME SWITCHES   ALT+LEFT/RIGHT WALK THE TABS",
+        EditorButton.TilemapTab => "MAPS  HOME SWITCHES   ALT+LEFT/RIGHT WALK THE TABS",
         EditorButton.SoundTab => "SOUNDS - IN A LATER PORTION",
         EditorButton.MusicTab => "MUSIC - IN A LATER PORTION",
         EditorButton.ToolSelect => "SELECT  1 CYCLES   DRAG MARKS, GRAB INSIDE MOVES, ESC DROPS",
@@ -672,6 +740,10 @@ public static class EditorIcons
         EditorButton.ToolEraser => "ERASE  DEL   SELECTS TILE 000",
         EditorButton.ToolHand => "DRAG MAP  2   SPACE+DRAG PANS ANYWHERE   ARROWS AND [ ] PGUP/PGDN TRAVEL",
         EditorButton.GridToggle => "SHOW/HIDE GRID  `   OFF AT THE SMALLEST MAP SCALE",
+        // The two code-only buttons live in THIS table for the same reason the map's three do:
+        // their meaning does not differ between screens, only one screen places them.
+        EditorButton.ToolFind => "FIND  CTRL+F   ENTER OR CTRL+G WALKS, ESC CLOSES",
+        EditorButton.ToolGoTo => "GO TO LINE  CTRL+L   TYPE A NUMBER, ENTER JUMPS",
         EditorButton.Save => "SAVE  CTRL+S",
         EditorButton.Undo => "UNDO  CTRL+Z",
         EditorButton.SizeToggle => "SPRITE SIZE  TAB CYCLES, CLICK LISTS 8/16/32",
@@ -715,13 +787,32 @@ public static class EditorIcons
     public static string MapTooltip(EditorButton button) => button switch
     {
         EditorButton.ToolPencil =>
-            "PENCIL  1   ARROWS MOVE, Z DRAWS, X PICKS   SHIFT+ARROWS PICK A TILE",
+            "PENCIL  1   ARROWS MOVE, Z DRAWS, X PICKS   SHIFT+ARROWS PICK A TILE"
+            + "   DRAG THE PICKER OR CTRL+SHIFT+ARROWS FOR A BLOCK",
         EditorButton.ToolSelect =>
-            "SELECT  3   DRAG MARKS A RECTANGLE, DEL EMPTIES IT, ESC DROPS IT",
+            "SELECT  3   DRAG MARKS A RECTANGLE, DEL EMPTIES IT, ESC DROPS IT"
+            + "   CTRL+C/X/V COPY, CUT, PASTE",
         EditorButton.ToolFill =>
             "FILL  4   Z FILLS THE AREA AT THE CURSOR   RCLICK FILLS WITH TILE 000",
         EditorButton.TilemapTab =>
             "MAPS - ACTIVE   [ ] PAGE ACROSS, PGUP/PGDN PAGE DOWN, HOME SWITCHES TAB",
+        _ => Tooltip(button),
+    };
+
+    /// <summary>
+    /// The <b>code</b> editor's tooltip for a button whose meaning differs on that screen,
+    /// falling through to <see cref="Tooltip(EditorButton)"/> for everything shared — the exact
+    /// shape of <see cref="MapTooltip"/>, and for the same reason: three screens, one tooltip
+    /// file, so "SAVE  CTRL+S" exists once and cannot drift.
+    ///
+    /// <para>The code screen's one control without a button is the text field itself, and its
+    /// key paths are announced on the tab it lives under — every key on this screen is therefore
+    /// reachable from some tooltip, which is what the parity sweep checks.</para>
+    /// </summary>
+    public static string CodeTooltip(EditorButton button) => button switch
+    {
+        EditorButton.CodeTab =>
+            "CODE - ACTIVE   ARROWS/HOME/END/PGUP/PGDN MOVE, SHIFT SELECTS, CTRL+ARROWS BY WORD",
         _ => Tooltip(button),
     };
 
@@ -961,6 +1052,48 @@ public static class EditorIcons
                 return false;
             default:
                 return false;                       // SpritesTab and the stubs: nothing to do here
+        }
+    }
+
+    /// <summary>
+    /// A click on a live, non-tab icon-button of the <b>code</b> editor —
+    /// <see cref="ClickButton"/>'s and <see cref="ClickMapButton"/>'s third twin, headless for
+    /// the same reason: the routing table has to exist where no graphics device is required, so
+    /// a contract test can click every placed button and catch the "placed but never wired"
+    /// defect on arrival. Returns true when the click means "leave the editor" (the exit tab),
+    /// which is <see cref="ShellModeMachine"/>'s verb and not the session's. Tab clicks never
+    /// come here: <see cref="TabTarget"/> answers them first.
+    ///
+    /// <para><b>Two owners of state, one router.</b> The find and go-to lines are what the
+    /// author is <em>looking at</em>, not what <c>src/main.cs</c> holds, so they live in
+    /// <see cref="CodeEditorView"/>; the buffer's own three verbs live in the session. This
+    /// table takes both halves, and nothing else decides what a code button means.</para>
+    /// </summary>
+    public static bool ClickCodeButton(CodeEditorSession session, CodeEditorView view, EditorButton button)
+    {
+        ArgumentNullException.ThrowIfNull(session);
+        ArgumentNullException.ThrowIfNull(view);
+        switch (button)
+        {
+            case EditorButton.ExitTab:
+                return true;                        // clean → back; dirty → the prompt — CodeEditorView judges
+            case EditorButton.ToolFind:
+                view.OpenFind();                    // TIC-80's FIND button; Ctrl+F is its key
+                return false;
+            case EditorButton.ToolGoTo:
+                view.OpenGoTo();                    // TIC-80's GOTO button; Ctrl+L is its key
+                return false;
+            case EditorButton.Save:
+                session.Save();                     // the modified/saved icon IS this button — click = Ctrl+S
+                return false;
+            case EditorButton.Undo:
+                session.Undo();
+                return false;
+            case EditorButton.Redo:
+                session.Redo();
+                return false;
+            default:
+                return false;                       // the stubs: nothing to do here
         }
     }
 

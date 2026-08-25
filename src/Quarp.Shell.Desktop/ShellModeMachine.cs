@@ -112,6 +112,17 @@ public sealed class ShellModeMachine
     /// <summary>The map screen's camera, cursor and exit prompt; non-null exactly while <see cref="MapEditor"/> is.</summary>
     public MapEditorView? MapView { get; private set; }
 
+    /// <summary>
+    /// The open text of the same cart's <c>src/main.cs</c>, created lazily by the first visit to
+    /// the CODE tab and then kept until the whole editor closes — so flipping tabs never costs
+    /// an unsaved character. Null until that first visit: a cart whose code is never opened must
+    /// not get a session (and therefore cannot get a <c>src</c> folder) it never asked for.
+    /// </summary>
+    public CodeEditorSession? CodeEditor { get; private set; }
+
+    /// <summary>The code screen's scroll, footer fields and exit prompt; non-null exactly while <see cref="CodeEditor"/> is.</summary>
+    public CodeEditorView? CodeView { get; private set; }
+
     /// <summary>The folder both editor sessions belong to — remembered because a session does not carry its own path.</summary>
     private string? _editorFolder;
 
@@ -165,6 +176,12 @@ public sealed class ShellModeMachine
                 if (MapView!.RequestClose(MapEditor!))
                 {
                     CloseAfterMapResolved();
+                }
+                break;
+            case ShellMode.CodeEditor:
+                if (CodeView!.RequestClose(CodeEditor!))
+                {
+                    CloseAfterCodeResolved();
                 }
                 break;
             default:
@@ -367,7 +384,7 @@ public sealed class ShellModeMachine
     /// </summary>
     public void SwitchEditorTab(ShellMode target)
     {
-        if (Mode is not (ShellMode.Editor or ShellMode.MapEditor))
+        if (Mode is not (ShellMode.Editor or ShellMode.MapEditor or ShellMode.CodeEditor))
         {
             return;
         }
@@ -376,29 +393,77 @@ public sealed class ShellModeMachine
             Mode = ShellMode.Editor;
             return;
         }
-        if (target != ShellMode.MapEditor)
+        if (target == ShellMode.MapEditor)
+        {
+            if (MapEditor is null)
+            {
+                try
+                {
+                    MapEditor = new MapEditorSession(_editorFolder!);
+                    MapView = new MapEditorView();
+                }
+                catch (Exception e) when (e is CartLoadException or IOException or UnauthorizedAccessException)
+                {
+                    LibraryMessage = $"{Editor!.CartName}: {FirstLine(e.Message)}";
+                    return;     // stay put: a broken map must not take the open sprites with it
+                }
+            }
+            Mode = ShellMode.MapEditor;
+            return;
+        }
+        if (target != ShellMode.CodeEditor)
         {
             return;
         }
-        if (MapEditor is null)
+        if (CodeEditor is null)
         {
             try
             {
-                MapEditor = new MapEditorSession(_editorFolder!);
-                MapView = new MapEditorView();
+                // The same lazy birth and the same failure rule as the map's: an unreadable
+                // src/main.cs reports the way a failed launch does and leaves the tab the author
+                // is standing on exactly where it was.
+                CodeEditor = new CodeEditorSession(_editorFolder!);
+                CodeView = new CodeEditorView();
             }
             catch (Exception e) when (e is CartLoadException or IOException or UnauthorizedAccessException)
             {
                 LibraryMessage = $"{Editor!.CartName}: {FirstLine(e.Message)}";
-                return;     // stay on the sheet: a broken map must not take the open sprites with it
+                return;
             }
         }
-        Mode = ShellMode.MapEditor;
+        Mode = ShellMode.CodeEditor;
     }
 
-    /// <summary>The keyboard half of the tab strip: one key flips between the two open faces.</summary>
+    /// <summary>The keyboard half of the tab strip: Home flips between the two graphics faces.</summary>
     public void ToggleEditorTab() =>
         SwitchEditorTab(Mode == ShellMode.MapEditor ? ShellMode.Editor : ShellMode.MapEditor);
+
+    /// <summary>
+    /// Alt+Left / Alt+Right: one step along the live tab strip, wrapping. The list is
+    /// <see cref="EditorIcons.LiveEditorTabs"/> — the view layer's own order, left to right, so
+    /// the key walks the tabs in the order the eye reads them. Wrapping rather than stopping,
+    /// because with three stops a strip that stops at the ends costs four presses to cross and a
+    /// wrapping one costs one; the ends of a <em>ring</em> are not ends.
+    /// </summary>
+    public void CycleEditorTab(int direction)
+    {
+        if (Mode is not (ShellMode.Editor or ShellMode.MapEditor or ShellMode.CodeEditor))
+        {
+            return;
+        }
+        IReadOnlyList<ShellMode> tabs = EditorIcons.LiveEditorTabs;
+        int at = 0;
+        for (int i = 0; i < tabs.Count; i++)
+        {
+            if (tabs[i] == Mode)
+            {
+                at = i;
+                break;
+            }
+        }
+        int step = Math.Sign(direction);
+        SwitchEditorTab(tabs[((at + step) % tabs.Count + tabs.Count) % tabs.Count]);
+    }
 
     /// <summary>
     /// Z on the sheet's exit prompt: save, then leave — but only if the save really landed;
@@ -452,39 +517,82 @@ public sealed class ShellModeMachine
         CloseAfterMapResolved();
     }
 
-    /// <summary>
-    /// The sheet's half of the exit is settled — now the map's. A dirty map raises its own
-    /// prompt on its own tab (the author is shown what is unsaved where, rather than being
-    /// asked about pixels they cannot see), and only when both banks are settled does the
-    /// editor close. This is the whole reason the two tabs share one exit.
-    /// </summary>
-    private void CloseAfterSheetResolved()
+    /// <summary>Z on the code's exit prompt — the text half of <see cref="SaveEditorAndClose"/>, same failure rule: a write that did not land keeps the editor and the author's lines alive with the error in the footer.</summary>
+    public void SaveCodeAndClose()
     {
-        if (MapEditor is null || !MapEditor.IsDirty)
+        if (Mode != ShellMode.CodeEditor || CodeView is not { ExitPromptShown: true })
         {
-            CloseEditor();
             return;
         }
-        Mode = ShellMode.MapEditor;
-        if (!MapView!.ExitPromptShown)
+        if (CodeEditor!.Save())
         {
-            MapView.RequestClose(MapEditor);    // dirty and down ⇒ this raises it, exactly once
+            CodeView.CloseExitPrompt();
+            CloseAfterCodeResolved();
         }
     }
 
-    /// <summary>The mirror: the map is settled, ask the sheet.</summary>
-    private void CloseAfterMapResolved()
+    /// <summary>X on the code's exit prompt: leave the text unsaved — <c>src/main.cs</c> stays byte-for-byte untouched, and a cart that never had one still does not.</summary>
+    public void DiscardCodeAndClose()
     {
-        if (!Editor!.IsDirty)
+        if (Mode != ShellMode.CodeEditor || CodeView is not { ExitPromptShown: true })
         {
-            CloseEditor();
             return;
         }
-        Mode = ShellMode.Editor;
-        if (!Editor.ExitPromptShown)
+        CodeView.CloseExitPrompt();
+        CloseAfterCodeResolved();
+    }
+
+    /// <summary>The sheet's half of the exit is settled — now every other open bank's.</summary>
+    private void CloseAfterSheetResolved() => CloseUnlessAnotherBankIsDirty(ShellMode.Editor);
+
+    /// <summary>The map's half is settled.</summary>
+    private void CloseAfterMapResolved() => CloseUnlessAnotherBankIsDirty(ShellMode.MapEditor);
+
+    /// <summary>The code's half is settled.</summary>
+    private void CloseAfterCodeResolved() => CloseUnlessAnotherBankIsDirty(ShellMode.CodeEditor);
+
+    /// <summary>
+    /// One bank of the open cartridge has just been answered for; if any <em>other</em> open
+    /// bank is still dirty, come to the front of that one and ask there, and only when every
+    /// bank is settled does the editor close. The author is shown what is unsaved <b>where</b>,
+    /// rather than being asked about pixels or lines they cannot see — which is the whole reason
+    /// the three tabs share one exit.
+    ///
+    /// <para>One method rather than three, because the rule is one rule: with two banks it was
+    /// already stated twice, and a third would have made "ask the others" a thing that exists in
+    /// three places and can differ in three ways. The order the others are asked in is the tab
+    /// strip's own, so the questions arrive left to right.</para>
+    /// </summary>
+    private void CloseUnlessAnotherBankIsDirty(ShellMode resolved)
+    {
+        if (resolved != ShellMode.Editor && Editor is { IsDirty: true } sheet)
         {
-            Editor.RequestClose();
+            Mode = ShellMode.Editor;
+            if (!sheet.ExitPromptShown)
+            {
+                sheet.RequestClose();           // dirty and down ⇒ this raises it, exactly once
+            }
+            return;
         }
+        if (resolved != ShellMode.MapEditor && MapEditor is { IsDirty: true } map)
+        {
+            Mode = ShellMode.MapEditor;
+            if (!MapView!.ExitPromptShown)
+            {
+                MapView.RequestClose(map);
+            }
+            return;
+        }
+        if (resolved != ShellMode.CodeEditor && CodeEditor is { IsDirty: true } code)
+        {
+            Mode = ShellMode.CodeEditor;
+            if (!CodeView!.ExitPromptShown)
+            {
+                CodeView.RequestClose(code);
+            }
+            return;
+        }
+        CloseEditor();
     }
 
     /// <summary>
@@ -498,6 +606,8 @@ public sealed class ShellModeMachine
         Editor = null;
         MapEditor = null;
         MapView = null;
+        CodeEditor = null;
+        CodeView = null;
         _editorFolder = null;
         Mode = ShellMode.Library;
         Library.Rescan();

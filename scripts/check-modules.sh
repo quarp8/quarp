@@ -142,6 +142,8 @@ LAYERS=(
   "SpriteEditorLayout.cs|2"    # раскладка экрана спрайтов
   "MapEditorLayout.cs|2"       # раскладка экрана карты
   "MapEditorView.cs|2"         # камера/курсор карты (+MapEditorTileStep, MapEditorPaint)
+  "CodeEditorLayout.cs|2"      # раскладка экрана кода: текст, номера строк, скроллбар
+  "CodeEditorView.cs|2"        # прокрутка и строки поиска/перехода (+ITextClipboard, InMemoryTextClipboard)
   "SheetScroll.cs|2"           # страничная раскладка листа и слайдер (+SheetStrip)
   "EditorSheetStep.cs|2"       # один шаг выбора спрайта с клавиатуры
   "EditorIcons.cs|2"           # таблица кнопок/иконок/подсказок (+EditorButton, EditorIcon)
@@ -156,6 +158,7 @@ LAYERS=(
   "EditorChromeRenderer.cs|3"  # пиксели общей рамы (+EditorButtonState)
   "SpriteEditorRenderer.cs|3"  # пиксели экрана спрайтов
   "MapEditorRenderer.cs|3"     # пиксели экрана карты
+  "CodeEditorRenderer.cs|3"    # пиксели экрана кода
   "LibraryRenderer.cs|3"       # пиксели экрана библиотеки
   "ShellOverlay.cs|3"          # текстовый слой поверх кадра
   "MainMenuRenderer.cs|3"      # пиксели главного меню
@@ -169,6 +172,7 @@ LAYERS=(
   "ShellModeMachine.cs|4"      # переходы между режимами и жизнь сессии
   "SpriteEditorInput.cs|4"     # роутер ввода экрана спрайтов (+EditorShell)
   "MapEditorInput.cs|4"        # роутер ввода экрана карты
+  "CodeEditorInput.cs|4"       # роутер ввода экрана кода (клавиши + поток символов)
   "QuarpGame.cs|4"             # игровой цикл окна
   "Program.cs|4"               # точка входа
 )

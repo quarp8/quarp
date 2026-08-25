@@ -154,15 +154,25 @@ public sealed class EditorChromeRenderer : IDisposable
         return color;
     }
 
-    /// <summary>The status band's text half (its buttons are drawn with all the others). The band spans the whole window, so the text takes the screen margin, not the band's X.</summary>
-    public void DrawStatusText(SpriteBatch batch, in EditorChrome chrome, string coords, string number)
+    /// <summary>
+    /// The status band's text half (its buttons are drawn with all the others). The band spans
+    /// the whole window, so the text takes the screen margin, not the band's X.
+    ///
+    /// <para><paramref name="numberInk"/> overrides the right field's colour and defaults to
+    /// <see cref="Bright"/>. It exists for one case all three reference consoles share: TIC-80's
+    /// <c>drawStatus</c> turns <c>size %i/%i</c> red over <c>MAX_CODE</c>, and a limit reported
+    /// in the same ink as every other number is a limit nobody notices crossing. Sprite and map
+    /// screens omit it and keep exactly the pixels they had.</para>
+    /// </summary>
+    public void DrawStatusText(
+        SpriteBatch batch, in EditorChrome chrome, string coords, string number, Color? numberInk = null)
     {
         ArgumentNullException.ThrowIfNull(batch);
         _font.Draw(batch, coords, chrome.Margin, chrome.StatusTextY, chrome.Ui, Text);
         _font.Draw(
             batch, number,
             chrome.Margin + PixelFontAtlas.MeasureWidth(coords + "   ", chrome.Ui),
-            chrome.StatusTextY, chrome.Ui, Bright);
+            chrome.StatusTextY, chrome.Ui, numberInk ?? Bright);
     }
 
     /// <summary>

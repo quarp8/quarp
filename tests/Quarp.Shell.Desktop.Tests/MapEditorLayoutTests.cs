@@ -376,4 +376,23 @@ public class MapEditorLayoutTests
         Assert.False(layout.TryTileCell(x, y, out _));
         Assert.False(layout.TryMinimapCell(x, y, out _, out _));
     }
+
+    /// <summary>
+    /// The minimap sits against the picker's right edge, one margin away, and the leftover
+    /// width of the band goes to the window's edge — not into a pocket between the two boxes.
+    /// The first cut centred it, and the organizer's eye pass on a live window read the result
+    /// as a hole in the middle of the screen: the same complaint the sixth and seventh reviews
+    /// made about the sprite editor. Pinned here so the next layout change has to mean it.
+    /// </summary>
+    [Theory]
+    [InlineData(1280, 720)]
+    [InlineData(1920, 1080)]
+    [InlineData(640, 360)]
+    public void TheMinimapHugsThePickerAndTheAirGoesToTheEdge(int width, int height)
+    {
+        var layout = MapEditorLayout.Compute(width, height);
+
+        Assert.Equal(layout.Sheet.Right + layout.Margin, layout.Minimap.X);
+        Assert.True(layout.Minimap.Right <= width - layout.Margin);
+    }
 }

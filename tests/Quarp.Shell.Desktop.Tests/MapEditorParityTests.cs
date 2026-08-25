@@ -89,24 +89,41 @@ public class MapEditorParityTests : IDisposable
         {
             view.PageCursor(layout, 0, 1);
         }
+        if (c.EditorCopy)
+        {
+            MapEditorPaint.CopySelection(map, view);
+        }
+        if (c.EditorCut)
+        {
+            MapEditorPaint.CutSelection(map, view);
+        }
+        if (c.EditorPaste)
+        {
+            view.BeginPaste();
+        }
+        if (c.EditorBlockDx != 0 || c.EditorBlockDy != 0)
+        {
+            view.StepTileBlock(map, c.EditorBlockDx, c.EditorBlockDy);
+        }
         bool steppedPicker = c.EditorSheetDx != 0 || c.EditorSheetDy != 0;
         if (steppedPicker)
         {
             MapEditorTileStep.Apply(map, c.EditorSheetDx, c.EditorSheetDy);
         }
-        int dx = steppedPicker ? 0 : (c.MenuRight ? 1 : 0) - (c.MenuLeft ? 1 : 0);
-        int dy = steppedPicker ? 0 : (c.MenuDown ? 1 : 0) - (c.MenuUp ? 1 : 0);
+        bool aimedAtPicker = steppedPicker || c.EditorBlockDx != 0 || c.EditorBlockDy != 0;
+        int dx = aimedAtPicker ? 0 : (c.MenuRight ? 1 : 0) - (c.MenuLeft ? 1 : 0);
+        int dy = aimedAtPicker ? 0 : (c.MenuDown ? 1 : 0) - (c.MenuUp ? 1 : 0);
         if (dx != 0 || dy != 0)
         {
             view.MoveCursor(layout, dx, dy);
             if (c.EditorPaintDown)
             {
-                MapEditorPaint.Continue(map, view.CursorX, view.CursorY);
+                MapEditorPaint.ContinueBlock(map, view.CursorX, view.CursorY);
             }
         }
-        if (c.EditorPaintPressed)
+        if (c.EditorPaintPressed && !MapEditorPaint.PasteAt(map, view, view.CursorX, view.CursorY))
         {
-            MapEditorPaint.Begin(map, view.CursorX, view.CursorY);
+            MapEditorPaint.BeginBlock(map, view.CursorX, view.CursorY);
         }
         if (c.EditorPaintReleased)
         {
@@ -173,9 +190,9 @@ public class MapEditorParityTests : IDisposable
             }
             return;
         }
-        if (layout.TryTileCell(x, y, out int sprite))
+        if (layout.TryTileStripCell(x, y, out _, out _))
         {
-            map.SelectSprite(sprite);
+            view.BeginTileBlock(map, layout, x, y);      // a press that never moves is one tile
             return;
         }
         if (layout.TryMinimapCell(x, y, out int jumpX, out int jumpY))
@@ -183,9 +200,10 @@ public class MapEditorParityTests : IDisposable
             view.JumpTo(layout, jumpX, jumpY);
             return;
         }
-        if (layout.TryMapCell(x, y, view.CameraX, view.CameraY, out int cellX, out int cellY))
+        if (layout.TryMapCell(x, y, view.CameraX, view.CameraY, out int cellX, out int cellY)
+            && !MapEditorPaint.PasteAt(map, view, cellX, cellY))
         {
-            MapEditorPaint.Begin(map, cellX, cellY);
+            MapEditorPaint.BeginBlock(map, cellX, cellY);
         }
     }
 
@@ -196,15 +214,20 @@ public class MapEditorParityTests : IDisposable
         {
             DispatchMousePress(map, view, layout, mouse.X, mouse.Y);
         }
+        else if (mouse.LeftDown && view.TileBlockGestureActive)
+        {
+            view.UpdateTileBlock(map, layout, mouse.X, mouse.Y);
+        }
         else if (mouse.LeftDown && map.StrokeActive)
         {
             layout.ClampMapCell(mouse.X, mouse.Y, view.CameraX, view.CameraY, out int dragX, out int dragY);
             view.SetCursor(layout, dragX, dragY);
-            MapEditorPaint.Continue(map, dragX, dragY);
+            MapEditorPaint.ContinueBlock(map, dragX, dragY);
         }
         if (mouse.LeftReleased)
         {
             MapEditorPaint.End(map);
+            view.EndTileBlock();
         }
     }
 
@@ -333,6 +356,9 @@ public class MapEditorParityTests : IDisposable
         {
             [EditorButton.ExitTab] = "ESC",
             [EditorButton.SpritesTab] = "HOME",
+            // Live since the code-editor screen wave; Alt+Left/Right walk the strip (see the
+            // sprite screen's twin of this table for why it is not Home).
+            [EditorButton.CodeTab] = "ALT+",
             // The four tools carry their digits (TIC-80's own numbering); the map's keyboard
             // pencil is bare Z since wave 3d, because Space became the pan modifier there.
             [EditorButton.ToolPencil] = "Z DRAWS",
@@ -360,6 +386,89 @@ public class MapEditorParityTests : IDisposable
                 $"{button} is live and placed on the map screen but this sweep's table does not know its hotkey.");
             Assert.Contains(token!, EditorIcons.MapTooltip(button), StringComparison.Ordinal);
         }
+    }
+
+    /// <summary>
+    /// The sprite in one picker cell, derived through <see cref="SheetStrip"/> — the one owner
+    /// of the strip mapping — never typed, exactly as <c>LastStripCellSprite</c> next door.
+    /// </summary>
+    private static int SpriteAtStripCell(int column, int row)
+    {
+        Assert.True(SheetStrip.TryStripCellToSheetCell(column, row, out int sheetX, out int sheetY));
+        return sheetY * SheetStrip.LaneColumns + sheetX;
+    }
+
+    /// <summary>
+    /// Wave 3e's half of the law: the <b>block</b> the pencil carries is reachable from either
+    /// channel. The mouse drags a rectangle across the tile picker (TIC-80 <c>map->sheet.rect</c>);
+    /// the keyboard walks to the same anchor with Shift+arrows and grows the block with
+    /// Ctrl+Shift+arrows. Both then stamp at the same map cell, and the proof is the same one
+    /// this file always uses — two maps, compared byte for byte, with no <see cref="Keys"/>
+    /// value in the mouse run and no mouse coordinate in the keyboard run.
+    ///
+    /// <para>Negative controls. (a) Drop the <c>EditorBlockDx</c>/<c>EditorBlockDy</c> lines
+    /// from <see cref="ShellCommandReader"/>: the keyboard block stays 1x1, the keyed map has
+    /// one tile where the clicked one has four, and the byte comparison names it. (b) Drop the
+    /// <c>!ctrl</c> from <c>EditorSheetDx</c> in the same reader: Ctrl+Shift+Right steps the
+    /// tile as well as sizing the block, the keyed anchor moves, and the comparison goes red
+    /// with the whole block shifted. (c) Remove the clamp from
+    /// <c>MapEditorView.SetTileBlock</c> and the keyed run walks off the strip.</para>
+    /// </summary>
+    [Fact]
+    public void BothChannelsMarkTheSameTileBlockAndStampIt()
+    {
+        var layout = MapEditorLayout.Compute(WindowWidth, WindowHeight);
+
+        var keyed = new MapEditorSession(FreshCartFolder("block-key"));
+        var keyedView = new MapEditorView();
+        var reader = new ShellCommandReader();
+        // Shift+arrows to strip cell (2,1) — the anchor tile.
+        KeyFrame(reader, keyed, keyedView, layout, Keys.LeftShift, Keys.Right);
+        KeyFrame(reader, keyed, keyedView, layout, Keys.LeftShift);
+        KeyFrame(reader, keyed, keyedView, layout, Keys.LeftShift, Keys.Right);
+        KeyFrame(reader, keyed, keyedView, layout, Keys.LeftShift);
+        KeyFrame(reader, keyed, keyedView, layout, Keys.LeftShift, Keys.Down);
+        KeyFrame(reader, keyed, keyedView, layout, Keys.LeftShift);
+        Assert.Equal(SpriteAtStripCell(2, 1), keyed.SelectedSprite);
+        // Ctrl+Shift+arrows to a 2x2 block.
+        KeyFrame(reader, keyed, keyedView, layout, Keys.LeftControl, Keys.LeftShift, Keys.Right);
+        KeyFrame(reader, keyed, keyedView, layout, Keys.LeftControl, Keys.LeftShift);
+        KeyFrame(reader, keyed, keyedView, layout, Keys.LeftControl, Keys.LeftShift, Keys.Down);
+        KeyFrame(reader, keyed, keyedView, layout, Keys.LeftControl, Keys.LeftShift);
+        Assert.Equal((2, 2), (keyed.BlockWidth, keyed.BlockHeight));
+        Assert.Equal(SpriteAtStripCell(2, 1), keyed.SelectedSprite);     // sizing does not move the anchor
+        for (int i = 0; i < 4; i++)
+        {
+            KeyFrame(reader, keyed, keyedView, layout, Keys.Right);
+            KeyFrame(reader, keyed, keyedView, layout);
+        }
+        for (int i = 0; i < 2; i++)
+        {
+            KeyFrame(reader, keyed, keyedView, layout, Keys.Down);
+            KeyFrame(reader, keyed, keyedView, layout);
+        }
+        Assert.Equal((4, 2), (keyedView.CursorX, keyedView.CursorY));
+        KeyFrame(reader, keyed, keyedView, layout, Keys.Z);
+        KeyFrame(reader, keyed, keyedView, layout);
+
+        var clicked = new MapEditorSession(FreshCartFolder("block-mouse"));
+        var clickedView = new MapEditorView();
+        var pointer = new EditorMouseReader();
+        (int fromX, int fromY) = Centre(layout.TileCellRect(SpriteAtStripCell(2, 1)));
+        (int toX, int toY) = Centre(layout.TileCellRect(SpriteAtStripCell(3, 2)));
+        Frame(clicked, clickedView, layout, pointer, fromX, fromY, ButtonState.Pressed);
+        Frame(clicked, clickedView, layout, pointer, toX, toY, ButtonState.Pressed);
+        Frame(clicked, clickedView, layout, pointer, toX, toY, ButtonState.Released);
+        Assert.Equal((2, 2), (clicked.BlockWidth, clicked.BlockHeight));
+        (int cellX, int cellY) = Centre(layout.MapCellRect(4, 2, 0, 0));
+        Click(clicked, clickedView, layout, pointer, cellX, cellY);
+
+        Assert.True(keyed.Map.SequenceEqual(clicked.Map));
+        // Not a vacuous pass: four cells, in the picker's own arrangement.
+        Assert.Equal(SpriteAtStripCell(2, 1), keyed.TileAt(4, 2));
+        Assert.Equal(SpriteAtStripCell(3, 1), keyed.TileAt(5, 2));
+        Assert.Equal(SpriteAtStripCell(2, 2), keyed.TileAt(4, 3));
+        Assert.Equal(SpriteAtStripCell(3, 2), keyed.TileAt(5, 3));
     }
 
     /// <summary>

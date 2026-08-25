@@ -30,4 +30,13 @@ public enum ShellMode
 
     /// <summary>The boot screen: intro, then LIBRARY / LOAD CART / CREATE GAME (ADR-028). Appended last so the four original faces keep their values.</summary>
     Menu,
+
+    /// <summary>
+    /// The third face of the open cartridge: the text of <c>src/main.cs</c>, behind the CODE
+    /// tab (M9, the code-editor screen wave). A mode of its own for the same reason the map is
+    /// one — the window draws a different screen and routes different input for it, and
+    /// <c>QuarpGame</c>'s update and draw switches are where that difference has to be visible.
+    /// Appended after <see cref="Menu"/> so every earlier face keeps its value.
+    /// </summary>
+    CodeEditor,
 }

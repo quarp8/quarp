@@ -8,8 +8,8 @@ using Quarp.Core.Audio;
 namespace Quarp.Shell.Desktop;
 
 /// <summary>
-/// Desktop shell: one window, five modes (M9, ADR-026; the boot menu — ADR-028) — the boot
-/// menu, the game library, a running cartridge, and the sprite/map editors. Without a cart
+/// Desktop shell: one window, six modes (M9, ADR-026; the boot menu — ADR-028) — the boot
+/// menu, the game library, a running cartridge, and the sprite/map/code editors. Without a cart
 /// path it opens on the boot screen: a short intro in the console's palette with its jingle
 /// (skippable by any key), then QUARP's main menu, whose first door is the library (the
 /// console's face; the old windowed test pattern died with M9 — the palette is proven by
@@ -64,6 +64,7 @@ public sealed class QuarpGame : Game
     private LibraryRenderer _hostUi = null!;
     private SpriteEditorRenderer _editorUi = null!;
     private MapEditorRenderer _mapUi = null!;
+    private CodeEditorRenderer _codeUi = null!;
     private MainMenuRenderer _menuUi = null!;
     private AudioOutput? _audio;
 
@@ -208,6 +209,7 @@ public sealed class QuarpGame : Game
         _hostUi = new LibraryRenderer(GraphicsDevice);
         _editorUi = new SpriteEditorRenderer(GraphicsDevice);
         _mapUi = new MapEditorRenderer(GraphicsDevice);
+        _codeUi = new CodeEditorRenderer(GraphicsDevice);
         _menuUi = new MainMenuRenderer(GraphicsDevice);
 
         // The two window events the boot screens live on. Characters buffer here and are
@@ -256,11 +258,21 @@ public sealed class QuarpGame : Game
             case ShellMode.MapEditor:
                 MapEditorInput.Update(EditorContext(), commands, mouse, gameTime.ElapsedGameTime.TotalSeconds);
                 break;
+            case ShellMode.CodeEditor:
+                // The one screen that also needs the CHARACTER stream, not just the key frame:
+                // typing wants the author's keyboard layout, dead keys and auto-repeat, which
+                // only Window.TextInput knows. The buffer is handed over as a plain list and
+                // cleared below with the frame, so the router sees exactly what arrived since
+                // the previous frame — in order, once. See CodeEditorInput's type comment.
+                CodeEditorInput.Update(
+                    EditorContext(), commands, mouse, _typedChars, gameTime.ElapsedGameTime.TotalSeconds);
+                break;
             case ShellMode.Menu:
                 UpdateMenu(commands, keyboard, mouse, gameTime);
                 break;
         }
-        // Typed characters not consumed by the name field this frame are stale by the next,
+        // Typed characters not consumed by the name field or the code editor this frame are
+        // stale by the next,
         // and a file dropped on a screen that does not take drops (a running game, an open
         // editor) is discarded rather than parked — surfacing it minutes later on some other
         // screen would be a launch nobody just asked for.
@@ -581,6 +593,19 @@ public sealed class QuarpGame : Game
                     _hover.Target,
                     _hover.TooltipVisible);
                 break;
+            case ShellMode.CodeEditor:
+                // Same draw clock the sprite editor's marching ants ride: host chrome animating
+                // in host time (here, the caret's blink); no simulation or hash can see it.
+                _codeUi.Draw(
+                    _spriteBatch,
+                    GraphicsDevice.PresentationParameters.BackBufferWidth,
+                    GraphicsDevice.PresentationParameters.BackBufferHeight,
+                    _modes.CodeEditor!,
+                    _modes.CodeView!,
+                    _hover.Target,
+                    _hover.TooltipVisible,
+                    gameTime.TotalGameTime.TotalSeconds);
+                break;
             case ShellMode.Menu:
                 _menuUi.Draw(
                     _spriteBatch,
@@ -684,6 +709,7 @@ public sealed class QuarpGame : Game
             _hostUi?.Dispose();
             _editorUi?.Dispose();
             _mapUi?.Dispose();
+            _codeUi?.Dispose();
             _menuUi?.Dispose();
             _audio?.Dispose();
         }

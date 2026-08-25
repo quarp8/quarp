@@ -127,6 +127,28 @@ public sealed class MapEditorSession
     /// </summary>
     public int SelectedSprite { get; private set; }
 
+    /// <summary>
+    /// How many picker cells wide the pencil's block is — TIC-80's <c>map->sheet.rect.w</c>
+    /// (REFERENCES-EDITORS §3.1: "любой размер N×M, не только 2×2/4×4"), 1 until a drag across
+    /// the picker says otherwise. It lives beside <see cref="SelectedSprite"/> because it is
+    /// the same fact made bigger — "what the pencil puts down" — and a second home for it
+    /// would be a second owner: every writer of the tile (the eyedropper, Shift+arrows, the
+    /// empty-tile button) means <b>one</b> tile, and they all go through
+    /// <see cref="SelectSprite"/>, which resets this to 1. That is what makes a stale block
+    /// size impossible rather than merely unlikely.
+    ///
+    /// <para><b>The unit is a PICKER cell, not a sheet cell.</b> The author drags a rectangle
+    /// across the strip he can see, and the strip is <see cref="SheetStrip"/>'s presentation of
+    /// the sheet, not the sheet itself. This class must not know that mapping (it is a view's
+    /// business, one layer up), so it keeps the two numbers and nothing else: whoever stamps
+    /// the block resolves its cells through <see cref="SheetStrip"/> and hands the tiles down
+    /// to <see cref="PaintBlock"/> as plain bytes.</para>
+    /// </summary>
+    public int BlockWidth { get; private set; } = 1;
+
+    /// <summary>How many picker cells tall the pencil's block is — <see cref="BlockWidth"/>'s other half.</summary>
+    public int BlockHeight { get; private set; } = 1;
+
     /// <summary>True while the paint button is down — the current undo step is open.</summary>
     public bool StrokeActive => _strokeBackup is not null;
 
@@ -162,6 +184,33 @@ public sealed class MapEditorSession
     {
         ValidateSprite(sprite);
         SelectedSprite = sprite;
+        // One tile is one tile: every path that names a single sprite — a click on one picker
+        // cell, Shift+arrows, the eyedropper, the empty-tile button — arrives here, so the
+        // block cannot survive one of them and scramble the next stroke. Growing it back is
+        // SelectSpriteBlock's job and nothing else's.
+        BlockWidth = 1;
+        BlockHeight = 1;
+    }
+
+    /// <summary>
+    /// The picker drag's door: the block's top-left tile and its size in picker cells
+    /// (TIC-80 <c>map->sheet.rect</c>). The sprite is validated as everywhere else; a size
+    /// below one cell is a caller bug rather than an empty block, because the picker's own
+    /// rectangle is normalized before it gets here and can never be thinner than the cell it
+    /// started on. The strip's far edge is the caller's clamp — this class does not know where
+    /// the strip ends (see <see cref="BlockWidth"/>).
+    /// </summary>
+    public void SelectSpriteBlock(int sprite, int width, int height)
+    {
+        ValidateSprite(sprite);
+        if (width < 1 || height < 1)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(width), (width, height), "a picker block is at least one cell by one cell.");
+        }
+        SelectedSprite = sprite;
+        BlockWidth = width;
+        BlockHeight = height;
     }
 
     /// <summary>
@@ -172,7 +221,10 @@ public sealed class MapEditorSession
     public void PickTile(int cellX, int cellY)
     {
         ValidateCell(cellX, cellY);
-        SelectedSprite = _map[cellY * MapColumns + cellX];
+        // Through the one door rather than at the field: a sampled cell is one tile, so it must
+        // also drop the block (see SelectSprite). A byte is always a legal sprite, so the
+        // validation inside cannot fire.
+        SelectSprite(_map[cellY * MapColumns + cellX]);
     }
 
     /// <summary>
@@ -278,6 +330,83 @@ public sealed class MapEditorSession
             }
         }
         EndStroke();
+    }
+
+    /// <summary>
+    /// One sample of a pencil gesture that carries a <b>block</b> of tiles instead of one
+    /// (wave 3e; TIC-80 <c>setMapSprite</c> under a <c>map->sheet.rect</c> larger than 1x1).
+    /// Inside an open stroke like <see cref="PaintTile"/>, and for the same reason: however
+    /// many blocks a drag stamps, the gesture is one undo step.
+    ///
+    /// <para><paramref name="tiles"/> is the block row-major, <paramref name="width"/> bytes
+    /// per row. It arrives as plain sprite numbers because resolving the picker's rectangle
+    /// into them needs <see cref="SheetStrip"/>, which is a view's business — see
+    /// <see cref="BlockWidth"/>.</para>
+    /// </summary>
+    public void PaintBlock(int cellX, int cellY, int width, int height, ReadOnlySpan<byte> tiles)
+    {
+        if (!StrokeActive)
+        {
+            throw new InvalidOperationException(
+                "PaintBlock outside a stroke — the shell must call BeginStroke on the press (PaintTile's contract).");
+        }
+        RequireWritableMap();
+        BlitBlock(cellX, cellY, width, height, tiles);
+    }
+
+    /// <summary>
+    /// The paste (wave 3e): a block of tiles lands at a cell as <b>one</b> undo step, whatever
+    /// gesture was open (TIC-80 <c>drawPasteData</c>, which pushes exactly one history entry).
+    /// Same shape as <see cref="ClearArea"/> — end, begin, write, end — because both are
+    /// operations rather than gestures.
+    /// </summary>
+    public void PasteBlock(int cellX, int cellY, int width, int height, ReadOnlySpan<byte> tiles)
+    {
+        RequireWritableMap();
+        if (width <= 0 || height <= 0)
+        {
+            return;
+        }
+        EndStroke();
+        BeginStroke();
+        BlitBlock(cellX, cellY, width, height, tiles);
+        EndStroke();
+    }
+
+    /// <summary>
+    /// A rectangle of tiles onto the map, <b>clipped</b> at the map's borders — the one place
+    /// this class does not throw on an out-of-map coordinate, and deliberately so. The block's
+    /// position comes from a pointer that may stand one cell from the edge while the block is
+    /// eight wide: refusing would make the map's own corner unpaintable and unpasteable, and
+    /// snapping the block back inside would put tiles where the author did not point. Cells
+    /// that fall off the map are simply not written; the rest go through the one writer.
+    /// A single cell still goes through <see cref="PaintTile"/>, which still throws — the
+    /// pencil's contract is unchanged, and the viewport clamps before calling it.
+    /// </summary>
+    private void BlitBlock(int cellX, int cellY, int width, int height, ReadOnlySpan<byte> tiles)
+    {
+        if (tiles.Length < width * height)
+        {
+            throw new ArgumentException(
+                $"a {width}x{height} block needs {width * height} tiles, got {tiles.Length}.", nameof(tiles));
+        }
+        for (int row = 0; row < height; row++)
+        {
+            int y = cellY + row;
+            if (y is < 0 or >= MapRows)
+            {
+                continue;
+            }
+            for (int column = 0; column < width; column++)
+            {
+                int x = cellX + column;
+                if (x is < 0 or >= MapColumns)
+                {
+                    continue;
+                }
+                WriteCell(y * MapColumns + x, tiles[row * width + column]);
+            }
+        }
     }
 
     /// <summary>

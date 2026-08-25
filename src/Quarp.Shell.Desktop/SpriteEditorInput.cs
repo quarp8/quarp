@@ -85,6 +85,14 @@ public static class SpriteEditorInput
             }
             return;
         }
+        if (commands.EditorTabPrev || commands.EditorTabNext)
+        {
+            // Alt+Left/Right walk the whole strip, code tab included (REFERENCES-EDITORS §8
+            // item 16). Home keeps its two-face flip below — the key the author's hand already
+            // knows — and this is the road to the third face.
+            shell.Modes.CycleEditorTab(commands.EditorTabNext ? 1 : -1);
+            return;
+        }
         if (commands.ToStart)
         {
             // Home flips to the map of the same cart and back — the keyboard half of the tab

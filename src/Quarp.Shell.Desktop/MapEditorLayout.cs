@@ -214,8 +214,14 @@ public readonly struct MapEditorLayout
             1, Math.Min(minimapRoomWidth / MapColumns, sheet.Height / MapRows));
         int minimapWidth = MapColumns * minimapScale;
         int minimapHeight = MapRows * minimapScale;
+        // Left-aligned against the picker, not centred in what is left (2026-08-25, the
+        // organizer's own eye pass on a live window). Centring split the leftover width into
+        // two pockets and put one of them BETWEEN the two boxes, which reads as a hole in the
+        // middle of the band — the very thing the sixth and seventh reviews threw out of the
+        // sprite screen. Left-aligned, the whole remainder sits at the window's right edge,
+        // where the eye reads it as a margin.
         var minimap = new Rectangle(
-            minimapRoomX + Math.Max(0, minimapRoomWidth - minimapWidth) / 2,
+            minimapRoomX,
             sheet.Y + (sheet.Height - minimapHeight) / 2,
             minimapWidth,
             minimapHeight);
@@ -352,6 +358,57 @@ public readonly struct MapEditorLayout
         SheetStrip.SpriteToStripCell(sprite, out int column, out int row);
         int cell = VirtualConsole.SpriteSize * SheetScale;
         return new Rectangle(Sheet.X + column * cell, Sheet.Y + row * cell, cell, cell);
+    }
+
+    /// <summary>
+    /// Window point → <b>strip</b> cell of the picker, or false off the picker (wave 3e). The
+    /// block drag is measured in strip cells and not in sprite numbers because the rectangle
+    /// the author drags is a rectangle <em>on screen</em>: the strip lays the sheet's pages
+    /// side by side (<see cref="SheetStrip"/>), so two cells that touch in the picker need not
+    /// be consecutive sprites, and only the strip's own coordinates can say what "the next
+    /// column" means. <see cref="TryTileCell"/> stays the single-cell answer for everything
+    /// that wants a sprite number.
+    /// </summary>
+    public bool TryTileStripCell(int x, int y, out int column, out int row)
+    {
+        column = 0;
+        row = 0;
+        if (!Sheet.Contains(x, y))
+        {
+            return false;
+        }
+        int cell = VirtualConsole.SpriteSize * SheetScale;
+        column = (x - Sheet.X) / cell;
+        row = (y - Sheet.Y) / cell;
+        return column < SheetStrip.Columns && row < SheetStrip.Rows;
+    }
+
+    /// <summary>
+    /// Window point → nearest strip cell, for the block drag — <see cref="ClampMapCell"/>'s
+    /// twin, and there for the same reason: a drag whose pointer leaves the picker must keep
+    /// sizing the block along the strip's edge instead of freezing or tearing. Floored, not
+    /// truncated, so a pointer left of the picker counts as column 0 rather than sticking a
+    /// whole cell wide of it (C# division rounds toward zero).
+    /// </summary>
+    public void ClampTileStripCell(int x, int y, out int column, out int row)
+    {
+        int cell = VirtualConsole.SpriteSize * SheetScale;
+        column = Math.Clamp(FloorDiv(x - Sheet.X, cell), 0, SheetStrip.Columns - 1);
+        row = Math.Clamp(FloorDiv(y - Sheet.Y, cell), 0, SheetStrip.Rows - 1);
+    }
+
+    /// <summary>
+    /// The picker rectangle of a block anchored at one sprite — <see cref="TileCellRect"/>
+    /// generalized, so the block frame and the single-tile frame come out of one formula (at
+    /// 1x1 this <em>is</em> <see cref="TileCellRect"/>). Not clipped to the picker: the caller
+    /// draws a frame, and a rectangle pulled inside the band would claim the block ends where
+    /// the box does.
+    /// </summary>
+    public Rectangle TileBlockRect(int sprite, int width, int height)
+    {
+        Rectangle first = TileCellRect(sprite);
+        int cell = VirtualConsole.SpriteSize * SheetScale;
+        return new Rectangle(first.X, first.Y, width * cell, height * cell);
     }
 
     /// <summary>Window point → map cell on the minimap, or false. A click there is "take me to this cell".</summary>

@@ -297,18 +297,19 @@ public class SpriteEditorLayoutTests
     }
 
     /// <summary>
-    /// Pins the stub list as of wave 2f: only the four future-editor tabs stay dead — the
-    /// verdict's whole toolbar is live now (select and stamp woke last). A tab waking early,
-    /// or a tool going dark again, makes this red before any UI is even drawn.
+    /// Pins the stub list: only the future-editor tabs stay dead — the verdict's whole toolbar
+    /// is live (select and stamp woke last). A tab waking early, or a tool going dark again,
+    /// makes this red before any UI is even drawn.
     /// </summary>
     [Fact]
     public void ExactlyTheVerdictsButtonsAreStubs()
     {
-        // The tilemap tab left this list in M9 stage 3 — its editor landed, so the icon is live
-        // and EditorIcons.TabTarget routes it. Three future editors remain honestly dead.
+        // The tilemap tab left this list in M9 stage 3 and the CODE tab in the code-editor
+        // screen wave — both editors landed, so both icons are live and EditorIcons.TabTarget
+        // routes them. Sounds and music remain honestly dead.
         var stubs = new[]
         {
-            EditorButton.CodeTab, EditorButton.SoundTab, EditorButton.MusicTab,
+            EditorButton.SoundTab, EditorButton.MusicTab,
         };
         foreach (EditorButton button in AllButtons)
         {

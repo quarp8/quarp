@@ -537,6 +537,10 @@ public class InputParityInstrumentTests : IDisposable
             // Live since M9 stage 3: the tilemap tab travels to the map editor, and Home is
             // the key that does it without a mouse.
             [EditorButton.TilemapTab] = "HOME",
+            // Live since the code-editor screen wave. Home cannot serve a third stop — in the
+            // code editor it is the start of the line — so the tab strip's own key is
+            // Alt+Left/Right (REFERENCES-EDITORS 8.16), and it is what this tooltip must name.
+            [EditorButton.CodeTab] = "ALT+",
         };
 
         foreach (EditorButtonPlace place in SpriteEditorLayout.Compute(1280, 720, regionCells: 1).Buttons)

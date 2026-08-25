@@ -26,6 +26,73 @@ public enum MapEditorTool
 }
 
 /// <summary>
+/// Who owns the fact "this block of map cells was copied" (wave 3e). An interface with exactly
+/// one implementation today — <see cref="MapMemoryClipboard"/>, which keeps the bytes in the
+/// shell and never touches the machine's clipboard — and that is the whole point of it existing
+/// rather than three fields on the view.
+///
+/// <para><b>Why not the system clipboard yet.</b> TIC-80 puts the block into the operating
+/// system's clipboard as a hex string with a two-byte <c>[w][h]</c> header
+/// (REFERENCES-EDITORS §3.1, <c>copySelectionToClipboard</c>), which is what lets an author
+/// paste a piece of map into a forum post. That is a decision with a format in it, and it has
+/// to be taken once for the sprite editor and the map editor together (§8 item 2) — not
+/// smuggled in behind a map wave. Until it is taken, this seam is where it lands: an
+/// implementation that reads and writes the OS clipboard replaces the one below, the view is
+/// handed it in its constructor, and not one caller of <see cref="MapEditorPaint.CopySelection"/>
+/// or <see cref="MapEditorPaint.PasteAt"/> changes.</para>
+/// </summary>
+public interface IMapClipboard
+{
+    /// <summary>True when something has been copied and a paste has data to place.</summary>
+    bool HasBlock { get; }
+
+    /// <summary>Width of the copied block in map cells; 0 when nothing was copied.</summary>
+    int Width { get; }
+
+    /// <summary>Height of the copied block in map cells.</summary>
+    int Height { get; }
+
+    /// <summary>The copied tiles, row-major, <see cref="Width"/> bytes per row; empty when nothing was copied.</summary>
+    ReadOnlySpan<byte> Tiles { get; }
+
+    /// <summary>Replace the contents. A width or height below one clears the clipboard rather than storing an empty block.</summary>
+    void Write(int width, int height, ReadOnlySpan<byte> tiles);
+}
+
+/// <summary>
+/// The internal clipboard: a copy of the bytes, living as long as the shell does. It survives
+/// closing and reopening the map tab only if its owner does — this wave hangs it on
+/// <see cref="MapEditorView"/>, so it lives exactly as long as the screen, the same rule the
+/// undo history follows (a fresh session opens with Ctrl+Z honestly dead).
+/// </summary>
+public sealed class MapMemoryClipboard : IMapClipboard
+{
+    private byte[] _tiles = Array.Empty<byte>();
+
+    public bool HasBlock => _tiles.Length > 0;
+
+    public int Width { get; private set; }
+
+    public int Height { get; private set; }
+
+    public ReadOnlySpan<byte> Tiles => _tiles;
+
+    public void Write(int width, int height, ReadOnlySpan<byte> tiles)
+    {
+        if (width < 1 || height < 1 || tiles.Length < width * height)
+        {
+            _tiles = Array.Empty<byte>();
+            Width = 0;
+            Height = 0;
+            return;
+        }
+        _tiles = tiles[..(width * height)].ToArray();
+        Width = width;
+        Height = height;
+    }
+}
+
+/// <summary>
 /// Where the author is looking and standing on the map, plus the footer prompt's one bit —
 /// the state of the map editor screen that must survive between frames, headless like
 /// <see cref="SheetScroll"/> and <see cref="ToolbarFlyout"/> and for the same reason: the
@@ -50,6 +117,29 @@ public enum MapEditorTool
 /// </summary>
 public sealed class MapEditorView
 {
+    /// <summary>
+    /// The screen opens with the internal clipboard. The overload below is the seam the system
+    /// clipboard will arrive through (see <see cref="IMapClipboard"/>).
+    /// </summary>
+    public MapEditorView()
+        : this(new MapMemoryClipboard())
+    {
+    }
+
+    /// <summary>The clipboard named outright — what a test, and one day the system clipboard, hands in.</summary>
+    public MapEditorView(IMapClipboard clipboard)
+    {
+        ArgumentNullException.ThrowIfNull(clipboard);
+        Clipboard = clipboard;
+    }
+
+    /// <summary>
+    /// What has been copied — one owner for both the paste verb and the renderer's floating
+    /// block, so "what is on the clipboard" and "what the ghost under the cursor shows" cannot
+    /// be two different answers.
+    /// </summary>
+    public IMapClipboard Clipboard { get; }
+
     /// <summary>The map cell the keyboard pencil acts on, and what the status bar reads.</summary>
     public int CursorX { get; private set; }
 
@@ -101,6 +191,24 @@ public sealed class MapEditorView
     /// <summary>True while a pan gesture is open (the hand tool's drag, or Space+drag under any tool).</summary>
     public bool PanActive { get; private set; }
 
+    /// <summary>
+    /// True while a copied block is waiting for the click that places it — TIC-80's
+    /// <c>drawPasteData</c> state (REFERENCES-EDITORS §3.1: <c>copyFromClipboard</c> leaves the
+    /// editor holding a block that lands on the next left button). It is screen state and not
+    /// model state: nothing about it reaches <c>map.bin</c> until the block is put down, and
+    /// Esc must be able to make it never have happened.
+    ///
+    /// <para><b>Where the floating block hangs</b> is not a second field: it hangs on
+    /// <see cref="CursorX"/>/<see cref="CursorY"/>, the one cursor this screen already has.
+    /// The pointer parks that cursor as it moves and the arrows move it too, so the ghost
+    /// follows the mouse and the keyboard without either channel owning a position of its
+    /// own — which is also why the two channels cannot paste in different places.</para>
+    /// </summary>
+    public bool PasteFloating { get; private set; }
+
+    /// <summary>True between the press and the release of a drag across the tile picker (wave 3e).</summary>
+    public bool TileBlockGestureActive { get; private set; }
+
     // The map cell the pan gesture grabbed — the camera is moved so this cell stays under the
     // pointer, which is what makes a drag feel like dragging paper rather than a slider.
     private int _panMapX;
@@ -110,6 +218,11 @@ public sealed class MapEditorView
     // current cell on every sample, so dragging up and left works exactly like down and right.
     private int _selectAnchorX;
     private int _selectAnchorY;
+
+    // The strip cell the picker drag started on — the block is normalized out of this and the
+    // current strip cell on every sample, exactly as the map's rectangle is out of its anchor.
+    private int _tileAnchorColumn;
+    private int _tileAnchorRow;
 
     /// <summary>
     /// Re-clamp against the current layout — called once per frame, because a window resize
@@ -218,8 +331,104 @@ public sealed class MapEditorView
     {
         PanActive = false;
         SelectionGestureActive = false;
+        TileBlockGestureActive = false;
         Tool = tool;
     }
+
+    /// <summary>
+    /// The picker drag's press: the block starts as the single strip cell under the pointer,
+    /// which is exactly today's behaviour for a click that never moves (TIC-80's own start
+    /// state, <c>.sheet.rect = {0, 0, 1, 1}</c>). Every sample writes the block through
+    /// <paramref name="session"/>, the one owner of "what the pencil puts down".
+    /// </summary>
+    public void BeginTileBlock(MapEditorSession session, in MapEditorLayout layout, int x, int y)
+    {
+        ArgumentNullException.ThrowIfNull(session);
+        layout.ClampTileStripCell(x, y, out _tileAnchorColumn, out _tileAnchorRow);
+        TileBlockGestureActive = true;
+        UpdateTileBlock(session, layout, x, y);
+    }
+
+    /// <summary>
+    /// One more sample of an open picker drag; a no-op without one. The rectangle is normalized
+    /// out of the anchor and the current cell, so dragging up and left selects the same block as
+    /// dragging down and right — the rule the map's own selection already carries.
+    /// </summary>
+    public void UpdateTileBlock(MapEditorSession session, in MapEditorLayout layout, int x, int y)
+    {
+        ArgumentNullException.ThrowIfNull(session);
+        if (!TileBlockGestureActive)
+        {
+            return;
+        }
+        layout.ClampTileStripCell(x, y, out int column, out int row);
+        SetTileBlock(
+            session,
+            Math.Min(_tileAnchorColumn, column),
+            Math.Min(_tileAnchorRow, row),
+            Math.Abs(column - _tileAnchorColumn) + 1,
+            Math.Abs(row - _tileAnchorRow) + 1);
+    }
+
+    /// <summary>The picker drag's release: the block stands until a single tile replaces it.</summary>
+    public void EndTileBlock() => TileBlockGestureActive = false;
+
+    /// <summary>
+    /// The keyboard's half of the picker drag (the parity law): grow or shrink the block by one
+    /// strip cell, keeping its top-left tile where it is — Ctrl+Shift+arrows, chosen because
+    /// Shift+arrows already steps the tile itself and a chord must not double as its bare key.
+    /// The block is clamped to the strip's far edges here, once, so no caller can size a block
+    /// that runs off the sheet.
+    /// </summary>
+    public void StepTileBlock(MapEditorSession session, int deltaWidth, int deltaHeight)
+    {
+        ArgumentNullException.ThrowIfNull(session);
+        SheetStrip.SpriteToStripCell(session.SelectedSprite, out int column, out int row);
+        SetTileBlock(
+            session,
+            column,
+            row,
+            session.BlockWidth + deltaWidth,
+            session.BlockHeight + deltaHeight);
+    }
+
+    /// <summary>
+    /// The one place a block reaches the session: the strip cell of its top-left corner becomes
+    /// the selected sprite and the size travels with it. Clamped to the strip in both axes,
+    /// because a block that hung off the sheet would have cells with no sprite behind them.
+    /// </summary>
+    private static void SetTileBlock(MapEditorSession session, int column, int row, int width, int height)
+    {
+        column = Math.Clamp(column, 0, SheetStrip.Columns - 1);
+        row = Math.Clamp(row, 0, SheetStrip.Rows - 1);
+        width = Math.Clamp(width, 1, SheetStrip.Columns - column);
+        height = Math.Clamp(height, 1, SheetStrip.Rows - row);
+        if (SheetStrip.TryStripCellToSheetCell(column, row, out int sheetX, out int sheetY))
+        {
+            session.SelectSpriteBlock(sheetY * SheetStrip.LaneColumns + sheetX, width, height);
+        }
+    }
+
+    /// <summary>
+    /// Ctrl+V: the copied block starts floating and lands on the next paint press — the click
+    /// under the mouse, Z under the keyboard. Refused with an empty clipboard, so a stray Ctrl+V
+    /// cannot arm a paste of nothing that then eats the next click.
+    /// </summary>
+    /// <returns>True when a block is now floating.</returns>
+    public bool BeginPaste()
+    {
+        PasteFloating = Clipboard.HasBlock;
+        return PasteFloating;
+    }
+
+    /// <summary>
+    /// Esc over a floating block: it never happened. Nothing was written while it floated, so
+    /// there is nothing to undo — which is the property that makes Esc safe to press.
+    /// </summary>
+    public void CancelPaste() => PasteFloating = false;
+
+    /// <summary>The block has landed — the state <see cref="MapEditorPaint.PasteAt"/> closes after writing.</summary>
+    public void EndPaste() => PasteFloating = false;
 
     /// <summary>The grid switch, for both the <c>`</c> key and the button — TIC-80's "SHOW/HIDE GRID".</summary>
     public void ToggleGrid() => GridShown = !GridShown;
@@ -438,5 +647,175 @@ public static class MapEditorPaint
             return;
         }
         session.ClearArea(view.SelectionX, view.SelectionY, view.SelectionWidth, view.SelectionHeight);
+    }
+
+    /// <summary>
+    /// The pencil carrying a block (wave 3e): the press stamps the whole
+    /// <see cref="MapEditorSession.BlockWidth"/>x<see cref="MapEditorSession.BlockHeight"/>
+    /// rectangle instead of one cell. Same door and same guard as <see cref="Begin(MapEditorSession, int, int)"/>,
+    /// which it does not replace — the right button's eraser still puts down exactly one tile
+    /// (none of the three references gives the eraser a block, and an eraser that wiped four
+    /// cells per click would be a different tool).
+    /// </summary>
+    public static void BeginBlock(MapEditorSession session, int cellX, int cellY)
+    {
+        ArgumentNullException.ThrowIfNull(session);
+        if (session.MapReadOnly)
+        {
+            return;
+        }
+        session.BeginStroke();
+        StampBlock(session, cellX, cellY);
+    }
+
+    /// <summary>One more sample of an open block gesture — the drag's half. Safe without one.</summary>
+    public static void ContinueBlock(MapEditorSession session, int cellX, int cellY)
+    {
+        ArgumentNullException.ThrowIfNull(session);
+        if (session.MapReadOnly || !session.StrokeActive)
+        {
+            return;
+        }
+        StampBlock(session, cellX, cellY);
+    }
+
+    /// <summary>
+    /// <b>The block only lands on the lattice of its own size</b> — TIC-80's
+    /// <c>processMouseDrawMode</c>, copied deliberately:
+    /// <code>if(w % sheet.rect.w == 0 &amp;&amp; h % sheet.rect.h == 0) setMapSprite(...)</code>
+    /// where <c>w</c>/<c>h</c> are the map cell under the pointer. A cell that is not a whole
+    /// number of blocks from the map's origin is <b>skipped</b>, not snapped and not drawn.
+    ///
+    /// <para><b>Why a rule that refuses to draw is the right one.</b> Take a 2x2 block dragged
+    /// across a row. Without the rule the block would be stamped at columns 4, 5, 6, 7 …, and
+    /// each stamp would overwrite the right half of the one before with its own left half: the
+    /// author draws a two-by-two tree and gets a column of tree-halves, the block's tiles
+    /// shuffled out of their arrangement. Snapping the block to the lattice instead of skipping
+    /// would draw a tile the pointer is not on — the pointer says "here" and the editor would
+    /// answer "near here" — and would stamp the same block twice as the pointer crossed the
+    /// cell boundary. Skipping keeps the invariant that matters: whatever is on the map, the
+    /// block's cells sit in the block's own arrangement. A 1x1 block divides everything, so the
+    /// ordinary pencil is exactly what it was before this wave.</para>
+    /// </summary>
+    private static void StampBlock(MapEditorSession session, int cellX, int cellY)
+    {
+        int width = session.BlockWidth;
+        int height = session.BlockHeight;
+        if (cellX % width != 0 || cellY % height != 0)
+        {
+            return;
+        }
+        Span<byte> tiles = stackalloc byte[SheetStrip.Columns * SheetStrip.Rows];
+        BlockTiles(session, tiles);
+        session.PaintBlock(cellX, cellY, width, height, tiles);
+    }
+
+    /// <summary>
+    /// The picker's rectangle resolved into sprite numbers, row-major. This is the one place
+    /// the strip mapping and the block meet: the session keeps the block as two numbers of
+    /// <em>picker</em> cells (it must not know <see cref="SheetStrip"/>, which lives a layer
+    /// above it), and here each cell of that rectangle becomes the sprite the author sees in
+    /// it. Cells the strip does not have cannot occur — the view clamps the block inside it —
+    /// and are written as the empty tile if they somehow do, rather than throwing at the
+    /// author mid-stroke.
+    /// </summary>
+    /// <returns>How many bytes of <paramref name="destination"/> were filled.</returns>
+    public static int BlockTiles(MapEditorSession session, Span<byte> destination)
+    {
+        ArgumentNullException.ThrowIfNull(session);
+        SheetStrip.SpriteToStripCell(session.SelectedSprite, out int anchorColumn, out int anchorRow);
+        int width = session.BlockWidth;
+        int height = session.BlockHeight;
+        if (destination.Length < width * height)
+        {
+            // Unreachable while the view clamps every block inside the strip (the strip's own
+            // cell count is the ceiling, and callers size their buffer by it). Stated rather
+            // than trusted: silently filling half a block would stamp a scrambled one.
+            throw new ArgumentException(
+                $"a {width}x{height} block needs {width * height} bytes, got {destination.Length}.",
+                nameof(destination));
+        }
+        for (int row = 0; row < height; row++)
+        {
+            for (int column = 0; column < width; column++)
+            {
+                destination[row * width + column] =
+                    SheetStrip.TryStripCellToSheetCell(
+                        anchorColumn + column, anchorRow + row, out int sheetX, out int sheetY)
+                        ? (byte)(sheetY * SheetStrip.LaneColumns + sheetX)
+                        : (byte)MapEditorSession.EmptyTile;
+            }
+        }
+        return width * height;
+    }
+
+    /// <summary>
+    /// <c>Ctrl+C</c>: the marked rectangle's tiles go to the clipboard the view owns. Allowed on
+    /// a read-only map for the same reason the eyedropper is — reading a cell writes nothing,
+    /// and copying a piece of someone else's level is exactly what an author needs to do.
+    /// </summary>
+    /// <returns>True when something was copied.</returns>
+    public static bool CopySelection(MapEditorSession session, MapEditorView view)
+    {
+        ArgumentNullException.ThrowIfNull(session);
+        ArgumentNullException.ThrowIfNull(view);
+        if (!view.HasSelection)
+        {
+            return false;
+        }
+        int width = view.SelectionWidth;
+        int height = view.SelectionHeight;
+        byte[] tiles = new byte[width * height];
+        for (int row = 0; row < height; row++)
+        {
+            for (int column = 0; column < width; column++)
+            {
+                tiles[row * width + column] = session.TileAt(view.SelectionX + column, view.SelectionY + row);
+            }
+        }
+        view.Clipboard.Write(width, height, tiles);
+        return true;
+    }
+
+    /// <summary>
+    /// <c>Ctrl+X</c>: copy, then empty the same rectangle — TIC-80's own composition
+    /// (<c>copy + delete</c>). <b>One</b> undo step, because the emptying is
+    /// <see cref="MapEditorSession.ClearArea"/>'s single step and the copy writes no map bytes
+    /// at all: Ctrl+Z after a cut restores the map exactly as it stood. On a read-only map the
+    /// copy still happens and the emptying does not, which is the same door
+    /// <see cref="ClearSelection"/> keeps.
+    /// </summary>
+    public static void CutSelection(MapEditorSession session, MapEditorView view)
+    {
+        if (!CopySelection(session, view))
+        {
+            return;
+        }
+        ClearSelection(session, view);
+    }
+
+    /// <summary>
+    /// The floating block lands here (TIC-80 <c>drawPasteData</c>): one undo step, clipped at
+    /// the map's borders by <see cref="MapEditorSession.PasteBlock"/> rather than refused, and
+    /// the float is over whether or not the map would take it — a read-only map answers the
+    /// click by putting the ghost down, which is the honest way to say "not here".
+    /// </summary>
+    /// <returns>True when the click was consumed by the paste.</returns>
+    public static bool PasteAt(MapEditorSession session, MapEditorView view, int cellX, int cellY)
+    {
+        ArgumentNullException.ThrowIfNull(session);
+        ArgumentNullException.ThrowIfNull(view);
+        if (!view.PasteFloating)
+        {
+            return false;
+        }
+        view.EndPaste();
+        IMapClipboard clipboard = view.Clipboard;
+        if (!clipboard.HasBlock || session.MapReadOnly)
+        {
+            return true;
+        }
+        session.PasteBlock(cellX, cellY, clipboard.Width, clipboard.Height, clipboard.Tiles);
+        return true;
     }
 }

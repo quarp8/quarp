@@ -172,6 +172,34 @@ public class EditorKeysAndStatusLayoutTests
         Assert.False(reader.Read(new KeyboardState(Keys.Z)).EditorPanModifier);
     }
 
+    /// <summary>
+    /// The map's tile-palette modifier (wave R3): Shift as a LEVEL, not an edge, because the
+    /// overlay it raises is meant to be <em>peeked</em> — hold, look, pick, release
+    /// (REFERENCES-EDITORS §3.1: TIC-80's button is labelled "SHOW TILES [shift]").
+    ///
+    /// <para>The overlap with Shift+arrows is the feature and not a clash, and this pins both
+    /// halves of it: the very chord that steps the selected tile is the one that shows the
+    /// tiles, so the author sees what he is stepping through. Break recipe: report
+    /// <c>EditorTilesModifier</c> as an edge instead of a level — the "still held" assertion
+    /// goes red, and in the window the palette would blink shut on the second frame.</para>
+    /// </summary>
+    [Fact]
+    public void ShiftReportsTheTilePaletteModifierAsALevelWhileStillSteppingTheTile()
+    {
+        var reader = new ShellCommandReader();
+
+        ShellCommands down = reader.Read(new KeyboardState(Keys.LeftShift, Keys.Right));
+        ShellCommands held = reader.Read(new KeyboardState(Keys.LeftShift));
+
+        Assert.True(down.EditorTilesModifier);
+        Assert.Equal(1, down.EditorSheetDx);        // both facts are reported, from one chord
+        Assert.True(held.EditorTilesModifier);      // a level: still held, still true
+        Assert.False(reader.Read(new KeyboardState()).EditorTilesModifier);
+        Assert.True(reader.Read(new KeyboardState(Keys.RightShift)).EditorTilesModifier);
+        // Nothing else raises it — a bare arrow steers the map cursor and shows no palette.
+        Assert.False(reader.Read(new KeyboardState(Keys.Right)).EditorTilesModifier);
+    }
+
     // ---- the shape tool's filled modifier ----
 
     /// <summary>Ctrl is the shape's "filled" flag — a level, not an edge, so the preview flips the moment it changes.</summary>

@@ -6,96 +6,120 @@ using Xunit;
 namespace Quarp.Shell.Desktop.Tests;
 
 /// <summary>
-/// The map editor screen's geometry contract (M9 stage 3): whole-integer scales, the shell
-/// standard's strip order, the seventh review's two mirrored tool columns, no overlapping
-/// panels at the shell's real window sizes, and — the part that actually bites — hit tests
-/// that agree with the rectangles, because <see cref="MapEditorLayout"/> is the single owner
-/// both <see cref="MapEditorRenderer"/> draws from and the mouse routing asks. A drift between
-/// "where the cell is" and "what a click on it means" is the bug class this file exists to
-/// make impossible.
+/// The map editor screen's geometry contract, <b>re-pinned in wave R3 for the console</b>.
+///
+/// <para><b>Why every number in this file moved, in one paragraph.</b> Until this wave the map
+/// screen was host UI: <c>MapEditorLayout.Compute</c> took a window size, the theory pinned here
+/// was "35 x 11 cells at every working window size", and the picker and the minimap were
+/// permanent panels beside the map. ADR-029 ended that — a tool screen is drawn into the
+/// console's own 160x90 framebuffer with the same calls a cartridge uses — so the window is no
+/// longer an input to this geometry at all and the old theories could not be adjusted, only
+/// replaced. What replaced them is arithmetic with no freedom left in it: 64 rows of content
+/// over 160 columns, a map cell that is 8x8 and never magnified, and eleven buttons of 10x10
+/// that have to stand somewhere. That yields <b>17 x 8</b> visible cells and nothing else does.
+/// The two panels that no longer fit are named in <see cref="MapEditorLayout"/>'s type comment
+/// with the pixel counts that ruled them out, and both are pinned below as overlays: the palette
+/// as one page of 128 tiles, the minimap as a mode at two cells to the pixel.</para>
+///
+/// <para>What did <b>not</b> change is what this file is really for: hit tests that agree with
+/// the rectangles, because <see cref="MapEditorLayout"/> is the single owner both
+/// <see cref="MapEditorRenderer"/> draws from and <see cref="MapEditorInput"/> asks. A drift
+/// between "where the cell is" and "what a click on it means" is the bug class this file exists
+/// to make impossible.</para>
 /// </summary>
 public class MapEditorLayoutTests
 {
-    /// <summary>The shell's default window (8x the console) — where the editor will actually be used.</summary>
-    private static MapEditorLayout Default() => MapEditorLayout.Compute(1280, 720);
+    /// <summary>The console — the only surface this screen has since wave R3.</summary>
+    private static MapEditorLayout Working() => MapEditorLayout.Compute(160, 90);
+
+    private static MapEditorLayout Palette(int selectedSprite = 0) =>
+        MapEditorLayout.Compute(160, 90, MapEditorOverlay.Tiles, selectedSprite);
+
+    private static MapEditorLayout World() =>
+        MapEditorLayout.Compute(160, 90, MapEditorOverlay.World, 0);
 
     private static readonly EditorButton[] AllButtons = (EditorButton[])Enum.GetValues(typeof(EditorButton));
 
     /// <summary>
-    /// Break recipe: make any scale fractional — e.g. drop the <c>/ mapCell * mapCell</c> trim
-    /// on the canvas by using <c>roomWidth</c> directly — and the whole-multiple assertions go
-    /// red.
-    /// </summary>
-    [Theory]
-    [InlineData(320, 180)]      // the UiScale anchor, below the shell's working size (carded debt)
-    [InlineData(640, 360)]
-    [InlineData(1280, 720)]     // the default
-    [InlineData(1920, 1080)]
-    [InlineData(2560, 1440)]
-    public void ScalesAreWholeAndAtLeastOne(int width, int height)
-    {
-        var layout = MapEditorLayout.Compute(width, height);
-
-        Assert.True(layout.MapScale >= 1);
-        Assert.True(layout.SheetScale >= 1);
-        Assert.True(layout.MinimapScale >= 1);
-        // Whole scaling is checked through the rectangles being exact multiples — a fractional
-        // scale could not produce these sizes.
-        Assert.Equal(0, layout.Canvas.Width % layout.MapCell);
-        Assert.Equal(0, layout.Canvas.Height % layout.MapCell);
-        Assert.Equal(SheetStrip.PixelWidth * layout.SheetScale, layout.Sheet.Width);
-        Assert.Equal(SheetStrip.PixelHeight * layout.SheetScale, layout.Sheet.Height);
-        Assert.Equal(MapEditorLayout.MapColumns * layout.MinimapScale, layout.Minimap.Width);
-        Assert.Equal(MapEditorLayout.MapRows * layout.MinimapScale, layout.Minimap.Height);
-        Assert.Equal((EditorIcons.IconPixels + 4) * layout.Ui, layout.ButtonSize);
-        // The viewport never claims more of the map than the map has.
-        Assert.InRange(layout.VisibleColumns, 1, MapEditorLayout.MapColumns);
-        Assert.InRange(layout.VisibleRows, 1, MapEditorLayout.MapRows);
-    }
-
-    /// <summary>
-    /// Break recipe: delete the <c>- 2 * ui</c> that lifts the canvas off the picker in
-    /// <c>Compute</c> (or the <c>- button - margin</c> that reserves the right tool column) and
-    /// the disjointness assertions go red.
+    /// The wave's headline number, and the one the owner will judge by eye: how much map is on
+    /// screen. Seventeen by eight of a 256x72 map, and every term of that is forced —
+    /// <see cref="MapEditorLayout"/>'s type comment derives it. Break recipe: widen the tool
+    /// block to three columns, or give the viewport a margin, and the column count drops here by
+    /// name.
     /// </summary>
     [Fact]
-    public void AtTheDefaultWindowNothingOverlapsAndEverythingFits()
+    public void TheViewportIsSeventeenByEightWholeCells()
     {
-        var layout = Default();
-        var window = new Rectangle(0, 0, 1280, 720);
+        var layout = Working();
 
-        Assert.True(window.Contains(layout.Canvas));
-        Assert.True(window.Contains(layout.Sheet));
-        Assert.True(window.Contains(layout.Minimap));
-        Assert.True(window.Contains(layout.StatusBar));
-        Assert.False(layout.Canvas.Intersects(layout.Sheet));
-        Assert.False(layout.Canvas.Intersects(layout.Minimap));
-        Assert.False(layout.Sheet.Intersects(layout.Minimap));
-        // Everything stops above the reserved prompt line — the exit question must never hide
-        // under the picker.
-        Assert.True(layout.Canvas.Bottom <= layout.PromptY);
-        Assert.True(layout.Sheet.Bottom <= layout.PromptY);
-        Assert.True(layout.Minimap.Bottom <= layout.PromptY);
+        Assert.Equal(new Rectangle(24, 11, 136, 64), layout.Canvas);
+        Assert.Equal(17, layout.VisibleColumns);
+        Assert.Equal(8, layout.VisibleRows);
+        Assert.Equal(1, layout.MapScale);
+        Assert.Equal(VirtualConsole.SpriteSize, layout.MapCell);
+        Assert.Equal(0, layout.Canvas.Width % layout.MapCell);
+        Assert.Equal(0, layout.Canvas.Height % layout.MapCell);
+        // The camera ceilings follow from the same numbers, and are what every travel path
+        // clamps to.
+        Assert.Equal(MapEditorLayout.MapColumns - 17, layout.MaxCameraX);
+        Assert.Equal(MapEditorLayout.MapRows - 8, layout.MaxCameraY);
+        // The viewport reaches the screen's right edge exactly: nothing is left over to hide a
+        // sliced cell in.
+        Assert.Equal(160, layout.Canvas.Right);
     }
 
     /// <summary>
-    /// Break recipe: place a button the layout forgot (delete one of the two
-    /// <c>buttons[placed++]</c> tool lines) — the count assertion names it; or add a button to
+    /// Nothing overlaps anything, in all three states of the screen, and everything stands above
+    /// the reserved message line. This is the assertion the host version could only make about
+    /// one window size at a time; here there is one size and three states, and all three are
+    /// swept. Break recipe: centre the whole-map view on the SCREEN instead of on the viewport —
+    /// four of its columns land under the tool block and the button/panel assertion goes red,
+    /// which is precisely the defect that placement was changed to avoid.
+    /// </summary>
+    [Theory]
+    [InlineData(MapEditorOverlay.None)]
+    [InlineData(MapEditorOverlay.Tiles)]
+    [InlineData(MapEditorOverlay.World)]
+    public void NothingOverlapsAnythingInAnyStateOfTheScreen(MapEditorOverlay overlay)
+    {
+        var layout = MapEditorLayout.Compute(160, 90, overlay, 0);
+        var screen = new Rectangle(0, 0, 160, 90);
+
+        foreach (Rectangle panel in new[] { layout.Canvas, layout.Sheet, layout.Minimap, layout.Slider })
+        {
+            if (panel.IsEmpty)
+            {
+                continue;
+            }
+            Assert.True(screen.Contains(panel), $"{panel} runs off the console");
+            Assert.True(panel.Bottom <= layout.PromptY, $"{panel} reaches the message line");
+            foreach (EditorButtonPlace place in layout.Buttons)
+            {
+                Assert.False(
+                    place.Rect.Intersects(panel), $"{place.Id} sits under {panel}");
+            }
+        }
+        // The two overlays are alternatives, never neighbours — that is what the enum buys.
+        Assert.False(layout.Sheet.Intersects(layout.Minimap));
+    }
+
+    /// <summary>
+    /// Break recipe: place a button the layout forgot (delete one of the <c>_toolSlots</c>
+    /// entries) — the count assertion names it; or add a button to
     /// <see cref="EditorIcons.BelongsToMapEditor"/> without placing it, same red.
     /// </summary>
     [Fact]
-    public void EveryButtonOfThisScreenIsPlacedInsideTheWindowWithoutOverlaps()
+    public void EveryButtonOfThisScreenIsPlacedOnTheConsoleWithoutOverlaps()
     {
-        var layout = Default();
-        var window = new Rectangle(0, 0, 1280, 720);
+        var layout = Working();
+        var screen = new Rectangle(0, 0, 160, 90);
 
         Assert.Equal(AllButtons.Count(EditorIcons.BelongsToMapEditor), layout.Buttons.Count);
         Assert.All(layout.Buttons, place => Assert.True(EditorIcons.BelongsToMapEditor(place.Id)));
         for (int i = 0; i < layout.Buttons.Count; i++)
         {
-            Assert.True(window.Contains(layout.Buttons[i].Rect), $"{layout.Buttons[i].Id} is off screen");
-            Assert.False(layout.Buttons[i].Rect.Intersects(layout.Canvas));
-            Assert.False(layout.Buttons[i].Rect.Intersects(layout.Sheet));
+            Assert.True(screen.Contains(layout.Buttons[i].Rect), $"{layout.Buttons[i].Id} is off screen");
+            Assert.Equal(ConsoleChrome.ButtonSize, layout.Buttons[i].Rect.Width);
             for (int j = i + 1; j < layout.Buttons.Count; j++)
             {
                 Assert.False(layout.Buttons[i].Rect.Intersects(layout.Buttons[j].Rect));
@@ -104,14 +128,14 @@ public class MapEditorLayoutTests
     }
 
     /// <summary>
-    /// The shell standard's tab strip, literally — the same order the sprite editor's test
-    /// pins, so the two screens cannot drift apart. Break recipe: swap two entries of
-    /// <c>rightTabs</c> in <c>Compute</c>.
+    /// The shell standard's tab strip, literally — the same order the sprite editor's test pins,
+    /// and from the same single owner (<see cref="EditorChrome.RightTabs"/>), so the two screens
+    /// cannot drift apart. Break recipe: swap two entries of that list.
     /// </summary>
     [Fact]
     public void TheTabStripFollowsTheShellStandardsOrder()
     {
-        var layout = Default();
+        var layout = Working();
         Rectangle exit = layout.ButtonRect(EditorButton.ExitTab);
         Rectangle code = layout.ButtonRect(EditorButton.CodeTab);
         Rectangle sprites = layout.ButtonRect(EditorButton.SpritesTab);
@@ -119,64 +143,48 @@ public class MapEditorLayoutTests
         Rectangle sound = layout.ButtonRect(EditorButton.SoundTab);
         Rectangle music = layout.ButtonRect(EditorButton.MusicTab);
 
-        Assert.Equal(layout.Margin, exit.X);
+        Assert.Equal(0, exit.X);
         Assert.True(code.X < sprites.X);
         Assert.True(sprites.X < tilemap.X);
         Assert.True(tilemap.X < sound.X);
         Assert.True(sound.X < music.X);
-        Assert.Equal(1280 - layout.Margin, music.Right);
+        Assert.Equal(160, music.Right);
         Assert.All(
             new[] { exit, code, sprites, tilemap, sound, music },
             tab => Assert.True(layout.TabStrip.Contains(tab)));
         Assert.Equal(0, layout.TabStrip.X);
-        Assert.Equal(1280, layout.TabStrip.Width);
+        Assert.Equal(160, layout.TabStrip.Width);
     }
 
     /// <summary>
-    /// The seventh review, applied to this screen: the drawing surface stands between two
-    /// mirrored strips of buttons, the same gap on each side. Break recipe: change the right
-    /// column's <c>canvas.Right + margin</c> to <c>+ gap</c> — the symmetry assertion goes red
-    /// while everything else stays green, which is exactly the drift the review was about.
+    /// The tool block reads the way the digit keys run: pencil, hand, select, fill in the first
+    /// two rows, left to right and down (REFERENCES-EDITORS §3.1). The seventh review's mirrored
+    /// columns are gone with the host frame — there is no room on 160 px for a column on each
+    /// side of a viewport worth the name — and this is what replaced it. Break recipe: reorder
+    /// <c>_toolSlots</c> and the reading order goes red.
     /// </summary>
     [Fact]
-    public void TheCanvasStandsBetweenTwoMirroredToolColumns()
+    public void TheToolBlockReadsInTheDigitKeysOrder()
     {
-        var layout = Default();
-        Rectangle left = layout.ButtonRect(EditorButton.ToolPencil);
-        Rectangle right = layout.ButtonRect(EditorButton.ToolEraser);
+        var layout = Working();
+        Rectangle pencil = layout.ButtonRect(EditorButton.ToolPencil);
+        Rectangle hand = layout.ButtonRect(EditorButton.ToolHand);
+        Rectangle select = layout.ButtonRect(EditorButton.ToolSelect);
+        Rectangle fill = layout.ButtonRect(EditorButton.ToolFill);
 
-        Assert.Equal(layout.Canvas.X - left.Right, right.X - layout.Canvas.Right);
-        Assert.Equal(layout.Margin, layout.Canvas.X - left.Right);
-        Assert.Equal(layout.Canvas.Y, left.Y);
-        Assert.Equal(layout.Canvas.Y, right.Y);
-        Assert.Equal(layout.ButtonSize, left.Width);
-        Assert.Equal(layout.ButtonSize, right.Width);
-        Assert.True(right.Right <= 1280 - layout.Margin);
-    }
-
-    /// <summary>
-    /// The number the owner will judge by eye and the order asked for by name: how much map is
-    /// on screen. 35 x 11 = 385 cells of 18 432 — about 48 screens of content — and it is the
-    /// SAME patch at every window the shell is used at, because the picker's cell is capped at
-    /// half a map cell (see <c>Compute</c>). Without that cap the strip's scale grows with the
-    /// window and the map is squeezed to <see cref="MapEditorLayout.MinMapRows"/> at 2560x1440;
-    /// break the cap and this theory goes red at the two big sizes only, naming the defect.
-    /// </summary>
-    [Theory]
-    [InlineData(640, 360)]
-    [InlineData(1280, 720)]
-    [InlineData(1920, 1080)]
-    [InlineData(2560, 1440)]
-    public void TheViewportShowsTheSamePatchAtEveryWorkingWindowSize(int width, int height)
-    {
-        var layout = MapEditorLayout.Compute(width, height);
-
-        Assert.Equal(35, layout.VisibleColumns);
-        Assert.Equal(11, layout.VisibleRows);
-        Assert.True(layout.VisibleRows >= MapEditorLayout.MinMapRows);
-        // The camera ceilings follow from the same numbers, and are what every travel path clamps to.
-        Assert.Equal(MapEditorLayout.MapColumns - 35, layout.MaxCameraX);
-        Assert.Equal(MapEditorLayout.MapRows - 11, layout.MaxCameraY);
+        Assert.Equal(new Rectangle(0, 11, 10, 10), pencil);
+        Assert.Equal(pencil.Y, hand.Y);
+        Assert.True(pencil.X < hand.X);
+        Assert.Equal(select.Y, fill.Y);
+        Assert.True(select.Y > pencil.Y);
+        Assert.Equal(pencil.X, select.X);
+        Assert.Equal(hand.X, fill.X);
+        // The block ends above the position bar; the four spare rows are the slack the
+        // arithmetic left, not a panel nobody placed.
+        foreach (EditorButtonPlace place in layout.Buttons)
+        {
+            Assert.True(place.Rect.Bottom <= layout.Slider.Y);
+        }
     }
 
     /// <summary>
@@ -188,7 +196,7 @@ public class MapEditorLayoutTests
     [Fact]
     public void MapCellHitTestsRoundTripThroughTheirRectanglesAtAnyCamera()
     {
-        var layout = Default();
+        var layout = Working();
         const int cameraX = 100;
         const int cameraY = 30;
 
@@ -210,6 +218,30 @@ public class MapEditorLayoutTests
     }
 
     /// <summary>
+    /// <b>The overlay's whole point, as a hit test.</b> A point in the middle of the viewport is
+    /// a map cell while nothing stands over the map and is <em>nothing at all</em> while
+    /// something does — because a click that painted a tile through a palette the author is
+    /// reading would be the exact bug the overlay's rectangle exists to prevent. Break recipe:
+    /// drop the <c>CanvasLive</c> test from <see cref="MapEditorLayout.TryMapCell"/> and the two
+    /// overlay cases go red while the working case still passes.
+    /// </summary>
+    [Fact]
+    public void TheCanvasIsDeafWhileAnythingStandsOverIt()
+    {
+        var working = Working();
+        int x = working.Canvas.X + working.Canvas.Width / 2;
+        int y = working.Canvas.Y + working.Canvas.Height / 2;
+
+        Assert.True(working.CanvasLive);
+        Assert.True(working.TryMapCell(x, y, 0, 0, out _, out _));
+
+        Assert.False(Palette().CanvasLive);
+        Assert.False(Palette().TryMapCell(x, y, 0, 0, out _, out _));
+        Assert.False(World().CanvasLive);
+        Assert.False(World().TryMapCell(x, y, 0, 0, out _, out _));
+    }
+
+    /// <summary>
     /// A drag that wanders off the viewport keeps painting along its edge instead of tearing —
     /// and never names a cell outside the map, which is what lets
     /// <see cref="MapEditorSession.PaintTile"/> keep throwing on out-of-range input. Break
@@ -219,9 +251,9 @@ public class MapEditorLayoutTests
     [Fact]
     public void TheDragClampPullsOutsidePointsToTheNearestVisibleCell()
     {
-        var layout = Default();
-        const int cameraX = 221;        // the far edge: the camera at its ceiling
-        const int cameraY = 61;
+        var layout = Working();
+        int cameraX = layout.MaxCameraX;
+        int cameraY = layout.MaxCameraY;
 
         layout.ClampMapCell(-500, -500, cameraX, cameraY, out int leftX, out int topY);
         Assert.Equal((cameraX, cameraY), (leftX, topY));
@@ -231,130 +263,236 @@ public class MapEditorLayoutTests
     }
 
     /// <summary>
-    /// Every one of the 256 tiles is pickable, and the picker holds them all with no scroll —
-    /// the claim that let this screen drop <see cref="SheetScroll"/> entirely. Break recipe:
-    /// change <c>SheetStrip.Rows</c> to a band that does not divide the sheet, or break
-    /// <see cref="MapEditorLayout.TryTileCell"/>'s sprite arithmetic — every sprite whose lane
-    /// moved goes red by number.
+    /// <b>Every one of the 256 tiles is still pickable</b> — the claim the wave owes, now that
+    /// the palette shows 128 of them at a time. The sweep asks for each sprite's own page, finds
+    /// its cell there, and clicks it back; and it asserts the other half of the rule, that a
+    /// sprite of the OTHER page has no rectangle at all rather than a plausible one belonging to
+    /// its page-mate.
+    ///
+    /// <para>Break recipe: drop the lane offset from <see cref="MapEditorLayout.TryTileStripCell"/>
+    /// and every sprite of page 1 comes back as its page-0 twin — 128 named failures; return the
+    /// page-mate's rectangle instead of <see cref="Rectangle.Empty"/> from
+    /// <see cref="MapEditorLayout.TileBlockRect"/> and the absent-tile assertion goes red while
+    /// the round trip still passes, which is the shape of a frame drawn around the wrong art.</para>
     /// </summary>
     [Fact]
-    public void ThePickerHoldsEverySpriteAndRoundTripsEachOne()
+    public void EverySpriteIsPickableOnItsOwnPageAndOnNoOther()
     {
-        var layout = Default();
+        int perPage = SheetStrip.LaneColumns * SheetStrip.Rows;
 
         for (int sprite = 0; sprite < VirtualConsole.SpriteCount; sprite++)
         {
-            Rectangle cell = layout.TileCellRect(sprite);
-            Assert.True(layout.Sheet.Contains(cell), $"sprite {sprite} is not inside the picker window");
+            MapEditorLayout page = Palette(sprite);
+            Rectangle cell = page.TileCellRect(sprite);
+            Assert.True(page.Sheet.Contains(cell), $"sprite {sprite} is not inside its own page");
             Assert.True(
-                layout.TryTileCell(cell.X + cell.Width / 2, cell.Y + cell.Height / 2, out int hit));
+                page.TryTileCell(cell.X + cell.Width / 2, cell.Y + cell.Height / 2, out int hit));
             Assert.Equal(sprite, hit);
+
+            // The same sprite, asked of the other page: no rectangle, and the same point there
+            // answers that page's own tile instead.
+            MapEditorLayout other = Palette((sprite + perPage) % VirtualConsole.SpriteCount);
+            Assert.True(other.TileCellRect(sprite).IsEmpty);
+            Assert.True(
+                other.TryTileCell(cell.X + cell.Width / 2, cell.Y + cell.Height / 2, out int neighbour));
+            Assert.Equal((sprite + perPage) % VirtualConsole.SpriteCount, neighbour);
         }
+        Assert.Equal(2, SheetStrip.Lanes);   // two pages hold the sheet; a third would need a third road
     }
 
     /// <summary>
-    /// The minimap answers "take me there" for every corner, and the viewport outline it draws
-    /// is derived from the same camera the canvas is. Break recipe: drop the
-    /// <c>MinimapScale</c> division in <see cref="MapEditorLayout.TryMinimapCell"/> — the far
-    /// corner then lands in the middle of the map and this goes red.
+    /// The palette is deaf while it is down — the negative control the whole overlay design
+    /// rests on. Break recipe: give <see cref="MapEditorLayout.Sheet"/> its rectangle
+    /// unconditionally and every one of these goes red.
     /// </summary>
     [Fact]
-    public void TheMinimapReachesEveryCornerAndItsViewportFollowsTheCamera()
+    public void TheLoweredPaletteHasNoRectangleAndAnswersNothing()
     {
-        var layout = Default();
+        var working = Working();
+        MapEditorLayout page = Palette();
 
-        Assert.True(layout.TryMinimapCell(layout.Minimap.X, layout.Minimap.Y, out int x0, out int y0));
+        Assert.True(working.Sheet.IsEmpty);
+        Assert.False(
+            working.TryTileCell(page.Sheet.X + 4, page.Sheet.Y + 4, out _));
+        Assert.False(
+            working.TryTileStripCell(page.Sheet.X + 4, page.Sheet.Y + 4, out _, out _));
+        Assert.True(working.TileCellRect(0).IsEmpty);
+    }
+
+    /// <summary>
+    /// The block drag is confined to the page on show: a pointer dragged off either side sizes
+    /// the block along that page's edge and never onto the other page's tiles, which the author
+    /// cannot see. Break recipe: clamp to <c>SheetStrip.Columns</c> instead of to the lane in
+    /// <see cref="MapEditorLayout.ClampTileStripCell"/> — the page-1 case starts answering
+    /// column 31 for a drag off the left edge of page 0.
+    /// </summary>
+    [Theory]
+    [InlineData(0)]
+    [InlineData(200)]
+    public void ThePickerDragIsClampedToThePageOnShow(int selectedSprite)
+    {
+        MapEditorLayout page = Palette(selectedSprite);
+        int first = page.PaletteLane * SheetStrip.LaneColumns;
+
+        page.ClampTileStripCell(-500, -500, out int leftColumn, out int topRow);
+        Assert.Equal((first, 0), (leftColumn, topRow));
+
+        page.ClampTileStripCell(99999, 99999, out int rightColumn, out int bottomRow);
+        Assert.Equal(
+            (first + SheetStrip.LaneColumns - 1, SheetStrip.Rows - 1), (rightColumn, bottomRow));
+    }
+
+    /// <summary>
+    /// The whole-map view reaches every corner of a 256x72 map, and the viewport outline it
+    /// draws comes from the same camera the canvas is drawn from.
+    ///
+    /// <para><b>Why the far corner answers (254, 70) and not (255, 71)</b>, which is the one
+    /// number a reader of the old test will trip over: a minimap pixel now stands for a 2x2
+    /// block of cells (<see cref="MapEditorLayout.MinimapCellsPerPixel"/> — 256 cells cannot be
+    /// shown one-to-one on a 160 px console, and that is arithmetic, not a choice), and it names
+    /// the first cell of its block. Travel is not lost by it: the verb behind a minimap click
+    /// centres the viewport on the answer and the camera clamps at the border, so the last
+    /// column and the last row are on screen either way — which the camera assertion below
+    /// states outright.</para>
+    /// </summary>
+    [Fact]
+    public void TheWholeMapViewReachesEveryCornerAndItsViewportFollowsTheCamera()
+    {
+        var world = World();
+
+        Assert.Equal(
+            new Rectangle(28, 25, MapEditorLayout.MapColumns / 2, MapEditorLayout.MapRows / 2),
+            world.Minimap);
+
+        Assert.True(world.TryMinimapCell(world.Minimap.X, world.Minimap.Y, out int x0, out int y0));
         Assert.Equal((0, 0), (x0, y0));
         Assert.True(
-            layout.TryMinimapCell(layout.Minimap.Right - 1, layout.Minimap.Bottom - 1, out int x1, out int y1));
-        Assert.Equal((MapEditorLayout.MapColumns - 1, MapEditorLayout.MapRows - 1), (x1, y1));
-        Assert.False(layout.TryMinimapCell(layout.Minimap.X - 1, layout.Minimap.Y, out _, out _));
+            world.TryMinimapCell(world.Minimap.Right - 1, world.Minimap.Bottom - 1, out int x1, out int y1));
+        Assert.Equal((MapEditorLayout.MapColumns - 2, MapEditorLayout.MapRows - 2), (x1, y1));
+        Assert.False(world.TryMinimapCell(world.Minimap.X - 1, world.Minimap.Y, out _, out _));
 
-        Rectangle viewport = layout.MinimapViewport(layout.MaxCameraX, layout.MaxCameraY);
-        Assert.True(layout.Minimap.Contains(viewport));
-        Assert.Equal(layout.Minimap.Right, viewport.Right);
-        Assert.Equal(layout.Minimap.Bottom, viewport.Bottom);
-        Assert.Equal(layout.VisibleColumns * layout.MinimapScale, viewport.Width);
+        // A jump to that cell still parks the camera at its ceiling, so the true far corner is
+        // drawn — the property the coarser pixel could have cost and does not.
+        var view = new MapEditorView();
+        view.JumpTo(world, x1, y1);
+        Assert.Equal((world.MaxCameraX, world.MaxCameraY), (view.CameraX, view.CameraY));
+
+        Rectangle outline = world.MinimapViewport(world.MaxCameraX, world.MaxCameraY);
+        Assert.True(world.Minimap.Contains(outline));
+        Assert.Equal(world.VisibleColumns / 2, outline.Width);
+        Assert.Equal(world.VisibleRows / 2, outline.Height);
+
+        // And it is deaf while it is down.
+        Assert.True(Working().Minimap.IsEmpty);
+        Assert.False(Working().TryMinimapCell(world.Minimap.X + 4, world.Minimap.Y + 4, out _, out _));
     }
 
     /// <summary>
-    /// The footer prompt is one fact with one owner: this screen does not re-derive the verbs'
-    /// rectangles, it asks <see cref="EditorChrome"/> for them, so no two screens still in the
-    /// host frame can disagree about where "Z SAVE+EXIT" is clickable. Break recipe: replace
-    /// the delegation in <see cref="MapEditorLayout.PromptVerbRect"/> with a local copy of the
-    /// formula and then change one constant in <see cref="EditorChrome"/> — this goes red while
-    /// both screens still "look right" in isolation.
+    /// The position bar: the thumb's place is the inverse of the press's answer, so the bar
+    /// cannot show the viewport in one place and travel to another. It spans the viewport's own
+    /// width, which is what makes "where the thumb is" read as "where the map is".
     ///
-    /// <para><b>Re-pinned in wave R2.</b> The reference used to be the sprite editor's own
-    /// rectangles; that screen has left the host frame for the console (ADR-029), where the
-    /// prompt is one line of forty columns with three re-cut verbs, so its rectangles are in a
-    /// different unit and mean different words. The code screen — the nearest sibling still in
-    /// this frame — is the reference now.</para>
+    /// <para>Break recipe: change either side's <c>* MapColumns / Slider.Width</c> and the
+    /// round trip drifts — worst at the far end, which is why the sweep walks the whole
+    /// track.</para>
     /// </summary>
     [Fact]
-    public void ThePromptVerbsAreTheSharedHostChromesOwnRectangles()
+    public void ThePositionBarsThumbAndItsPressAgreeAcrossTheWholeTrack()
     {
-        var layout = Default();
-        var code = CodeEditorLayout.Compute(1280, 720);
+        var layout = Working();
+
+        Assert.Equal(new Rectangle(24, 75, 136, 3), layout.Slider);
+        Assert.Equal(layout.Canvas.X, layout.Slider.X);
+        Assert.Equal(layout.Canvas.Width, layout.Slider.Width);
+
+        for (int x = layout.Slider.X; x < layout.Slider.Right; x++)
+        {
+            Assert.True(layout.TrySliderColumn(x, layout.Slider.Y + 1, out int column));
+            Assert.InRange(column, 0, MapEditorLayout.MapColumns - 1);
+            Rectangle thumb = layout.SliderThumb(Math.Min(column, layout.MaxCameraX));
+            Assert.True(layout.Slider.Contains(thumb), $"the thumb for column {column} leaves the track");
+            Assert.True(thumb.Width >= 2);
+        }
+        Assert.False(layout.TrySliderColumn(layout.Slider.X - 1, layout.Slider.Y + 1, out _));
+        Assert.Equal(layout.Slider.X, layout.SliderThumb(0).X);
+    }
+
+    /// <summary>
+    /// The message line is one fact with one owner: this screen does not re-derive the verbs'
+    /// rectangles, it asks <see cref="ConsoleChrome"/> for them — the same frame the sprite
+    /// screen stands in, so the two console screens cannot disagree about where "ESC STAY" is
+    /// clickable. Break recipe: replace the delegation in
+    /// <see cref="MapEditorLayout.PromptVerbRect"/> with a local copy of the formula and then
+    /// change one constant in <see cref="ConsoleChrome"/> — this goes red while both screens
+    /// still "look right" in isolation.
+    ///
+    /// <para><b>Re-pinned in wave R3.</b> The reference used to be the CODE screen's rectangles,
+    /// because that was the nearest sibling still in the host frame after wave R2 took the
+    /// sprite screen out of it. The map screen has now left that frame too, so the reference is
+    /// the sprite screen again — the frame it actually shares.</para>
+    /// </summary>
+    [Fact]
+    public void ThePromptVerbsAreTheSharedConsoleChromesOwnRectangles()
+    {
+        var layout = Working();
+        var sprites = SpriteEditorLayout.Compute(160, 90, regionCells: 1);
 
         foreach (EditorPromptVerb verb in Enum.GetValues<EditorPromptVerb>())
         {
-            Assert.Equal(code.PromptVerbRect(verb), layout.PromptVerbRect(verb));
+            Assert.Equal(sprites.PromptVerbRect(verb), layout.PromptVerbRect(verb));
             Rectangle rect = layout.PromptVerbRect(verb);
             Assert.True(
                 layout.TryPromptVerb(rect.X + rect.Width / 2, rect.Y + rect.Height / 2, out EditorPromptVerb hit));
             Assert.Equal(verb, hit);
             Assert.True(rect.Bottom <= layout.StatusBar.Y);
         }
-        Assert.Equal(code.PromptY, layout.PromptY);
-        Assert.Equal(code.StatusBar, layout.StatusBar);
+        Assert.Equal(sprites.PromptY, layout.PromptY);
+        Assert.Equal(sprites.StatusBar, layout.StatusBar);
     }
 
     /// <summary>
-    /// The grid's lines fall exactly on cell boundaries and stay inside the canvas (wave 3d).
-    /// Geometry, not pixels: the renderer only chooses whether to draw them and in what colour.
-    /// Break recipe: drop the <c>Canvas.X +</c> from
-    /// <see cref="MapEditorLayout.GridColumnLine"/> and the containment assertion goes red;
-    /// start the loop at column 0 in the renderer instead and the line would land on the
-    /// canvas frame, which is what the "interior only" range below documents.
+    /// The grid's lines fall exactly on cell boundaries and stay inside the canvas. Geometry,
+    /// not pixels: the renderer only chooses whether to draw them and in what colour. Break
+    /// recipe: drop the <c>Canvas.X +</c> from <see cref="MapEditorLayout.GridColumnLine"/> and
+    /// the containment assertion goes red.
     /// </summary>
     [Fact]
     public void TheGridLinesFallOnCellBoundariesInsideTheCanvas()
     {
-        var layout = Default();
+        var layout = Working();
 
         for (int column = 1; column < layout.VisibleColumns; column++)
         {
-            Rectangle line = layout.GridColumnLine(column, layout.Ui);
+            Rectangle line = layout.GridColumnLine(column, 1);
             Assert.Equal(layout.Canvas.X + column * layout.MapCell, line.X);
             Assert.Equal(layout.Canvas.Y, line.Y);
             Assert.Equal(layout.Canvas.Height, line.Height);
-            Assert.True(layout.Canvas.Contains(new Rectangle(line.X, line.Y, 1, line.Height)));
+            Assert.True(layout.Canvas.Contains(line));
         }
         for (int row = 1; row < layout.VisibleRows; row++)
         {
-            Rectangle line = layout.GridRowLine(row, layout.Ui);
+            Rectangle line = layout.GridRowLine(row, 1);
             Assert.Equal(layout.Canvas.Y + row * layout.MapCell, line.Y);
             Assert.Equal(layout.Canvas.X, line.X);
             Assert.Equal(layout.Canvas.Width, line.Width);
-            Assert.True(layout.Canvas.Contains(new Rectangle(line.X, line.Y, line.Width, 1)));
+            Assert.True(layout.Canvas.Contains(line));
         }
     }
 
     /// <summary>
-    /// The pan gesture's arithmetic: a window x inside the canvas answers its column offset,
+    /// The pan gesture's arithmetic: a console x inside the canvas answers its column offset,
     /// and one to the LEFT of the canvas answers a negative one rather than sticking at zero.
     /// C# division truncates toward zero, so the naive form reports 0 for the whole first cell
     /// off the edge and a drag would stall there.
     ///
     /// <para>Break recipe: replace <c>FloorDiv</c> with plain <c>/</c> in
-    /// <see cref="MapEditorLayout.CanvasColumnOffset"/> — the two negative cases go red and
-    /// every positive one still passes, which is precisely the shape of that bug.</para>
+    /// <see cref="MapEditorLayout.CanvasColumnOffset"/> — the negative cases go red and every
+    /// positive one still passes, which is precisely the shape of that bug.</para>
     /// </summary>
     [Fact]
     public void ThePanOffsetsFloorInsteadOfTruncating()
     {
-        var layout = Default();
+        var layout = Working();
         int cell = layout.MapCell;
 
         Assert.Equal(0, layout.CanvasColumnOffset(layout.Canvas.X));
@@ -369,36 +507,18 @@ public class MapEditorLayoutTests
         Assert.Equal(-1, layout.CanvasRowOffset(layout.Canvas.Y - 1));
     }
 
-    /// <summary>A point in no panel hits nothing — the negative control for four hit tests at once.</summary>
+    /// <summary>A point in no panel hits nothing — the negative control for five hit tests at once.</summary>
     [Fact]
     public void APointOutsideEveryPanelHitsNothing()
     {
-        var layout = Default();
-        int x = layout.Canvas.X + layout.Canvas.Width / 2;
-        int y = layout.Canvas.Bottom + 1;    // the gap between the canvas and the picker
+        var layout = Working();
+        int x = layout.Canvas.X - 1;        // the gutter between the tool block and the viewport
+        int y = layout.Canvas.Y + 4;
 
         Assert.False(layout.TryButton(x, y, out _));
         Assert.False(layout.TryMapCell(x, y, 0, 0, out _, out _));
         Assert.False(layout.TryTileCell(x, y, out _));
         Assert.False(layout.TryMinimapCell(x, y, out _, out _));
-    }
-
-    /// <summary>
-    /// The minimap sits against the picker's right edge, one margin away, and the leftover
-    /// width of the band goes to the window's edge — not into a pocket between the two boxes.
-    /// The first cut centred it, and the organizer's eye pass on a live window read the result
-    /// as a hole in the middle of the screen: the same complaint the sixth and seventh reviews
-    /// made about the sprite editor. Pinned here so the next layout change has to mean it.
-    /// </summary>
-    [Theory]
-    [InlineData(1280, 720)]
-    [InlineData(1920, 1080)]
-    [InlineData(640, 360)]
-    public void TheMinimapHugsThePickerAndTheAirGoesToTheEdge(int width, int height)
-    {
-        var layout = MapEditorLayout.Compute(width, height);
-
-        Assert.Equal(layout.Sheet.Right + layout.Margin, layout.Minimap.X);
-        Assert.True(layout.Minimap.Right <= width - layout.Margin);
+        Assert.False(layout.TrySliderColumn(x, y, out _));
     }
 }

@@ -174,12 +174,16 @@ LAYERS=(
   # SpriteEditorRenderer переехал сюда из «рендера» в волне R2, ровно как LibraryRenderer в R1:
   # ни GraphicsDevice, ни Texture2D, ни SpriteBatch — только ShellScreen и вызовы ядра.
   "SpriteEditorRenderer.cs|2"  # пиксели экрана спрайтов — в консоли, не в окне
+  # MapEditorRenderer переехал сюда из «рендера» в волне R3 по тому же признаку, что
+  # LibraryRenderer в R1 и SpriteEditorRenderer в R2: ни GraphicsDevice, ни Texture2D, ни
+  # SpriteBatch — только ShellScreen и вызовы ядра. Вместе с текстурами ушли и два кэша
+  # версий, которые файл держал, чтобы их не перезаливать: держать нечего.
+  "MapEditorRenderer.cs|2"     # пиксели экрана карты — в консоли, не в окне
 
   # --- 3 «рендер»: владеет ресурсом устройства ---
   "PixelFontAtlas.cs|3"        # текстурная полоса глифов
   "EditorIconAtlas.cs|3"       # текстурная полоса иконок
   "EditorChromeRenderer.cs|3"  # пиксели общей рамы (хостовой)
-  "MapEditorRenderer.cs|3"     # пиксели экрана карты
   "CodeEditorRenderer.cs|3"    # пиксели экрана кода
   "SfxEditorRenderer.cs|3"     # пиксели экрана звука
   "ConsolePresenter.cs|3"      # единственная дорога кадра: буфер -> текстура -> окно

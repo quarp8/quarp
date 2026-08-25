@@ -95,7 +95,7 @@ public class EditorInputRouterTests : IDisposable
         /// <c>EditorMouseReaderTests</c> rather than re-run here.
         /// </summary>
         internal EditorShell Context =>
-            Modes.Mode == ShellMode.Editor
+            Modes.Mode is ShellMode.Editor or ShellMode.MapEditor
                 ? new(Modes, Flyout, Hover, SheetScroll, ConsoleWidth, ConsoleHeight)
                 : new(Modes, Flyout, Hover, SheetScroll, WindowWidth, WindowHeight);
 
@@ -103,7 +103,28 @@ public class EditorInputRouterTests : IDisposable
         internal SpriteEditorLayout SpriteLayout =>
             SpriteEditorLayout.Compute(ConsoleWidth, ConsoleHeight, Modes.Editor!.RegionCells);
 
-        internal MapEditorLayout MapLayout => MapEditorLayout.Compute(WindowWidth, WindowHeight);
+        /// <summary>The map screen's geometry, in console pixels since wave R3 — the very rectangles the renderer draws.</summary>
+        internal MapEditorLayout MapLayout =>
+            MapEditorLayout.Compute(
+                ConsoleWidth, ConsoleHeight, Modes.MapView!.Overlay, Modes.MapEditor!.SelectedSprite);
+
+        /// <summary>
+        /// Raise the tile palette, click one tile, lower it again. Wave R3 made the palette an
+        /// overlay — <see cref="MapEditorLayout"/>'s type comment carries the arithmetic that
+        /// forced it — so a mouse path to a tile now starts by asking for the palette. Latched
+        /// rather than held: a latch survives the two frames a click costs.
+        /// </summary>
+        internal void PickTile(int sprite)
+        {
+            MapEditorView view = Modes.MapView!;
+            if (view.Overlay != MapEditorOverlay.Tiles)
+            {
+                view.ToggleTiles();
+            }
+            Rectangle cell = MapLayout.TileCellRect(sprite);
+            Click(cell.X + cell.Width / 2, cell.Y + cell.Height / 2);
+            view.CloseOverlay();
+        }
 
         /// <summary>
         /// One whole frame through the production router for whichever editor is on screen.
@@ -404,8 +425,7 @@ public class EditorInputRouterTests : IDisposable
         MapEditorView view = harness.Modes.MapView!;
         MapEditorLayout layout = harness.MapLayout;
 
-        (int tileX, int tileY) = Centre(layout.TileCellRect(3));
-        harness.Click(tileX, tileY);
+        harness.PickTile(3);
         Assert.Equal(3, map.SelectedSprite);
 
         (int cellX, int cellY) = Centre(layout.MapCellRect(2, 1, view.CameraX, view.CameraY));
@@ -434,8 +454,7 @@ public class EditorInputRouterTests : IDisposable
         MapEditorLayout layout = harness.MapLayout;
         MapEditorView view = harness.Modes.MapView!;
 
-        (int tileX, int tileY) = Centre(layout.TileCellRect(5));
-        harness.Click(tileX, tileY);
+        harness.PickTile(5);
         (int cellX, int cellY) = Centre(layout.MapCellRect(0, 0, view.CameraX, view.CameraY));
         harness.Click(cellX, cellY);
         Assert.True(harness.Modes.MapEditor!.IsDirty);
@@ -475,9 +494,7 @@ public class EditorInputRouterTests : IDisposable
         Assert.Equal(ShellMode.MapEditor, harness.Modes.Mode);
         Assert.NotNull(harness.Modes.MapEditor);
 
-        MapEditorLayout layout = harness.MapLayout;
-        (int tileX, int tileY) = Centre(layout.TileCellRect(6));
-        harness.Click(tileX, tileY);
+        harness.PickTile(6);
 
         Assert.Equal(6, harness.Modes.MapEditor!.SelectedSprite);
     }

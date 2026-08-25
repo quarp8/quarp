@@ -26,6 +26,30 @@ public enum MapEditorTool
 }
 
 /// <summary>
+/// What stands <b>over</b> the map viewport this frame (wave R3). Three states and not two
+/// booleans, because they are mutually exclusive by construction: 160x90 has room for exactly
+/// one of them at a time, and a pair of booleans would let a future edit open both and leave
+/// the hit tests arguing about which rectangle a click belongs to.
+///
+/// <para>The arithmetic that forces this shape is in <see cref="MapEditorLayout"/>: the console
+/// gives a tool screen 64 rows of content, a tile palette page needs all 64 of them, and the
+/// whole-map view needs 36 of them across the full width. Neither fits beside a map viewport
+/// worth looking at, so both became overlays — TIC-80's own answer on a screen 80 px wider than
+/// ours (<c>drawSheetButton</c> slides the sheet over the map; <c>world.c</c> is a mode).</para>
+/// </summary>
+public enum MapEditorOverlay
+{
+    /// <summary>Nothing over the map: the viewport, the grid, the cursor. The working state.</summary>
+    None,
+
+    /// <summary>The tile palette, one page of it, over the viewport — Shift held or the button latched.</summary>
+    Tiles,
+
+    /// <summary>The whole 256x72 map at two cells to the pixel, over the whole content band — Tab or the button.</summary>
+    World,
+}
+
+/// <summary>
 /// Who owns the fact "this block of map cells was copied" (wave 3e). An interface with exactly
 /// one implementation today — <see cref="MapMemoryClipboard"/>, which keeps the bytes in the
 /// shell and never touches the machine's clipboard — and that is the whole point of it existing
@@ -169,6 +193,65 @@ public sealed class MapEditorView
     /// one line per eight pixels there is more grid than picture.
     /// </summary>
     public bool GridShown { get; private set; } = true;
+
+    /// <summary>
+    /// True while the tile palette is latched open by its button (wave R3). Separate from the
+    /// held Shift below because the two have different lifetimes: the key's answer is a fact
+    /// about <em>this frame</em> and the button's survives until it is clicked again. TIC-80
+    /// carries the same pair — <c>drawSheetButton</c> and <c>tic_api_key(tic_key_shift)</c>.
+    /// </summary>
+    public bool TilesLatched { get; private set; }
+
+    /// <summary>The whole-map view (TIC-80's WORLD MODE) — the button's and Tab's shared switch.</summary>
+    public bool WorldShown { get; private set; }
+
+    private bool _tilesHeld;
+
+    /// <summary>
+    /// What stands over the map this frame. <b>One fact, one owner</b>: the router computes the
+    /// layout from it and the renderer draws from the same value, so the palette can never be
+    /// painted over a viewport whose clicks still reach the map underneath. World outranks the
+    /// palette because it is the coarser view — being thrown from "the whole map" back to "the
+    /// map under a sheet of tiles" by a key held for a different reason would be a mode switch
+    /// nobody asked for.
+    /// </summary>
+    public MapEditorOverlay Overlay =>
+        WorldShown ? MapEditorOverlay.World
+        : TilesLatched || _tilesHeld ? MapEditorOverlay.Tiles
+        : MapEditorOverlay.None;
+
+    /// <summary>
+    /// This frame's answer to "is Shift down". Written once per frame by the router, before the
+    /// layout is computed, so the held palette is exactly as live as the key and no frame ever
+    /// draws one state and hit-tests the other.
+    /// </summary>
+    public void SetTilesHeld(bool held) => _tilesHeld = held;
+
+    /// <summary>The palette button's verb: latch the palette open, or lower it.</summary>
+    public void ToggleTiles() => TilesLatched = !TilesLatched;
+
+    /// <summary>The world button's and Tab's verb.</summary>
+    public void ToggleWorld() => WorldShown = !WorldShown;
+
+    /// <summary>
+    /// Esc's first meaning while anything stands over the map: put it away. Returns true when
+    /// there was something to put away, so the router can stop before Esc's other meanings
+    /// (drop the floating block, drop the selection, leave the screen) get their turn.
+    /// </summary>
+    public bool CloseOverlay()
+    {
+        if (WorldShown)
+        {
+            WorldShown = false;
+            return true;
+        }
+        if (TilesLatched)
+        {
+            TilesLatched = false;
+            return true;
+        }
+        return false;
+    }
 
     /// <summary>True while a marked rectangle exists — what <c>Del</c> asks before emptying anything.</summary>
     public bool HasSelection { get; private set; }
@@ -553,6 +636,29 @@ public static class MapEditorTileStep
         {
             session.SelectSprite(sheetY * SheetStrip.LaneColumns + sheetX);
         }
+    }
+
+    /// <summary>
+    /// The other page of the tile palette, same cell (wave R3): the selected tile moves by one
+    /// whole <see cref="SheetStrip"/> lane, wrapping, and the block in hand travels with it.
+    ///
+    /// <para><b>Why the page is a move of the SELECTION and not a counter.</b> On a 160x90
+    /// console the palette shows one lane of 128 tiles at a time
+    /// (<see cref="MapEditorLayout"/> carries the arithmetic), and which lane is shown is
+    /// derived from the selected tile. That is deliberate: a stored page and a stored selection
+    /// are two facts that can disagree, and the shape of that disagreement is a bright frame
+    /// drawn around a tile the author is not holding. With the page derived there is nothing to
+    /// keep in step — so "show me the other page" has to be "hold the same cell on the other
+    /// page", which is what this is. Both channels reach it: the wheel over the palette, and
+    /// Shift+arrows walking off the lane's edge through <see cref="Apply"/>.</para>
+    /// </summary>
+    public static void Page(MapEditorSession session)
+    {
+        ArgumentNullException.ThrowIfNull(session);
+
+        int lane = SheetStrip.LaneColumns * SheetStrip.Rows;
+        int moved = (session.SelectedSprite + lane) % (lane * SheetStrip.Lanes);
+        session.SelectSpriteBlock(moved, session.BlockWidth, session.BlockHeight);
     }
 }
 

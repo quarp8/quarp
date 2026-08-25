@@ -223,13 +223,15 @@ public class MapEditorModeTests : IDisposable
 
     /// <summary>
     /// Everything a map button click may legally touch, in one comparable value — the tool,
-    /// the grid switch and the marked rectangle joined in wave 3d, because that wave's four
-    /// tool buttons and its grid button change nothing else. A button whose only effect is
-    /// invisible to this record would read as unwired, which is the contract working.
+    /// the grid switch and the marked rectangle joined in wave 3d, and the tile palette's latch
+    /// and the whole-map switch in wave R3, because those two buttons change nothing else. A
+    /// button whose only effect is invisible to this record would read as unwired, which is the
+    /// contract working.
     /// </summary>
     private sealed record Snapshot(
         ShellMode Mode, int Version, bool Dirty, bool CanUndo, bool CanRedo, int Tile,
-        bool PromptShown, MapEditorTool Tool, bool GridShown, bool HasSelection);
+        bool PromptShown, MapEditorTool Tool, bool GridShown, bool HasSelection,
+        bool TilesLatched, bool WorldShown);
 
     private static Snapshot Observe(ShellModeMachine machine)
     {
@@ -237,7 +239,8 @@ public class MapEditorModeTests : IDisposable
         MapEditorView view = machine.MapView!;
         return new Snapshot(
             machine.Mode, map.Version, map.IsDirty, map.CanUndo, map.CanRedo, map.SelectedSprite,
-            view.ExitPromptShown, view.Tool, view.GridShown, view.HasSelection);
+            view.ExitPromptShown, view.Tool, view.GridShown, view.HasSelection,
+            view.TilesLatched, view.WorldShown);
     }
 
     /// <summary>The shell's press dispatch over the real router pieces — see the type comment.</summary>
@@ -291,7 +294,10 @@ public class MapEditorModeTests : IDisposable
     [Fact]
     public void EveryPlacedLiveMapButtonChangesSomethingObservable()
     {
-        foreach (EditorButtonPlace place in MapEditorLayout.Compute(1280, 720).Buttons)
+        // Console pixels since wave R3: the map screen is laid out on the console's own 160x90
+        // grid (ADR-029), not on a window. The button LIST is what this sweep needs and it is
+        // the same seventeen either way — only the rectangles moved, and two switches joined.
+        foreach (EditorButtonPlace place in MapEditorLayout.Compute(160, 90).Buttons)
         {
             ShellModeMachine machine = MachineOnTheMapTab(out _);
             Prepare(machine.MapEditor!, machine.MapView!, place.Id);

@@ -784,19 +784,20 @@ public class SfxEditorTests : IDisposable
     [Fact]
     public void TheSoundScreenStandsInTheSameChromeAsItsSiblings()
     {
+        // The map left the host chrome in wave R3 (ADR-029); the code screen is the last sibling
+        // this one shares a frame with, and this test dies with the host chrome when it moves too.
         var sfx = SfxEditorLayout.Compute(WindowWidth, WindowHeight);
-        var map = MapEditorLayout.Compute(WindowWidth, WindowHeight);
         var code = CodeEditorLayout.Compute(WindowWidth, WindowHeight);
 
-        Assert.Equal(map.Ui, sfx.Ui);
-        Assert.Equal(map.Margin, sfx.Margin);
-        Assert.Equal(map.ButtonSize, sfx.ButtonSize);
-        Assert.Equal(map.TabStrip, sfx.TabStrip);
-        Assert.Equal(map.StatusBar, sfx.StatusBar);
-        Assert.Equal(map.PromptY, sfx.PromptY);
+        Assert.Equal(code.Ui, sfx.Ui);
+        Assert.Equal(code.Margin, sfx.Margin);
+        Assert.Equal(code.ButtonSize, sfx.ButtonSize);
+        Assert.Equal(code.TabStrip, sfx.TabStrip);
+        Assert.Equal(code.StatusBar, sfx.StatusBar);
+        Assert.Equal(code.PromptY, sfx.PromptY);
         foreach (EditorPromptVerb verb in Enum.GetValues<EditorPromptVerb>())
         {
-            Assert.Equal(map.PromptVerbRect(verb), sfx.PromptVerbRect(verb));
+            Assert.Equal(code.PromptVerbRect(verb), sfx.PromptVerbRect(verb));
         }
         EditorButton[] shared =
         {
@@ -806,7 +807,7 @@ public class SfxEditorTests : IDisposable
         };
         foreach (EditorButton button in shared)
         {
-            Assert.Equal(map.ButtonRect(button), sfx.ButtonRect(button));
+            Assert.Equal(code.ButtonRect(button), sfx.ButtonRect(button));
             Assert.Equal(code.ButtonRect(button), sfx.ButtonRect(button));
         }
     }

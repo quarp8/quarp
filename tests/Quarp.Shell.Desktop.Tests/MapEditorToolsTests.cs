@@ -26,6 +26,12 @@ namespace Quarp.Shell.Desktop.Tests;
 /// </summary>
 public class MapEditorToolsTests : IDisposable
 {
+    /// <summary>
+    /// The parked pointer, spelled once for the outer class too: <c>Harness</c> keeps its own
+    /// copy, and a nested type's private member is out of the enclosing type's reach.
+    /// </summary>
+    private const int Off = -1000;
+
     private readonly string _root;
 
     public MapEditorToolsTests()
@@ -36,10 +42,7 @@ public class MapEditorToolsTests : IDisposable
 
     public void Dispose() => Directory.Delete(_root, recursive: true);
 
-    private const int WindowWidth = 1280;
-    private const int WindowHeight = 720;
-
-    /// <summary>The console's own screen — the surface the sprite editor is laid out on since wave R2.</summary>
+    /// <summary>The console's own screen — the only surface a tool screen is laid out on since wave R3.</summary>
     private const int ConsoleWidth = 160;
 
     private const int ConsoleHeight = 90;
@@ -58,6 +61,9 @@ public class MapEditorToolsTests : IDisposable
         private readonly ShellCommandReader _keys = new();
         private readonly EditorMouseReader _pointer = new();
 
+        /// <summary>The wheel's cumulative value, as MonoGame reports it — the reader owns the delta.</summary>
+        private int _wheel;
+
         internal Harness(ShellModeMachine modes) => Modes = modes;
 
         internal ShellModeMachine Modes { get; }
@@ -72,7 +78,8 @@ public class MapEditorToolsTests : IDisposable
 
         internal MapEditorView View => Modes.MapView!;
 
-        internal MapEditorLayout Layout => MapEditorLayout.Compute(WindowWidth, WindowHeight);
+        internal MapEditorLayout Layout =>
+            MapEditorLayout.Compute(ConsoleWidth, ConsoleHeight, View.Overlay, Map.SelectedSprite);
 
         /// <summary>
         /// Rebuilt per frame, like the window's. Since wave R2 the two numbers are <b>the size
@@ -86,9 +93,26 @@ public class MapEditorToolsTests : IDisposable
         /// <c>EditorMouseReaderTests</c> rather than re-run here.
         /// </summary>
         internal EditorShell Context =>
-            Modes.Mode == ShellMode.Editor
-                ? new(Modes, Flyout, Hover, SheetScroll, ConsoleWidth, ConsoleHeight)
-                : new(Modes, Flyout, Hover, SheetScroll, WindowWidth, WindowHeight);
+            new(Modes, Flyout, Hover, SheetScroll, ConsoleWidth, ConsoleHeight);
+
+
+        /// <summary>
+        /// Wave R3: the tile palette is an overlay now (ADR-029's arithmetic —
+        /// <see cref="MapEditorLayout"/>'s type comment), so a test that wants to click a tile
+        /// has to raise it first, and lower it again before touching the map underneath.
+        /// Latched rather than held, because a latch survives the two frames a click costs while
+        /// a held Shift would have to be re-asserted in every one of them.
+        /// </summary>
+        internal void PickTile(int sprite)
+        {
+            if (View.Overlay != MapEditorOverlay.Tiles)
+            {
+                View.ToggleTiles();
+            }
+            Rectangle cell = Layout.TileCellRect(sprite);
+            Click(cell.X + cell.Width / 2, cell.Y + cell.Height / 2);
+            View.CloseOverlay();
+        }
 
         /// <summary>One whole frame through the production map router — the mode is never anything else here.</summary>
         internal void Frame(
@@ -97,6 +121,22 @@ public class MapEditorToolsTests : IDisposable
             ShellCommands commands = _keys.Read(new KeyboardState(down));
             EditorMouse mouse = _pointer.Read(new MouseState(
                 mouseX, mouseY, 0, left, middle, right, ButtonState.Released, ButtonState.Released));
+            MapEditorInput.Update(Context, commands, mouse, FrameSeconds);
+        }
+
+        /// <summary>
+        /// One frame with the wheel turned by <paramref name="delta"/> detents at a point. The
+        /// value handed to <see cref="MouseState"/> is cumulative, like MonoGame's, so the
+        /// production <see cref="EditorMouseReader"/> does the differencing here exactly as it
+        /// does in the window.
+        /// </summary>
+        internal void Wheel(int x, int y, int delta)
+        {
+            _wheel += delta;
+            ShellCommands commands = _keys.Read(new KeyboardState(NoKeys));
+            EditorMouse mouse = _pointer.Read(new MouseState(
+                x, y, _wheel, ButtonState.Released, ButtonState.Released, ButtonState.Released,
+                ButtonState.Released, ButtonState.Released));
             MapEditorInput.Update(Context, commands, mouse, FrameSeconds);
         }
 
@@ -373,8 +413,7 @@ public class MapEditorToolsTests : IDisposable
         Harness clicked = OpenMapEditor();
         (int fillButtonX, int fillButtonY) = Centre(clicked.Layout.ButtonRect(EditorButton.ToolFill));
         clicked.Click(fillButtonX, fillButtonY);
-        (int tileX, int tileY) = Centre(clicked.Layout.TileCellRect(6));
-        clicked.Click(tileX, tileY);
+        clicked.PickTile(6);
         (int cellX, int cellY) = CellPoint(clicked, 3, 2);
         clicked.Click(cellX, cellY);
 
@@ -412,8 +451,7 @@ public class MapEditorToolsTests : IDisposable
     public void TheRightButtonPutsTileZeroWhereTheLeftPutsTheSelectedTile()
     {
         Harness harness = OpenMapEditor();
-        (int tileX, int tileY) = Centre(harness.Layout.TileCellRect(11));
-        harness.Click(tileX, tileY);
+        harness.PickTile(11);
 
         (int cellX, int cellY) = CellPoint(harness, 7, 3);
         harness.Click(cellX, cellY);
@@ -436,13 +474,14 @@ public class MapEditorToolsTests : IDisposable
     public void TheMiddleButtonTakesTheTileUnderTheCursor()
     {
         Harness harness = OpenMapEditor();
-        (int tileX, int tileY) = Centre(harness.Layout.TileCellRect(19));
-        harness.Click(tileX, tileY);
+        harness.PickTile(19);
         (int cellX, int cellY) = CellPoint(harness, 2, 4);
         harness.Click(cellX, cellY);
         int version = harness.Map.Version;
 
-        (int emptyX, int emptyY) = CellPoint(harness, 9, 9);
+        // Wave R3 shrank the visible canvas to 17x8 cells (ADR-029): a point outside it is
+        // no longer a map click at all, so the cells these paths use had to come inside.
+        (int emptyX, int emptyY) = CellPoint(harness, 9, 6);
         harness.MiddleClick(emptyX, emptyY);
         Assert.Equal(0, harness.Map.SelectedSprite);        // an empty cell reads back as tile 0
 
@@ -473,12 +512,13 @@ public class MapEditorToolsTests : IDisposable
     public void SpaceAndALeftDragPanTheViewAndPaintNothing()
     {
         Harness harness = OpenMapEditor();
-        (int tileX, int tileY) = Centre(harness.Layout.TileCellRect(13));
-        harness.Click(tileX, tileY);
+        harness.PickTile(13);
         Assert.Equal(0, harness.View.CameraX);
 
         MapEditorLayout layout = harness.Layout;
-        (int fromX, int fromY) = CellPoint(harness, 20, 6);
+        // Wave R3 shrank the visible canvas to 17x8 cells (ADR-029): a point outside it is
+        // no longer a map click at all, so the cells these paths use had to come inside.
+        (int fromX, int fromY) = CellPoint(harness, 14, 6);
         int cell = layout.MapCell;
         harness.LeftDown(fromX, fromY, Keys.Space);
         // Drag six cells left and two up: the grabbed cell follows the pointer, so the camera
@@ -505,13 +545,14 @@ public class MapEditorToolsTests : IDisposable
     public void TheHandToolPansOnAPlainLeftDrag()
     {
         Harness harness = OpenMapEditor();
-        (int tileX, int tileY) = Centre(harness.Layout.TileCellRect(2));
-        harness.Click(tileX, tileY);
+        harness.PickTile(2);
         (int handX, int handY) = Centre(harness.Layout.ButtonRect(EditorButton.ToolHand));
         harness.Click(handX, handY);
 
         int cell = harness.Layout.MapCell;
-        (int fromX, int fromY) = CellPoint(harness, 25, 8);
+        // Wave R3 shrank the visible canvas to 17x8 cells (ADR-029): a point outside it is
+        // no longer a map click at all, so the cells these paths use had to come inside.
+        (int fromX, int fromY) = CellPoint(harness, 12, 5);
         harness.LeftDown(fromX, fromY);
         harness.Frame(
             NoKeys, fromX - 4 * cell, fromY, ButtonState.Pressed, ButtonState.Released, ButtonState.Released);
@@ -539,8 +580,7 @@ public class MapEditorToolsTests : IDisposable
     public void DeleteEmptiesTheMarkedRectangleInOneUndoStep()
     {
         Harness harness = OpenMapEditor();
-        (int tileX, int tileY) = Centre(harness.Layout.TileCellRect(8));
-        harness.Click(tileX, tileY);
+        harness.PickTile(8);
         harness.Tap(Keys.D4);                       // fill, so the whole map is tile 8 in one step
         (int anyCellX, int anyCellY) = CellPoint(harness, 0, 0);
         harness.Click(anyCellX, anyCellY);
@@ -665,8 +705,7 @@ public class MapEditorToolsTests : IDisposable
     /// <summary>The two runs' shared ground: one fill, one undo step, every cell tile 8.</summary>
     private static void FillWholeMapWithTileEight(Harness harness)
     {
-        (int tileX, int tileY) = Centre(harness.Layout.TileCellRect(8));
-        harness.Click(tileX, tileY);
+        harness.PickTile(8);
         harness.Tap(Keys.D4);
         (int cellX, int cellY) = CellPoint(harness, 0, 0);
         harness.Click(cellX, cellY);
@@ -683,8 +722,7 @@ public class MapEditorToolsTests : IDisposable
     public void DeleteWithNothingMarkedSelectsTileZeroAndChangesNoCell()
     {
         Harness harness = OpenMapEditor();
-        (int tileX, int tileY) = Centre(harness.Layout.TileCellRect(21));
-        harness.Click(tileX, tileY);
+        harness.PickTile(21);
         (int cellX, int cellY) = CellPoint(harness, 5, 5);
         harness.Click(cellX, cellY);
         int version = harness.Map.Version;
@@ -749,8 +787,7 @@ public class MapEditorToolsTests : IDisposable
     public void TheEraserButtonSelectsTileZeroAndLeavesTheToolAlone()
     {
         Harness harness = OpenMapEditor();
-        (int tileX, int tileY) = Centre(harness.Layout.TileCellRect(30));
-        harness.Click(tileX, tileY);
+        harness.PickTile(30);
         Assert.Equal(30, harness.Map.SelectedSprite);
         (int cellX, int cellY) = CellPoint(harness, 1, 1);
         harness.Click(cellX, cellY);
@@ -766,6 +803,131 @@ public class MapEditorToolsTests : IDisposable
         // And it really erases: the pencil now stamps emptiness over what was there.
         harness.Click(cellX, cellY);
         Assert.Equal(0, harness.Map.TileAt(1, 1));
+    }
+
+    // ==================================================================================
+    // 7b. Wave R3's two overlays: the tile palette and the whole-map view.
+    // ==================================================================================
+
+    /// <summary>
+    /// <b>The palette is reachable from both channels and blocks the map while it is up.</b>
+    /// Holding Shift raises it (TIC-80's "SHOW TILES [shift]"), its button latches it, and while
+    /// it stands a click in the middle of the viewport paints nothing — which is the whole point
+    /// of the overlay having its own rectangle rather than the map staying live underneath it.
+    ///
+    /// <para>Break recipe: (a) drop the <c>view.SetTilesHeld</c> line from
+    /// <see cref="MapEditorInput"/> and the held case goes red while the latched one passes,
+    /// naming the channel that broke; (b) drop the <c>CanvasLive</c> test from
+    /// <see cref="MapEditorLayout.TryMapCell"/> and the "paints nothing" assertion goes red — a
+    /// stroke landing on a map the author cannot see.</para>
+    /// </summary>
+    [Fact]
+    public void ShiftHoldsThePaletteOpenAndItsButtonLatchesIt()
+    {
+        Harness harness = OpenMapEditor();
+        Assert.Equal(MapEditorOverlay.None, harness.View.Overlay);
+
+        // Channel A: the key. A frame with Shift down raises it; the frame after it falls.
+        harness.Frame(
+            new[] { Keys.LeftShift }, Off, Off,
+            ButtonState.Released, ButtonState.Released, ButtonState.Released);
+        Assert.Equal(MapEditorOverlay.Tiles, harness.View.Overlay);
+        harness.Idle();
+        Assert.Equal(MapEditorOverlay.None, harness.View.Overlay);
+
+        // Channel B: the button. It latches, so it survives frames with nothing held.
+        (int x, int y) = Centre(harness.Layout.ButtonRect(EditorButton.TilesToggle));
+        harness.Click(x, y);
+        Assert.True(harness.View.TilesLatched);
+        harness.Idle();
+        Assert.Equal(MapEditorOverlay.Tiles, harness.View.Overlay);
+
+        // And the map underneath is deaf: a press in the middle of the viewport writes nothing.
+        // The point is a strip of viewport the palette does NOT cover, so this is the map's own
+        // pixel being asked and refused — not the palette swallowing the click.
+        MapEditorLayout working = MapEditorLayout.Compute(ConsoleWidth, ConsoleHeight);
+        Assert.False(harness.Layout.Sheet.Contains(working.Canvas.X + 1, working.Canvas.Y + 32));
+        harness.Click(working.Canvas.X + 1, working.Canvas.Y + 32);
+        Assert.False(harness.Map.IsDirty);
+        Assert.False(harness.Map.CanUndo);
+
+        // Esc puts it away before it means anything else — and the map is live again.
+        harness.Tap(Keys.Escape);
+        Assert.Equal(MapEditorOverlay.None, harness.View.Overlay);
+        Assert.Equal(ShellMode.MapEditor, harness.Modes.Mode);
+    }
+
+    /// <summary>
+    /// <b>The whole-map view is reachable from both channels, travels, and hides the viewport.</b>
+    /// Tab is TIC-80's key for it (<c>processKeyboard</c>: "Tab — WORLD MODE") and the button is
+    /// its mouse half; a click on the thumbnail is "take me there", through the very
+    /// <see cref="MapEditorView.JumpTo"/> the position bar uses.
+    ///
+    /// <para>Break recipe: (a) delete the <c>EditorRegionCycle</c> arm from
+    /// <see cref="MapEditorInput"/> and the key half goes red while the button half passes;
+    /// (b) give <see cref="MapEditorLayout.Minimap"/> its rectangle unconditionally and the
+    /// "deaf while down" assertion goes red — a thumbnail nobody can see would still be
+    /// swallowing clicks aimed at the map.</para>
+    /// </summary>
+    [Fact]
+    public void TabAndItsButtonOpenTheWholeMapViewAndAClickOnItTravels()
+    {
+        Harness harness = OpenMapEditor();
+
+        harness.Tap(Keys.Tab);
+        Assert.True(harness.View.WorldShown);
+        Assert.Equal(MapEditorOverlay.World, harness.View.Overlay);
+
+        // A click at the thumbnail's far corner takes the viewport to the map's far corner.
+        MapEditorLayout world = harness.Layout;
+        Assert.Equal(MapEditorOverlay.World, world.Overlay);
+        harness.Click(world.Minimap.Right - 1, world.Minimap.Bottom - 1);
+        Assert.Equal((world.MaxCameraX, world.MaxCameraY), (harness.View.CameraX, harness.View.CameraY));
+
+        // Tab again puts it away; the button is the same switch from the other channel.
+        harness.Tap(Keys.Tab);
+        Assert.False(harness.View.WorldShown);
+        (int x, int y) = Centre(harness.Layout.ButtonRect(EditorButton.WorldToggle));
+        harness.Click(x, y);
+        Assert.True(harness.View.WorldShown);
+
+        // And while it is down, the pixels it used to occupy belong to nobody.
+        harness.View.ToggleWorld();
+        Assert.True(harness.Layout.Minimap.IsEmpty);
+        Assert.False(
+            harness.Layout.TryMinimapCell(world.Minimap.X + 4, world.Minimap.Y + 4, out _, out _));
+    }
+
+    /// <summary>
+    /// The palette's second page, reached by the wheel over it — the mouse's half of walking off
+    /// the lane's edge with Shift+arrows. The page is <em>derived</em> from the tile in hand
+    /// (<see cref="MapEditorLayout.PaletteLane"/>), so "show me the other page" has to be "hold
+    /// the same cell on the other page", and that is what the wheel does; the block in hand
+    /// travels with it.
+    ///
+    /// <para>Break recipe: make <see cref="MapEditorTileStep.Page"/> call
+    /// <c>SelectSprite</c> instead of <c>SelectSpriteBlock</c> — the block assertion goes red
+    /// while the page one passes, which is the shape of a page flip that quietly drops what the
+    /// pencil was carrying.</para>
+    /// </summary>
+    [Fact]
+    public void TheWheelOverThePaletteFlipsItsPageAndKeepsTheBlock()
+    {
+        Harness harness = OpenMapEditor();
+        harness.Map.SelectSpriteBlock(3, 2, 2);
+        harness.View.ToggleTiles();
+        MapEditorLayout page = harness.Layout;
+        Assert.Equal(0, page.PaletteLane);
+
+        harness.Wheel(page.Sheet.X + 4, page.Sheet.Y + 4, 120);
+
+        Assert.Equal(3 + SheetStrip.LaneColumns * SheetStrip.Rows, harness.Map.SelectedSprite);
+        Assert.Equal((2, 2), (harness.Map.BlockWidth, harness.Map.BlockHeight));
+        Assert.Equal(1, harness.Layout.PaletteLane);
+
+        harness.Wheel(page.Sheet.X + 4, page.Sheet.Y + 4, 120);
+        Assert.Equal(3, harness.Map.SelectedSprite);        // two pages, so it comes back round
+        Assert.Equal(0, harness.Layout.PaletteLane);
     }
 
     // ==================================================================================

@@ -47,7 +47,9 @@ public class EmptyTileNoticeTests : IDisposable
         var map = new MapEditorSession(CartFolder());
 
         map.SelectSprite(0);
-        Assert.Equal("TILE 000 IS THE EMPTY CELL - PAINTING WITH IT ERASES", MapEditorRenderer.StandingNotice(map));
+        // Re-cut in wave R3: the console's message line holds 39 characters and the host
+        // frame's 52-character sentence did not. See MapEditorRenderer.StandingNotice.
+        Assert.Equal("TILE 000 IS EMPTY - IT ERASES CELLS", MapEditorRenderer.StandingNotice(map));
 
         map.SelectSprite(1);
         Assert.Null(MapEditorRenderer.StandingNotice(map));

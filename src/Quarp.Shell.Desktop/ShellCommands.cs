@@ -147,6 +147,21 @@ public readonly struct ShellCommands
     public bool EditorPanModifier { get; init; }
 
     /// <summary>
+    /// Map editor: Shift is held — the tile palette slides over the map while it is
+    /// (REFERENCES-EDITORS §3.1: TIC-80's <c>drawSheetButton</c> is labelled "SHOW TILES
+    /// [shift]"). A level and not an edge, because the palette is meant to be <em>peeked</em>:
+    /// hold, look, pick with Shift+arrows or the mouse, release. The button next to it latches
+    /// the same overlay open for a pointer-only hand.
+    ///
+    /// <para><b>What it shares and why that is safe.</b> Shift also selects the sheet-step
+    /// fields (<see cref="EditorSheetDx"/>) and the flag digits. That overlap is the feature and
+    /// not a clash: the very chord that steps the tile is the one that shows the tiles, so the
+    /// author sees what he is stepping through. Nothing else in the shell reads a bare Shift as
+    /// a verb.</para>
+    /// </summary>
+    public bool EditorTilesModifier { get; init; }
+
+    /// <summary>
     /// Editor: the keyboard pencil is held — bare Z (never the Ctrl+Z chord) or Space, either
     /// one (M9 stage 2.5: draw a stroke by holding this and steering with the arrows). Space
     /// doubles as the game mode's pause; the modes never read each other's fields.
@@ -441,6 +456,7 @@ public sealed class ShellCommandReader
             // that true when one does.
             EditorGridToggle = !ctrl && Pressed(keyboard, Keys.OemTilde),
             EditorPanModifier = keyboard.IsKeyDown(Keys.Space),
+            EditorTilesModifier = shift,
             EditorPaintDown = paintDown,
             EditorPaintPressed = paintDown && !paintWasDown,
             EditorPaintReleased = !paintDown && paintWasDown,

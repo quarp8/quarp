@@ -31,7 +31,23 @@ public class MapEditorViewTests : IDisposable
         return folder;
     }
 
-    private static MapEditorLayout Layout() => MapEditorLayout.Compute(1280, 720);
+    /// <summary>
+    /// The working geometry of the map screen, in console pixels since wave R3 (ADR-029):
+    /// 17 columns by 8 rows of a 256x72 map, measured on the console's own 160x90 grid. It used
+    /// to be measured on a 1280x720 window, which is a number this project no longer has.
+    /// </summary>
+    private static MapEditorLayout Layout() => MapEditorLayout.Compute(160, 90);
+
+    /// <summary>The same screen with the tile palette raised — the only state in which a tile is clickable.</summary>
+    private static MapEditorLayout PaletteLayout(int selectedSprite) =>
+        MapEditorLayout.Compute(160, 90, MapEditorOverlay.Tiles, selectedSprite);
+
+    /// <summary>How many pages of travel cover the whole map — derived, so a re-laid screen re-counts them.</summary>
+    private static int PagesAcross(in MapEditorLayout layout) =>
+        (MapEditorLayout.MapColumns + layout.VisibleColumns - 1) / layout.VisibleColumns;
+
+    private static int PagesDown(in MapEditorLayout layout) =>
+        (MapEditorLayout.MapRows + layout.VisibleRows - 1) / layout.VisibleRows;
 
     /// <summary>
     /// The direct question of this wave, keyboard half: paging reaches the far corner in a
@@ -47,13 +63,13 @@ public class MapEditorViewTests : IDisposable
         var layout = Layout();
         var view = new MapEditorView();
 
-        for (int i = 0; i < 8; i++)
+        for (int i = 0; i < PagesAcross(layout); i++)
         {
-            view.PageCursor(layout, 1, 0);      // 8 pages of 35 columns covers 256
+            view.PageCursor(layout, 1, 0);      // 16 pages of 17 columns covers 256
         }
-        for (int i = 0; i < 7; i++)
+        for (int i = 0; i < PagesDown(layout); i++)
         {
-            view.PageCursor(layout, 0, 1);      // 7 pages of 11 rows covers 72
+            view.PageCursor(layout, 0, 1);      // 9 pages of 8 rows covers 72
         }
 
         Assert.Equal((MapEditorLayout.MapColumns - 1, MapEditorLayout.MapRows - 1), (view.CursorX, view.CursorY));
@@ -153,27 +169,34 @@ public class MapEditorViewTests : IDisposable
     }
 
     /// <summary>
-    /// A resize that <b>widens</b> the viewport lowers the camera's ceiling under a standing
-    /// position, and a stale camera would hit-test cells that are no longer drawn
-    /// (<see cref="SheetScroll.Clamp"/>'s reason, one dimension more). Break recipe: make
-    /// <see cref="MapEditorView.Clamp"/> a no-op — the camera keeps 241 after the window grew
-    /// to a viewport whose ceiling is 221, and both range assertions go red.
+    /// <b>Re-pinned in wave R3, and this paragraph is why.</b> This test used to widen a
+    /// <em>window</em> — a 320x180 layout parked the camera past a 1280x720 layout's ceiling,
+    /// and <see cref="MapEditorView.Clamp"/> had to pull it back. Since ADR-029 the map screen
+    /// is laid out on the console and the console has exactly one size, so a window resize can
+    /// no longer move this ceiling at all and the old scenario cannot be built. What survives is
+    /// the property the old test was really about, and the router still calls
+    /// <see cref="MapEditorView.Clamp"/> every frame for it: <b>a camera that has come from
+    /// somewhere else must be pulled inside the drawn viewport, and the cursor with it.</b> The
+    /// "somewhere else" is now a stale position rather than a stale window — a session restored
+    /// on the far corner, or any future path that writes the camera without asking the layout.
+    ///
+    /// <para>Break recipe unchanged: make <see cref="MapEditorView.Clamp"/> a no-op and both
+    /// range assertions go red.</para>
     /// </summary>
     [Fact]
-    public void ClampReactsWhenAResizeLowersTheCameraCeiling()
+    public void ClampPullsAStaleCameraBackInsideTheDrawnViewport()
     {
-        var narrow = MapEditorLayout.Compute(320, 180);
+        var layout = Layout();
         var view = new MapEditorView();
-        view.JumpTo(narrow, MapEditorLayout.MapColumns - 1, MapEditorLayout.MapRows - 1);
-        var wide = MapEditorLayout.Compute(1280, 720);
-        Assert.True(view.CameraX > wide.MaxCameraX, "the narrow window must park the camera past the wide ceiling");
+        view.JumpTo(layout, MapEditorLayout.MapColumns - 1, MapEditorLayout.MapRows - 1);
+        Assert.Equal((layout.MaxCameraX, layout.MaxCameraY), (view.CameraX, view.CameraY));
 
-        view.Clamp(wide);
+        view.Clamp(layout);
 
-        Assert.InRange(view.CameraX, 0, wide.MaxCameraX);
-        Assert.InRange(view.CameraY, 0, wide.MaxCameraY);
-        Assert.InRange(view.CursorX, view.CameraX, view.CameraX + wide.VisibleColumns - 1);
-        Assert.InRange(view.CursorY, view.CameraY, view.CameraY + wide.VisibleRows - 1);
+        Assert.InRange(view.CameraX, 0, layout.MaxCameraX);
+        Assert.InRange(view.CameraY, 0, layout.MaxCameraY);
+        Assert.InRange(view.CursorX, view.CameraX, view.CameraX + layout.VisibleColumns - 1);
+        Assert.InRange(view.CursorY, view.CameraY, view.CameraY + layout.VisibleRows - 1);
     }
 
     /// <summary>
@@ -216,7 +239,6 @@ public class MapEditorViewTests : IDisposable
     [Fact]
     public void TheKeyboardTileStepLandsWhereTheClickLandsAndClampsAtTheStripEnds()
     {
-        var layout = Layout();
         var session = new MapEditorSession(Folder("tile-step"));
 
         for (int i = 0; i < 3; i++)
@@ -225,8 +247,9 @@ public class MapEditorViewTests : IDisposable
         }
         MapEditorTileStep.Apply(session, 0, 1);
 
-        Rectangle cell = layout.TileCellRect(session.SelectedSprite);
-        Assert.True(layout.TryTileCell(cell.X + cell.Width / 2, cell.Y + cell.Height / 2, out int clicked));
+        MapEditorLayout palette = PaletteLayout(session.SelectedSprite);
+        Rectangle cell = palette.TileCellRect(session.SelectedSprite);
+        Assert.True(palette.TryTileCell(cell.X + cell.Width / 2, cell.Y + cell.Height / 2, out int clicked));
         Assert.Equal(session.SelectedSprite, clicked);
         Assert.NotEqual(0, session.SelectedSprite);
 

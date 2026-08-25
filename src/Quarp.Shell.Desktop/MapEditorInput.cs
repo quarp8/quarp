@@ -56,6 +56,18 @@ public static class MapEditorInput
     /// click under the mouse, Z under the keyboard — one verb, <see cref="MapEditorPaint.PasteAt"/>,
     /// reached by both), and Esc drops it without writing anything.</para>
     ///
+    /// <para><b>Two overlays and one bar (wave R3, ADR-029).</b> The screen moved onto the
+    /// console, where 64 rows of content hold either a map worth looking at or a tile palette
+    /// but never both — <see cref="MapEditorLayout"/> carries the whole arithmetic. So the
+    /// palette became an overlay (hold Shift, or latch it with its button; the wheel over it
+    /// flips its two pages) and the minimap became a mode (<c>Tab</c>, or its button; a click on
+    /// it travels), and the three rows under the viewport became a position bar whose press
+    /// travels through the very <see cref="MapEditorView.JumpTo"/> the minimap uses. Esc's first
+    /// meaning is now "put away whatever is over the map". None of that changed a rule: the
+    /// dispatch below asks the layout which rectangle a point fell in exactly as it did, and the
+    /// layout answers <c>Rectangle.Empty</c> for a panel that is not up, so a lowered
+    /// palette is deaf without a branch.</para>
+    ///
     /// <para>While the exit prompt is up it owns the input — Z saves and leaves, X discards,
     /// Esc stays, and the same three verbs are clickable on the prompt line — and everything
     /// else, the pencil included, is deliberately deaf.</para>
@@ -65,8 +77,16 @@ public static class MapEditorInput
     {
         MapEditorSession map = shell.Modes.MapEditor!;
         MapEditorView view = shell.Modes.MapView!;
-        // The same layout the renderer will draw this frame — geometry has one owner.
-        var layout = MapEditorLayout.Compute(shell.BackBufferWidth, shell.BackBufferHeight);
+        // Wave R3: the held half of "SHOW TILES [shift]" is written into the view BEFORE the
+        // layout is measured, so the frame that draws the palette is the frame that hit-tests
+        // it. The latched half is the button's and survives frames on its own.
+        view.SetTilesHeld(commands.EditorTilesModifier);
+        // The same layout the renderer will draw this frame — geometry has one owner. Since
+        // wave R3 that geometry also depends on what stands over the map and on which palette
+        // page the selected tile is on, and both come from the same two objects the renderer is
+        // handed, so the picture and the clicks cannot be measured differently.
+        var layout = MapEditorLayout.Compute(
+            shell.BackBufferWidth, shell.BackBufferHeight, view.Overlay, map.SelectedSprite);
         // A resize can shrink the camera's ceiling under a standing position; re-clamping here
         // keeps every hit test below inside the drawn viewport.
         view.Clamp(layout);
@@ -117,8 +137,24 @@ public static class MapEditorInput
             shell.Modes.ToggleEditorTab();       // Home: back to the sprites of the same cart
             return;
         }
+        if (commands.EditorRegionCycle)
+        {
+            // Tab is the whole-map view's key on this screen (TIC-80 processKeyboard: "Tab —
+            // WORLD MODE"). It is the sprite editor's region-size cycle in the same frame
+            // struct; the map has no region to size, so the two screens read one key as their
+            // own verb, the way Home already does.
+            view.ToggleWorld();
+            return;
+        }
         if (commands.Quit)
         {
+            if (view.CloseOverlay())
+            {
+                // Esc's first meaning while something stands over the map: put it away. The
+                // same rung the floating block and the live selection already stand on, and
+                // above them because it is the thing the author is looking at.
+                return;
+            }
             if (view.PasteFloating)
             {
                 // Esc's first meaning while a block floats: drop it (TIC-80's paste is armed
@@ -215,7 +251,15 @@ public static class MapEditorInput
         {
             view.PageCursor(layout, 0, 1);
         }
-        if (mouse.WheelDelta != 0 && layout.Canvas.Contains(mouse.X, mouse.Y))
+        if (mouse.WheelDelta != 0 && layout.Sheet.Contains(mouse.X, mouse.Y))
+        {
+            // The wheel over the palette flips its page — the mouse's road to the other 128
+            // tiles. It moves the SELECTION and not a page counter, which is what keeps the
+            // palette's page derived (MapEditorLayout.PaletteLane) instead of stored: the same
+            // cell of the other page, with the block in hand unchanged.
+            MapEditorTileStep.Page(map);
+        }
+        else if (mouse.WheelDelta != 0 && layout.Canvas.Contains(mouse.X, mouse.Y))
         {
             view.ScrollRows(layout, -mouse.WheelDelta / 120);
         }
@@ -257,8 +301,10 @@ public static class MapEditorInput
                 }
             }
         }
-        if (commands.EditorPaintPressed && !panning)
+        if (commands.EditorPaintPressed && !panning && layout.CanvasLive)
         {
+            // Deaf while an overlay owns the screen, for the reason the mouse is (the layout's
+            // CanvasLive): a stroke the author cannot see land is a stroke he did not aim.
             KeyboardAct(map, view);
         }
         if (commands.EditorPaintReleased || panning)
@@ -316,6 +362,10 @@ public static class MapEditorInput
             {
                 view.JumpTo(layout, jumpX, jumpY);
             }
+            else if (layout.TrySliderColumn(mouse.X, mouse.Y, out int barColumn))
+            {
+                view.JumpTo(layout, barColumn, view.CursorY);   // the same verb the minimap uses
+            }
             else if (layout.TryMapCell(mouse.X, mouse.Y, view.CameraX, view.CameraY, out int pressX, out int pressY))
             {
                 MousePressOnCanvas(map, view, layout, mouse, panning, pressX, pressY);
@@ -349,6 +399,10 @@ public static class MapEditorInput
         else if (mouse.LeftDown && layout.TryMinimapCell(mouse.X, mouse.Y, out int dragToX, out int dragToY))
         {
             view.JumpTo(layout, dragToX, dragToY);      // a held button on the minimap keeps travelling
+        }
+        else if (mouse.LeftDown && layout.TrySliderColumn(mouse.X, mouse.Y, out int dragColumn))
+        {
+            view.JumpTo(layout, dragColumn, view.CursorY);      // and on the position bar
         }
         if (mouse.LeftReleased)
         {

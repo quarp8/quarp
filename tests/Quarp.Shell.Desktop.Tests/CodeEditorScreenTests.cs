@@ -312,18 +312,22 @@ public class CodeEditorScreenTests : IDisposable
     [Fact]
     public void TheCodeScreenStandsInTheSameChromeAsItsSiblings()
     {
+        // The map used to be the reference here. It left the host chrome in wave R3 (ADR-029),
+        // so the sound screen is the sibling now — and when it leaves too, this test leaves with
+        // the host chrome itself, which is the point of measuring one screen against another
+        // rather than against a copied constant.
         var code = CodeEditorLayout.Compute(WindowWidth, WindowHeight);
-        var map = MapEditorLayout.Compute(WindowWidth, WindowHeight);
+        var other = SfxEditorLayout.Compute(WindowWidth, WindowHeight);
 
-        Assert.Equal(map.Ui, code.Ui);
-        Assert.Equal(map.Margin, code.Margin);
-        Assert.Equal(map.ButtonSize, code.ButtonSize);
-        Assert.Equal(map.TabStrip, code.TabStrip);
-        Assert.Equal(map.StatusBar, code.StatusBar);
-        Assert.Equal(map.PromptY, code.PromptY);
+        Assert.Equal(other.Ui, code.Ui);
+        Assert.Equal(other.Margin, code.Margin);
+        Assert.Equal(other.ButtonSize, code.ButtonSize);
+        Assert.Equal(other.TabStrip, code.TabStrip);
+        Assert.Equal(other.StatusBar, code.StatusBar);
+        Assert.Equal(other.PromptY, code.PromptY);
         foreach (EditorPromptVerb verb in Enum.GetValues<EditorPromptVerb>())
         {
-            Assert.Equal(map.PromptVerbRect(verb), code.PromptVerbRect(verb));
+            Assert.Equal(other.PromptVerbRect(verb), code.PromptVerbRect(verb));
         }
         EditorButton[] shared =
         {
@@ -333,7 +337,7 @@ public class CodeEditorScreenTests : IDisposable
         };
         foreach (EditorButton button in shared)
         {
-            Assert.Equal(map.ButtonRect(button), code.ButtonRect(button));
+            Assert.Equal(other.ButtonRect(button), code.ButtonRect(button));
         }
     }
 

@@ -96,6 +96,23 @@ public enum EditorButton
     /// a voice to start.
     /// </summary>
     ToolPlay,
+
+    /// <summary>
+    /// The map editor's tile palette switch (wave R3): TIC-80's <c>drawSheetButton</c>
+    /// ("SHOW TILES [shift]"). On a 160x90 console the palette cannot stand beside the map —
+    /// see <see cref="MapEditorLayout"/> for the arithmetic — so it slides over it, held open
+    /// by Shift or latched by this button. Map-only: the sprite editor's sheet window is always
+    /// on screen and has nothing to reveal.
+    /// </summary>
+    TilesToggle,
+
+    /// <summary>
+    /// The map editor's whole-map view switch (wave R3): TIC-80's <c>drawWorldButton</c>
+    /// ("WORLD MAP [tab]", <c>src/studio/editors/world.c</c>). The minimap of a 256x72 map
+    /// needs 128x36 pixels even at two cells to the pixel, which is more than half the console's
+    /// content band, so it is a mode rather than a panel. Map-only for the obvious reason.
+    /// </summary>
+    WorldToggle,
 }
 
 /// <summary>
@@ -135,6 +152,11 @@ public enum EditorIcon
     GoTo,
     Play,
     Stop,
+    // Appended in wave R3, when the map screen moved onto the console and its tile palette and
+    // its whole-map view became controls of their own (ADR-029, REFERENCES-EDITORS §3.1:
+    // TIC-80's drawSheetButton and drawWorldButton).
+    Tiles,
+    World,
 }
 
 /// <summary>
@@ -477,6 +499,28 @@ public static class EditorIcons
             0b01111110,
             0b00000000,
         },
+        new byte[] // Tiles: four solid tiles with the seams between them — the sheet, not the grid
+        {
+            0b01110111,
+            0b01110111,
+            0b01110111,
+            0b00000000,
+            0b01110111,
+            0b01110111,
+            0b01110111,
+            0b00000000,
+        },
+        new byte[] // World: the whole map as a frame with the viewport riding inside it
+        {
+            0b11111111,
+            0b10000001,
+            0b10110001,
+            0b10110001,
+            0b10000001,
+            0b10000001,
+            0b10000001,
+            0b11111111,
+        },
     };
 
     /// <summary>How many glyphs exist — the atlas sizes its strip from this.</summary>
@@ -537,7 +581,8 @@ public static class EditorIcons
     /// </summary>
     public static bool BelongsToSpriteEditor(EditorButton button) => button is not (
         EditorButton.ToolEraser or EditorButton.ToolHand or EditorButton.GridToggle
-        or EditorButton.ToolFind or EditorButton.ToolGoTo or EditorButton.ToolPlay);
+        or EditorButton.ToolFind or EditorButton.ToolGoTo or EditorButton.ToolPlay
+        or EditorButton.TilesToggle or EditorButton.WorldToggle);
 
     /// <summary>
     /// The map editor's own button list: the shared chrome (tabs, exit, save, undo, redo), the
@@ -558,6 +603,7 @@ public static class EditorIcons
         or EditorButton.TilemapTab or EditorButton.SoundTab or EditorButton.MusicTab
         or EditorButton.ToolPencil or EditorButton.ToolHand or EditorButton.ToolSelect
         or EditorButton.ToolFill or EditorButton.ToolEraser or EditorButton.GridToggle
+        or EditorButton.TilesToggle or EditorButton.WorldToggle
         or EditorButton.Save or EditorButton.Undo or EditorButton.Redo;
 
     /// <summary>
@@ -755,6 +801,8 @@ public static class EditorIcons
         EditorButton.ToolEraser => EditorIcon.Eraser,
         EditorButton.ToolHand => EditorIcon.Hand,
         EditorButton.GridToggle => EditorIcon.Grid,
+        EditorButton.TilesToggle => EditorIcon.Tiles,
+        EditorButton.WorldToggle => EditorIcon.World,
         EditorButton.ToolFind => EditorIcon.Find,
         EditorButton.ToolGoTo => EditorIcon.GoTo,
         // The clean face; the sound renderer swaps in EditorIcon.Stop while the slot sounds,
@@ -791,7 +839,13 @@ public static class EditorIcons
         // other caller reaches — answering "REDO CTRL+Y" for them.
         EditorButton.ToolEraser => "ERASE  DEL   SELECTS TILE 000",
         EditorButton.ToolHand => "DRAG MAP  2   SPACE+DRAG PANS ANYWHERE   ARROWS AND [ ] PGUP/PGDN TRAVEL",
-        EditorButton.GridToggle => "SHOW/HIDE GRID  `   OFF AT THE SMALLEST MAP SCALE",
+        EditorButton.GridToggle => "SHOW/HIDE GRID  `",
+        // The two switches wave R3 added, in THIS table for the reason the other map-only
+        // buttons are: their meaning does not differ between screens, only one screen places
+        // them. Both name the key the reference names (REFERENCES-EDITORS §3.1).
+        EditorButton.TilesToggle =>
+            "SHOW TILES  HOLD SHIFT, OR CLICK TO LATCH   WHEEL OVER IT FLIPS THE PAGE",
+        EditorButton.WorldToggle => "WHOLE MAP  TAB   CLICK IT TO TRAVEL",
         // The two code-only buttons live in THIS table for the same reason the map's three do:
         // their meaning does not differ between screens, only one screen places them.
         EditorButton.ToolFind => "FIND  CTRL+F   ENTER OR CTRL+G WALKS, ESC CLOSES",
@@ -1206,6 +1260,15 @@ public static class EditorIcons
                 return false;
             case EditorButton.GridToggle:
                 view.ToggleGrid();                  // TIC-80's drawGridButton; ` is its key
+                return false;
+            case EditorButton.TilesToggle:
+                // The mouse's half of "hold Shift": a click latches the palette open and a
+                // second one lowers it, so a pointer-only author never has to hold a key
+                // (TIC-80's drawSheetButton is exactly this, next to exactly that key).
+                view.ToggleTiles();
+                return false;
+            case EditorButton.WorldToggle:
+                view.ToggleWorld();                 // TIC-80's drawWorldButton; Tab is its key
                 return false;
             case EditorButton.Save:
                 session.Save();                     // the modified/saved icon IS this button — click = Ctrl+S

@@ -51,8 +51,30 @@ public class MapEditorParityTests : IDisposable
         return folder;
     }
 
-    private const int WindowWidth = 1280;
-    private const int WindowHeight = 720;
+    // Console pixels since wave R3 (ADR-029): this screen is laid out on the console's own
+    // 160x90 grid and never on a window, so every mouse point below is a console pixel taken
+    // straight off the layout's own rectangles — exactly what QuarpGame hands the router after
+    // EditorMouse.ToConsole.
+    private const int ScreenWidth = 160;
+    private const int ScreenHeight = 90;
+
+    /// <summary>The working geometry: nothing over the map.</summary>
+    private static MapEditorLayout Working() => MapEditorLayout.Compute(ScreenWidth, ScreenHeight);
+
+    /// <summary>The same screen with the tile palette raised — the only state in which a tile is clickable.</summary>
+    private static MapEditorLayout Palette(int selectedSprite) =>
+        MapEditorLayout.Compute(ScreenWidth, ScreenHeight, MapEditorOverlay.Tiles, selectedSprite);
+
+    /// <summary>The same screen in the whole-map view — the only state in which the minimap is clickable.</summary>
+    private static MapEditorLayout World() =>
+        MapEditorLayout.Compute(ScreenWidth, ScreenHeight, MapEditorOverlay.World, 0);
+
+    /// <summary>How many pages of travel cover the map, derived so a re-laid screen re-counts them.</summary>
+    private static int PagesAcross(in MapEditorLayout layout) =>
+        (MapEditorLayout.MapColumns + layout.VisibleColumns - 1) / layout.VisibleColumns;
+
+    private static int PagesDown(in MapEditorLayout layout) =>
+        (MapEditorLayout.MapRows + layout.VisibleRows - 1) / layout.VisibleRows;
 
     /// <summary>The tile both runs place — a number, not a colour: MAP-FORMAT §2 says a cell IS a sprite index.</summary>
     private const int ChosenTile = 3;
@@ -156,12 +178,12 @@ public class MapEditorParityTests : IDisposable
         }
         Assert.Equal(ChosenTile, map.SelectedSprite);
 
-        for (int i = 0; i < 8; i++)
+        for (int i = 0; i < PagesAcross(layout); i++)
         {
             KeyFrame(reader, map, view, layout, Keys.OemCloseBrackets);
             KeyFrame(reader, map, view, layout);
         }
-        for (int i = 0; i < 7; i++)
+        for (int i = 0; i < PagesDown(layout); i++)
         {
             KeyFrame(reader, map, view, layout, Keys.PageDown);
             KeyFrame(reader, map, view, layout);
@@ -210,6 +232,15 @@ public class MapEditorParityTests : IDisposable
     private static void MouseFrame(
         MapEditorSession map, MapEditorView view, in MapEditorLayout layout, in EditorMouse mouse)
     {
+        // Production's "one cursor" rule, mirrored here since wave R3: the pointer over the
+        // viewport parks the cursor, so the status line reads the pointer and a following
+        // keyboard stroke starts there. Without it the mouse run's cursor stays wherever the
+        // last travel verb left it and the two channels report different cells for the same
+        // click — which is what this file exists to notice.
+        if (layout.TryMapCell(mouse.X, mouse.Y, view.CameraX, view.CameraY, out int overX, out int overY))
+        {
+            view.SetCursor(layout, overX, overY);
+        }
         if (mouse.LeftPressed)
         {
             DispatchMousePress(map, view, layout, mouse.X, mouse.Y);
@@ -259,11 +290,17 @@ public class MapEditorParityTests : IDisposable
     {
         var reader = new EditorMouseReader();
 
-        (int tileX, int tileY) = Centre(layout.TileCellRect(ChosenTile));
-        Click(map, view, layout, reader, tileX, tileY);
+        // Wave R3: a tile is picked out of the palette OVERLAY and the far corner is reached
+        // through the whole-map MODE. Both are still pure mouse work — the palette has a button
+        // and so does the whole-map view — so the channel stays what its name says; what changed
+        // is that each of the two panels is measured in the state that shows it.
+        MapEditorLayout palette = Palette(map.SelectedSprite);
+        (int tileX, int tileY) = Centre(palette.TileCellRect(ChosenTile));
+        Click(map, view, palette, reader, tileX, tileY);
         Assert.Equal(ChosenTile, map.SelectedSprite);
 
-        Click(map, view, layout, reader, layout.Minimap.Right - 1, layout.Minimap.Bottom - 1);
+        MapEditorLayout world = World();
+        Click(map, view, world, reader, world.Minimap.Right - 1, world.Minimap.Bottom - 1);
 
         (int cellX, int cellY) = Centre(
             layout.MapCellRect(
@@ -286,8 +323,9 @@ public class MapEditorParityTests : IDisposable
     /// <para>Negative controls, all against production code. (a) Break the clamp in
     /// <see cref="MapEditorView.PageCursor"/>'s <c>SetCursor</c> (drop the upper bound) and the
     /// keyboard run overshoots the map: the cursor assertion goes red first, then the bytes.
-    /// (b) Drop the centring or the <c>MinimapScale</c> division in
-    /// <see cref="MapEditorLayout.TryMinimapCell"/> and the mouse run lands somewhere else: the
+    /// (b) Drop the centring in <see cref="MapEditorView.JumpTo"/>, or the
+    /// <see cref="MapEditorLayout.MinimapCellsPerPixel"/> multiplication in
+    /// <see cref="MapEditorLayout.TryMinimapCell"/>, and the mouse run lands somewhere else: the
     /// byte comparison goes red while each run still "works" on its own. (c) Change
     /// <see cref="MapEditorTileStep"/>'s sprite arithmetic and the two runs place different
     /// tiles at the same cell — the file comparison goes red and names the byte.</para>
@@ -295,7 +333,7 @@ public class MapEditorParityTests : IDisposable
     [Fact]
     public void KeyboardOnlyAndMouseOnlyRunsReachTheSameFarCornerAndSaveIdenticalMaps()
     {
-        var layout = MapEditorLayout.Compute(WindowWidth, WindowHeight);
+        var layout = Working();
 
         string folderA = FreshCartFolder("keyboard-run");
         var mapA = new MapEditorSession(folderA);
@@ -369,12 +407,15 @@ public class MapEditorParityTests : IDisposable
             [EditorButton.ToolFill] = "Z FILLS",
             [EditorButton.ToolEraser] = "DEL",
             [EditorButton.GridToggle] = "`",
+            // Wave R3's two overlay switches: each names the key the reference names.
+            [EditorButton.TilesToggle] = "SHIFT",
+            [EditorButton.WorldToggle] = "TAB",
             [EditorButton.Save] = "CTRL+S",
             [EditorButton.Undo] = "CTRL+Z",
             [EditorButton.Redo] = "CTRL+Y",
         };
 
-        foreach (EditorButtonPlace place in MapEditorLayout.Compute(WindowWidth, WindowHeight).Buttons)
+        foreach (EditorButtonPlace place in Working().Buttons)
         {
             EditorButton button = place.Id;
             if (EditorIcons.IsStub(button) || button == EditorButton.TilemapTab)
@@ -419,7 +460,10 @@ public class MapEditorParityTests : IDisposable
     [Fact]
     public void BothChannelsMarkTheSameTileBlockAndStampIt()
     {
-        var layout = MapEditorLayout.Compute(WindowWidth, WindowHeight);
+        var layout = Working();
+        // The picker drag is measured with the palette raised — wave R3 made it an overlay, and
+        // the anchor and the far corner of the block are both on its first page.
+        MapEditorLayout palette = Palette(0);
 
         var keyed = new MapEditorSession(FreshCartFolder("block-key"));
         var keyedView = new MapEditorView();
@@ -456,11 +500,11 @@ public class MapEditorParityTests : IDisposable
         var clicked = new MapEditorSession(FreshCartFolder("block-mouse"));
         var clickedView = new MapEditorView();
         var pointer = new EditorMouseReader();
-        (int fromX, int fromY) = Centre(layout.TileCellRect(SpriteAtStripCell(2, 1)));
-        (int toX, int toY) = Centre(layout.TileCellRect(SpriteAtStripCell(3, 2)));
-        Frame(clicked, clickedView, layout, pointer, fromX, fromY, ButtonState.Pressed);
-        Frame(clicked, clickedView, layout, pointer, toX, toY, ButtonState.Pressed);
-        Frame(clicked, clickedView, layout, pointer, toX, toY, ButtonState.Released);
+        (int fromX, int fromY) = Centre(palette.TileCellRect(SpriteAtStripCell(2, 1)));
+        (int toX, int toY) = Centre(palette.TileCellRect(SpriteAtStripCell(3, 2)));
+        Frame(clicked, clickedView, palette, pointer, fromX, fromY, ButtonState.Pressed);
+        Frame(clicked, clickedView, palette, pointer, toX, toY, ButtonState.Pressed);
+        Frame(clicked, clickedView, palette, pointer, toX, toY, ButtonState.Released);
         Assert.Equal((2, 2), (clicked.BlockWidth, clicked.BlockHeight));
         (int cellX, int cellY) = Centre(layout.MapCellRect(4, 2, 0, 0));
         Click(clicked, clickedView, layout, pointer, cellX, cellY);
@@ -482,7 +526,7 @@ public class MapEditorParityTests : IDisposable
     [Fact]
     public void BothChannelsPickTheTileUnderTheCursor()
     {
-        var layout = MapEditorLayout.Compute(WindowWidth, WindowHeight);
+        var layout = Working();
 
         var keyed = new MapEditorSession(FreshCartFolder("pick-key"));
         var keyedView = new MapEditorView();

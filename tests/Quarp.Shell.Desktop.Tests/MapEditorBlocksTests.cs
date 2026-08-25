@@ -43,10 +43,7 @@ public class MapEditorBlocksTests : IDisposable
 
     public void Dispose() => Directory.Delete(_root, recursive: true);
 
-    private const int WindowWidth = 1280;
-    private const int WindowHeight = 720;
-
-    /// <summary>The console's own screen — the surface the sprite editor is laid out on since wave R2.</summary>
+    /// <summary>The console's own screen — the only surface a tool screen is laid out on since wave R3.</summary>
     private const int ConsoleWidth = 160;
 
     private const int ConsoleHeight = 90;
@@ -79,7 +76,8 @@ public class MapEditorBlocksTests : IDisposable
 
         internal MapEditorView View => Modes.MapView!;
 
-        internal MapEditorLayout Layout => MapEditorLayout.Compute(WindowWidth, WindowHeight);
+        internal MapEditorLayout Layout =>
+            MapEditorLayout.Compute(ConsoleWidth, ConsoleHeight, View.Overlay, Map.SelectedSprite);
 
         /// <summary>
         /// Rebuilt per frame, like the window's. Since wave R2 the two numbers are <b>the size
@@ -93,9 +91,59 @@ public class MapEditorBlocksTests : IDisposable
         /// <c>EditorMouseReaderTests</c> rather than re-run here.
         /// </summary>
         internal EditorShell Context =>
-            Modes.Mode == ShellMode.Editor
-                ? new(Modes, Flyout, Hover, SheetScroll, ConsoleWidth, ConsoleHeight)
-                : new(Modes, Flyout, Hover, SheetScroll, WindowWidth, WindowHeight);
+            new(Modes, Flyout, Hover, SheetScroll, ConsoleWidth, ConsoleHeight);
+
+
+        /// <summary>
+        /// Wave R3: the tile palette is an overlay now (ADR-029's arithmetic —
+        /// <see cref="MapEditorLayout"/>'s type comment), so every path here that touches the
+        /// palette raises it first and lowers it again before the map underneath is clicked.
+        /// Latched rather than held, because a latch survives the frames a click or a drag costs
+        /// while a held Shift would have to be re-asserted in every one of them.
+        /// </summary>
+        private void ShowTiles()
+        {
+            if (View.Overlay != MapEditorOverlay.Tiles)
+            {
+                View.ToggleTiles();
+            }
+        }
+
+        /// <summary>Raise the palette, click one tile by sprite number, lower it again.</summary>
+        internal void PickTile(int sprite)
+        {
+            ShowTiles();
+            Rectangle cell = Layout.TileCellRect(sprite);
+            Click(cell.X + cell.Width / 2, cell.Y + cell.Height / 2);
+            View.CloseOverlay();
+        }
+
+        /// <summary>Raise the palette, click one tile by its strip cell, lower it again.</summary>
+        internal void PickStripCell(int column, int row) => PickTile(SpriteAtStripCell(column, row));
+
+        /// <summary>Raise the palette, drag a block across it by strip cells, lower it again.</summary>
+        internal void DragTiles(int fromColumn, int fromRow, int toColumn, int toRow)
+        {
+            ShowTiles();
+            Drag(StripPoint(this, fromColumn, fromRow), StripPoint(this, toColumn, toRow));
+            View.CloseOverlay();
+        }
+
+        /// <summary>
+        /// Raise the whole-map view, click one of its pixels, lower it again — the mouse's road
+        /// to the far corner, which wave R3 moved out of a permanent panel and into a mode.
+        /// </summary>
+        internal void ClickMinimap(int x, int y)
+        {
+            View.ToggleWorld();
+            Click(x, y);
+            View.ToggleWorld();
+        }
+
+        /// <summary>The whole-map view's geometry, for a test that needs one of its pixels.</summary>
+        internal MapEditorLayout WorldLayout =>
+            MapEditorLayout.Compute(
+                ConsoleWidth, ConsoleHeight, MapEditorOverlay.World, Map.SelectedSprite);
 
         internal void Frame(
             Keys[] down, int mouseX, int mouseY, ButtonState left, ButtonState middle, ButtonState right)
@@ -187,8 +235,7 @@ public class MapEditorBlocksTests : IDisposable
     /// <summary>Paint one cell with one tile through the router: pick it in the picker, click the cell.</summary>
     private static void PaintOne(Harness harness, int cellX, int cellY, int tile)
     {
-        (int tileX, int tileY) = Centre(harness.Layout.TileCellRect(tile));
-        harness.Click(tileX, tileY);
+        harness.PickTile(tile);
         (int x, int y) = CellPoint(harness, cellX, cellY);
         harness.Click(x, y);
         Assert.Equal(tile, harness.Map.TileAt(cellX, cellY));
@@ -257,14 +304,14 @@ public class MapEditorBlocksTests : IDisposable
         Harness forward = OpenMapEditor();
         Assert.Equal((1, 1), (forward.Map.BlockWidth, forward.Map.BlockHeight));   // TIC-80 opens at 1x1
 
-        forward.Drag(StripPoint(forward, 2, 1), StripPoint(forward, 4, 2));
+        forward.DragTiles(2, 1, 4, 2);
 
         Assert.Equal(SpriteAtStripCell(2, 1), forward.Map.SelectedSprite);
         Assert.Equal((3, 2), (forward.Map.BlockWidth, forward.Map.BlockHeight));
         Assert.False(forward.View.TileBlockGestureActive);          // the release closed it
 
         Harness backward = OpenMapEditor();
-        backward.Drag(StripPoint(backward, 4, 2), StripPoint(backward, 2, 1));
+        backward.DragTiles(4, 2, 2, 1);
 
         Assert.Equal(forward.Map.SelectedSprite, backward.Map.SelectedSprite);
         Assert.Equal(forward.Map.BlockWidth, backward.Map.BlockWidth);
@@ -287,24 +334,25 @@ public class MapEditorBlocksTests : IDisposable
     public void EveryOneTilePathDropsTheBlock()
     {
         Harness harness = OpenMapEditor();
-        harness.Drag(StripPoint(harness, 2, 1), StripPoint(harness, 4, 2));
+        harness.DragTiles(2, 1, 4, 2);
         Assert.Equal((3, 2), (harness.Map.BlockWidth, harness.Map.BlockHeight));
 
-        (int oneTileX, int oneTileY) = StripPoint(harness, 5, 0);
-        harness.Click(oneTileX, oneTileY);
+        harness.PickStripCell(5, 0);
         Assert.Equal((1, 1), (harness.Map.BlockWidth, harness.Map.BlockHeight));
 
-        harness.Drag(StripPoint(harness, 2, 1), StripPoint(harness, 4, 2));
+        harness.DragTiles(2, 1, 4, 2);
         harness.Tap(Keys.LeftShift, Keys.Right);
         Assert.Equal((1, 1), (harness.Map.BlockWidth, harness.Map.BlockHeight));
 
-        harness.Drag(StripPoint(harness, 2, 1), StripPoint(harness, 4, 2));
-        (int cellX, int cellY) = CellPoint(harness, 9, 9);
+        harness.DragTiles(2, 1, 4, 2);
+        // Wave R3 shrank the visible canvas to 17x8 cells (ADR-029): a point outside it is
+        // no longer a map click at all, so the cells these paths use had to come inside.
+        (int cellX, int cellY) = CellPoint(harness, 9, 6);
         harness.Frame(NoKeys, cellX, cellY, ButtonState.Released, ButtonState.Pressed, ButtonState.Released);
         harness.Idle();
         Assert.Equal((1, 1), (harness.Map.BlockWidth, harness.Map.BlockHeight));
 
-        harness.Drag(StripPoint(harness, 2, 1), StripPoint(harness, 4, 2));
+        harness.DragTiles(2, 1, 4, 2);
         (int eraserX, int eraserY) = Centre(harness.Layout.ButtonRect(EditorButton.ToolEraser));
         harness.Click(eraserX, eraserY);
         Assert.Equal((1, 1), (harness.Map.BlockWidth, harness.Map.BlockHeight));
@@ -328,7 +376,7 @@ public class MapEditorBlocksTests : IDisposable
     public void ThePencilStampsTheWholeBlockInTheRightPlaces()
     {
         Harness harness = OpenMapEditor();
-        harness.Drag(StripPoint(harness, 2, 1), StripPoint(harness, 3, 2));
+        harness.DragTiles(2, 1, 3, 2);
         Assert.Equal((2, 2), (harness.Map.BlockWidth, harness.Map.BlockHeight));
 
         (int x, int y) = CellPoint(harness, 4, 2);
@@ -373,7 +421,7 @@ public class MapEditorBlocksTests : IDisposable
     public void TheBlockOnlyLandsOnTheLatticeOfItsOwnSize()
     {
         Harness harness = OpenMapEditor();
-        harness.Drag(StripPoint(harness, 2, 1), StripPoint(harness, 3, 2));
+        harness.DragTiles(2, 1, 3, 2);
 
         harness.LeftDown(CellPoint(harness, 4, 2).X, CellPoint(harness, 4, 2).Y);
         harness.LeftHeld(CellPoint(harness, 5, 2).X, CellPoint(harness, 5, 2).Y);
@@ -390,7 +438,7 @@ public class MapEditorBlocksTests : IDisposable
 
         // The odd ROW is refused the same way: a press at (4,3) with a 2x2 block writes nothing.
         Harness rows = OpenMapEditor();
-        rows.Drag(StripPoint(rows, 2, 1), StripPoint(rows, 3, 2));
+        rows.DragTiles(2, 1, 3, 2);
         rows.Click(CellPoint(rows, 4, 3).X, CellPoint(rows, 4, 3).Y);
         Assert.False(rows.Map.IsDirty);
         Assert.False(rows.Map.CanUndo);
@@ -441,10 +489,11 @@ public class MapEditorBlocksTests : IDisposable
 
         // And the click after the paste is an ordinary click again: the float is spent.
         harness.Tap(Keys.D1);
-        (int tileX, int tileY) = Centre(harness.Layout.TileCellRect(12));
-        harness.Click(tileX, tileY);
-        harness.Click(CellPoint(harness, 20, 5).X, CellPoint(harness, 20, 5).Y);
-        Assert.Equal(12, harness.Map.TileAt(20, 5));
+        harness.PickTile(12);
+        // Wave R3 shrank the visible canvas to 17x8 cells (ADR-029): a point outside it is
+        // no longer a map click at all, so the cells these paths use had to come inside.
+        harness.Click(CellPoint(harness, 14, 5).X, CellPoint(harness, 14, 5).Y);
+        Assert.Equal(12, harness.Map.TileAt(14, 5));
     }
 
     /// <summary>
@@ -478,9 +527,11 @@ public class MapEditorBlocksTests : IDisposable
 
         // The clipboard survived the undo — it is not part of the map's history.
         harness.Tap(Keys.LeftControl, Keys.V);
-        harness.Click(CellPoint(harness, 30, 8).X, CellPoint(harness, 30, 8).Y);
-        Assert.Equal(5, harness.Map.TileAt(30, 8));
-        Assert.Equal(8, harness.Map.TileAt(31, 9));
+        // Wave R3 shrank the visible canvas to 17x8 cells (ADR-029): a point outside it is
+        // no longer a map click at all, so the cells these paths use had to come inside.
+        harness.Click(CellPoint(harness, 14, 5).X, CellPoint(harness, 14, 5).Y);
+        Assert.Equal(5, harness.Map.TileAt(14, 5));
+        Assert.Equal(8, harness.Map.TileAt(15, 6));
     }
 
     /// <summary>
@@ -540,8 +591,10 @@ public class MapEditorBlocksTests : IDisposable
 
         // The next click is an ordinary one — the cancelled block does not land late.
         harness.Tap(Keys.D1);
-        harness.Click(CellPoint(harness, 20, 9).X, CellPoint(harness, 20, 9).Y);
-        Assert.Equal(0, harness.Map.TileAt(21, 10));
+        // Wave R3 shrank the visible canvas to 17x8 cells (ADR-029): a point outside it is
+        // no longer a map click at all, so the cells these paths use had to come inside.
+        harness.Click(CellPoint(harness, 13, 6).X, CellPoint(harness, 13, 6).Y);
+        Assert.Equal(0, harness.Map.TileAt(14, 7));
     }
 
     /// <summary>
@@ -564,8 +617,8 @@ public class MapEditorBlocksTests : IDisposable
         harness.Tap(Keys.LeftControl, Keys.C);
 
         // Travel to the far corner by the mouse's road, then paste onto the last cell itself.
-        MapEditorLayout layout = harness.Layout;
-        harness.Click(layout.Minimap.Right - 1, layout.Minimap.Bottom - 1);
+        MapEditorLayout world = harness.WorldLayout;
+        harness.ClickMinimap(world.Minimap.Right - 1, world.Minimap.Bottom - 1);
         int lastColumn = MapEditorSession.MapColumns - 1;
         int lastRow = MapEditorSession.MapRows - 1;
 
@@ -622,7 +675,7 @@ public class MapEditorBlocksTests : IDisposable
         keyed.Tap(Keys.Z);
 
         Harness clicked = OpenMapEditor();
-        clicked.Drag(StripPoint(clicked, 2, 1), StripPoint(clicked, 3, 2));
+        clicked.DragTiles(2, 1, 3, 2);
         clicked.Click(CellPoint(clicked, 4, 2).X, CellPoint(clicked, 4, 2).Y);
 
         Assert.True(keyed.Map.Map.SequenceEqual(clicked.Map.Map));

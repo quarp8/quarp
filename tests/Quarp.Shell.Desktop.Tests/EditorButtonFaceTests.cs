@@ -81,7 +81,7 @@ public sealed class EditorButtonFaceTests : IDisposable
     [Fact]
     public void EveryMapEditorButtonHasAnIcon()
     {
-        var layout = MapEditorLayout.Compute(1280, 720);
+        var layout = MapEditorLayout.Compute(160, 90);
         foreach (EditorButtonPlace place in layout.Buttons)
         {
             EditorIcon icon = EditorIcons.IconFor(place.Id);

@@ -164,16 +164,16 @@ public class EditorChromeTests
     /// the simplification wave's whole claim, and the one a future review could undo without
     /// any screen looking wrong on its own.
     ///
-    /// <para><b>Re-pinned in wave R2, and this paragraph is why.</b> The reference screen used
-    /// to be the sprite editor. It is no longer in this frame at all: ADR-029 moved it onto the
-    /// console, where it stands in <see cref="ConsoleChrome"/> and measures itself in console
-    /// pixels, so asking whether its tab rectangles equal the map's would be asking whether 120
-    /// equals 1152 — a question with a wrong answer and no meaning. The map takes over as the
-    /// reference for the three screens that have not moved yet (map, code, sound). When the last
-    /// of them moves, this test and <see cref="EditorChrome"/> die together; until then it is
-    /// still the instrument that catches a second owner of the host frame.</para>
+    /// <para><b>Re-pinned twice now, and this paragraph is why.</b> Wave R2 moved the sprite
+    /// editor off this frame and onto the console (ADR-029), so the reference became the map;
+    /// wave R3 moved the map too, so the reference is now the pair that is left — code and
+    /// sound. Asking whether the map's tab rectangles equal the code screen's would be asking
+    /// whether 130 equals 1152: a question with a wrong answer and no meaning. When the last two
+    /// screens move, this test and <see cref="EditorChrome"/> die together; until then it is
+    /// still the instrument that catches a second owner of the host frame, and there are still
+    /// two screens for it to catch one between.</para>
     ///
-    /// <para>Break recipe: give <see cref="MapEditorLayout"/> back its own copy of the frame
+    /// <para>Break recipe: give <see cref="SfxEditorLayout"/> back its own copy of the frame
     /// arithmetic (a local <c>ui</c>, <c>margin</c>, <c>tabStrip</c>, <c>statusBar</c>) and then
     /// change one constant in <see cref="EditorChrome"/> — every other test stays green and this
     /// one goes red, naming the second owner.</para>
@@ -185,18 +185,18 @@ public class EditorChromeTests
     [InlineData(2560, 1440)]
     public void TheHostFrameScreensStandInOneFrame(int width, int height)
     {
-        var map = MapEditorLayout.Compute(width, height);
+        var sfx = SfxEditorLayout.Compute(width, height);
         var code = CodeEditorLayout.Compute(width, height);
 
-        Assert.Equal(map.Ui, code.Ui);
-        Assert.Equal(map.Margin, code.Margin);
-        Assert.Equal(map.ButtonSize, code.ButtonSize);
-        Assert.Equal(map.TabStrip, code.TabStrip);
-        Assert.Equal(map.StatusBar, code.StatusBar);
-        Assert.Equal(map.PromptY, code.PromptY);
+        Assert.Equal(sfx.Ui, code.Ui);
+        Assert.Equal(sfx.Margin, code.Margin);
+        Assert.Equal(sfx.ButtonSize, code.ButtonSize);
+        Assert.Equal(sfx.TabStrip, code.TabStrip);
+        Assert.Equal(sfx.StatusBar, code.StatusBar);
+        Assert.Equal(sfx.PromptY, code.PromptY);
         foreach (EditorPromptVerb verb in Enum.GetValues<EditorPromptVerb>())
         {
-            Assert.Equal(map.PromptVerbRect(verb), code.PromptVerbRect(verb));
+            Assert.Equal(sfx.PromptVerbRect(verb), code.PromptVerbRect(verb));
         }
         // The six tabs and the three status buttons both screens carry land on the same pixels.
         EditorButton[] shared =
@@ -207,14 +207,18 @@ public class EditorChromeTests
         };
         foreach (EditorButton button in shared)
         {
-            Assert.Equal(map.ButtonRect(button), code.ButtonRect(button));
+            Assert.Equal(sfx.ButtonRect(button), code.ButtonRect(button));
         }
-        // And the console frame is a DIFFERENT frame, on purpose: the sprite screen's tabs are
-        // ten console pixels wide wherever the window is. Asserting that here is what stops a
-        // later hand from "fixing" the inequality above by dragging the sprite screen back.
+        // And the console frame is a DIFFERENT frame, on purpose: the two screens that have
+        // moved carry tabs ten console pixels wide wherever the window is. Asserting that here
+        // is what stops a later hand from "fixing" the inequality above by dragging one of them
+        // back into the host frame.
         var sprite = SpriteEditorLayout.Compute(160, 90, regionCells: 1);
+        var map = MapEditorLayout.Compute(160, 90);
         Assert.Equal(ConsoleChrome.ButtonSize, sprite.ButtonSize);
-        Assert.NotEqual(map.ButtonRect(EditorButton.ExitTab), sprite.ButtonRect(EditorButton.ExitTab));
+        Assert.Equal(ConsoleChrome.ButtonSize, map.ButtonSize);
+        Assert.Equal(sprite.ButtonRect(EditorButton.ExitTab), map.ButtonRect(EditorButton.ExitTab));
+        Assert.NotEqual(sfx.ButtonRect(EditorButton.ExitTab), sprite.ButtonRect(EditorButton.ExitTab));
     }
 
     /// <summary>

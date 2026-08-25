@@ -28,9 +28,10 @@ namespace Quarp.Shell.Desktop;
 /// run. A running cart is presented as the core's indexed framebuffer scaled by whole integers
 /// (ARCHITECTURE §5); the library is now drawn <em>into a framebuffer of its own</em>
 /// (<see cref="ShellScreen"/>) with the same core calls a cartridge uses, and both go to the
-/// window through the one <see cref="ConsolePresenter"/>. The four remaining editor screens
-/// and the boot menu still paint at the window's native resolution and are scheduled to
-/// follow; while they do, this class is the one place where the two roads are both visible.</para>
+/// window through the one <see cref="ConsolePresenter"/>. Waves R2 and R3 brought the sprite
+/// and map editors onto the same road; the two remaining editor screens (code, sound) and the
+/// boot menu still paint at the window's native resolution and are scheduled to follow, and
+/// while they do, this class is the one place where both roads are visible.</para>
 ///
 /// <para><b>Time (M2).</b> MonoGame's <c>IsFixedTimeStep</c> is off and replaced by
 /// <see cref="TickAccumulator"/>: real time is banked, whole ticks come out, at most five
@@ -72,7 +73,6 @@ public sealed class QuarpGame : Game
     private SpriteBatch _spriteBatch = null!;
     private ConsolePresenter _presenter = null!;
     private ShellOverlay _overlay = null!;
-    private MapEditorRenderer _mapUi = null!;
     private CodeEditorRenderer _codeUi = null!;
     private SfxEditorRenderer _sfxUi = null!;
     private MainMenuRenderer _menuUi = null!;
@@ -228,7 +228,6 @@ public sealed class QuarpGame : Game
         _spriteBatch = new SpriteBatch(GraphicsDevice);
         _presenter = new ConsolePresenter(GraphicsDevice, _profile);
         _overlay = new ShellOverlay(GraphicsDevice, _profile.Width, _profile.Height);
-        _mapUi = new MapEditorRenderer(GraphicsDevice);
         _codeUi = new CodeEditorRenderer(GraphicsDevice);
         _sfxUi = new SfxEditorRenderer(GraphicsDevice);
         _menuUi = new MainMenuRenderer(GraphicsDevice);
@@ -289,7 +288,16 @@ public sealed class QuarpGame : Game
                     gameTime.ElapsedGameTime.TotalSeconds);
                 break;
             case ShellMode.MapEditor:
-                MapEditorInput.Update(EditorContext(), commands, mouse, gameTime.ElapsedGameTime.TotalSeconds);
+                // The second screen off the window's coordinate system (wave R3): same two
+                // conversions the sprite screen gets, through the same single owner. The router
+                // does no scale arithmetic of its own, and neither may any other reader.
+                MapEditorInput.Update(
+                    ConsoleEditorContext(),
+                    commands,
+                    mouse.ToConsole(_shellScreen.Placement(
+                        GraphicsDevice.PresentationParameters.BackBufferWidth,
+                        GraphicsDevice.PresentationParameters.BackBufferHeight)),
+                    gameTime.ElapsedGameTime.TotalSeconds);
                 break;
             case ShellMode.CodeEditor:
                 // The one screen that also needs the CHARACTER stream, not just the key frame:
@@ -735,22 +743,12 @@ public sealed class QuarpGame : Game
                 break;
             case ShellMode.Library:
             case ShellMode.Editor:
-                // Two screens on one road since wave R2: both are drawn into the shell's own
+            case ShellMode.MapEditor:
+                // Three screens on one road since wave R3: all are drawn into the shell's own
                 // console and presented by the same presenter the cartridge's frame goes
                 // through. The draw clock feeds the sprite screen's marching ants — chrome
                 // animating in host time, like the tooltip delay; no simulation or hash sees it.
                 RenderShellScreen(gameTime.TotalGameTime.TotalSeconds);
-                break;
-            case ShellMode.MapEditor:
-                _mapUi.Draw(
-                    _spriteBatch,
-                    GraphicsDevice.PresentationParameters.BackBufferWidth,
-                    GraphicsDevice.PresentationParameters.BackBufferHeight,
-                    _modes.MapEditor!,
-                    _modes.Editor!,
-                    _modes.MapView!,
-                    _hover.Target,
-                    _hover.TooltipVisible);
                 break;
             case ShellMode.CodeEditor:
                 // Same draw clock the sprite editor's marching ants ride: host chrome animating
@@ -835,11 +833,11 @@ public sealed class QuarpGame : Game
     /// this method and <see cref="RenderFrame"/> is which framebuffer is presented and whether
     /// the pause indicator has anything to say.
     ///
-    /// <para>Two screens live here as of wave R2: the library (wave R1) and the sprite editor.
-    /// Which one is drawn is the mode's business and nothing else changes — same console, same
-    /// presenter, same whole-integer scale. The three remaining editors still paint themselves
-    /// at the window's resolution and are dispatched separately in <see cref="Draw"/>; they
-    /// join this method one wave at a time.</para>
+    /// <para>Three screens live here as of wave R3: the library (wave R1), the sprite editor
+    /// (R2) and the map editor (R3). Which one is drawn is the mode's business and nothing else
+    /// changes — same console, same presenter, same whole-integer scale. The two remaining
+    /// editors (code and sound) still paint themselves at the window's resolution and are
+    /// dispatched separately in <see cref="Draw"/>; they join this method one wave at a time.</para>
     /// </summary>
     private void RenderShellScreen(double timeSeconds)
     {
@@ -852,6 +850,12 @@ public sealed class QuarpGame : Game
             SpriteEditorRenderer.Draw(
                 _shellScreen, _modes.Editor!, _hover.Target, _hover.TooltipVisible,
                 _flyout.OpenSlot, _sheetScroll, timeSeconds);
+        }
+        else if (_modes.Mode == ShellMode.MapEditor)
+        {
+            MapEditorRenderer.Draw(
+                _shellScreen, _modes.MapEditor!, _modes.Editor!, _modes.MapView!,
+                _hover.Target, _hover.TooltipVisible);
         }
         else
         {
@@ -904,7 +908,6 @@ public sealed class QuarpGame : Game
             _modes.Session?.Dispose();
             _overlay?.Dispose();
             _presenter?.Dispose();
-            _mapUi?.Dispose();
             _codeUi?.Dispose();
             _menuUi?.Dispose();
             _sfxUi?.Dispose();

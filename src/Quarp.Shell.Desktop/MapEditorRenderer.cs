@@ -1,188 +1,193 @@
 using Microsoft.Xna.Framework;
-using Microsoft.Xna.Framework.Graphics;
 using Quarp.Core;
-using static Quarp.Shell.Desktop.EditorChromeRenderer;
+using static Quarp.Shell.Desktop.ConsoleChromeRenderer;
 
 namespace Quarp.Shell.Desktop;
 
 /// <summary>
-/// Draws the map editor screen in the shell standard (M9 stage 2.5's caravan of reviews,
-/// applied to stage 3's map): the icon-only tab strip and the status bar as tinted full-width
-/// bands, the pencil column left of the canvas and the empty-tile column right of it at the
-/// identical margin (seventh review), the map viewport with its cursor, the tile picker under
-/// it and the minimap beside that, the reserved prompt line and the hover tooltips. Host UI
-/// like <see cref="LibraryRenderer"/> and <see cref="SpriteEditorRenderer"/> — window-native
-/// resolution, <see cref="Palette.Master32"/> colors, the system font and the icon strip — and
-/// just as unable to touch a framebuffer or a hash: no cartridge runs while this draws.
+/// Draws the map editor <b>into the console's own framebuffer</b> (wave R3, ADR-029): the top
+/// band with the exit button, the tooltip field and the five editor tabs; the two-wide tool
+/// block; the 17x8 map viewport with its grid, marked rectangle, floating paste and cursor; the
+/// position bar under it; the tile palette or the whole-map view when either is up; the status
+/// line and the one message line.
 ///
-/// <para>Everything both editor screens paint the same way comes from
-/// <see cref="EditorChromeRenderer"/>; this class owns the viewport, the picker and the minimap.</para>
+/// <para><b>What this file used to be.</b> Until this wave it owned a <c>GraphicsDevice</c>, a
+/// 128x128 <c>Texture2D</c> of the sprite sheet, a second one of the minimap, a font atlas and
+/// an icon atlas, and painted at the window's native resolution through a <c>SpriteBatch</c>.
+/// All of that is gone. Every pixel now goes through <c>Cls</c>, <c>RectFill</c>, <c>Rect</c>,
+/// <c>Print</c> and <c>Pset</c> on a <see cref="ShellScreen"/> — the same calls a cartridge
+/// makes — and the result is presented by the same <see cref="ConsolePresenter"/> the
+/// cartridge's frame goes through. The class is static for the same reason
+/// <see cref="SpriteEditorRenderer"/> is: with no device resource to own there is nothing to
+/// construct and nothing to dispose, and therefore also nothing to keep in step with a
+/// session's <c>Version</c> — the two texture caches this file used to carry went with the
+/// textures.</para>
 ///
-/// <para>All geometry comes from <see cref="MapEditorLayout"/>, the same struct the shell
-/// hit-tests the mouse against; this class owns only pixels-on-screen.</para>
+/// <para><b>Nothing was dropped, and here is the roll call</b> (the wave's law: if a control
+/// went under a key, it gets named). Pencil, hand, select and fill: buttons in the tool block,
+/// digits 1-4. Eraser (tile 0): its button, <c>Del</c>, and the right mouse button. Grid: its
+/// button and <c>`</c>. Tile palette: <b>an overlay now</b> — hold Shift, or latch it with its
+/// button; the wheel over it flips between its two pages. Whole-map view: <b>a mode now</b> —
+/// <c>Tab</c> or its button; a click on it travels. Block stamp: drag across the palette, or
+/// Ctrl+Shift+arrows. Clipboard: Ctrl+C / Ctrl+X / Ctrl+V. Save, undo, redo: buttons and their
+/// usual chords. Long-distance travel: arrows, <c>[</c> <c>]</c>, PgUp/PgDn, the wheel over the
+/// map, the position bar and the whole-map view.</para>
 ///
 /// <para><b>Where the picture of a tile comes from.</b> A map cell is a sprite number
 /// (MAP-FORMAT §2), and the sprite sheet has exactly one owner —
-/// <see cref="SpriteEditorSession"/>, the other tab of the same open cart. This renderer
-/// borrows that session's flattened <see cref="SpriteEditorSession.Pixels"/> to build its
-/// texture and re-uploads when its <see cref="SpriteEditorSession.Version"/> moves, so a
-/// sprite edited on the sprites tab is visible on the map the moment the author flips back.
-/// It borrows the <em>picture</em> and never the bank: no session reads another session's
-/// bytes off disk, which is the stage-3 contract.</para>
+/// <see cref="SpriteEditorSession"/>, the other tab of the same open cart. This renderer borrows
+/// that session's flattened <see cref="SpriteEditorSession.Pixels"/> and plots them, so a sprite
+/// edited on the sprites tab is visible on the map the moment the author flips back. It borrows
+/// the <em>picture</em> and never the bank: no session reads another session's bytes off disk,
+/// which is the stage-3 contract.</para>
 ///
-/// <para><b>Tile 0 is drawn as emptiness, not as sprite 0.</b> <c>Map()</c> skips a zero cell
-/// entirely (MAP-FORMAT §2), so the canvas draws nothing there, and the picker's cell 0 is
-/// overpainted with an explicit empty plate whatever art sprite 0 happens to hold. Showing
-/// sprite 0's pixels in a tile picker would promise a tile the console will never draw.</para>
+/// <para><b>Tile 0 is drawn as emptiness on the map and as its art in the palette.</b>
+/// <c>Map()</c> skips a zero cell entirely (MAP-FORMAT §2), so the viewport draws nothing there;
+/// the palette shows sprite 0's real pixels with a dim frame around them, which is the correction
+/// the owner's report of 2026-08-25 made to an earlier opaque plate — hiding the art hid the
+/// author's own work. The standing line under the map says what the tile does when it is the one
+/// in hand.</para>
+///
+/// <para><b>Cost, measured rather than waved away.</b> A full viewport is 17x8 cells of 64
+/// pixels = 8704 plots worst case, and far fewer on a real map because a zero cell plots
+/// nothing; the palette page is 128x64 = 8192. Against the 14400 the <c>Cls</c> on the same
+/// frame writes, that is the same order the sprite screen already pays. This is drawing, not
+/// simulation: it happens once per rendered frame, never inside a tick, and no rewind replays
+/// it.</para>
+///
+/// <para><b>Not the cartridge's console.</b> The framebuffer written here belongs to the shell
+/// (<see cref="ShellScreen"/>); the golden master the CI compares between architectures is
+/// <see cref="CartSession"/>'s, and no call in this file can reach it.</para>
 /// </summary>
-public sealed class MapEditorRenderer : IDisposable
+public static class MapEditorRenderer
 {
-    private readonly GraphicsDevice _device;
-    private readonly EditorChromeRenderer _chrome;
-    private readonly Texture2D _sheetTexture;
-    private readonly Color[] _sheetPixels;
-    private readonly Texture2D _minimapTexture;
-    private readonly Color[] _minimapPixels;
-    private readonly Color[] _palette;
+    /// <summary>What the tooltip field says when no control is hovered — TIC-80's <c>Names[mode]</c>.</summary>
+    public const string ScreenName = "TILEMAP";
 
-    // Which session and which of its versions each texture currently shows. The reference
-    // matters as much as the number: a fresh session starts at Version 0, and matching
-    // versions across different sessions would leave the previous cart's picture on screen.
-    private SpriteEditorSession? _shownSheetSession;
-    private int _shownSheetVersion;
-    private MapEditorSession? _shownMapSession;
-    private int _shownMapVersion;
-
-    public MapEditorRenderer(GraphicsDevice device)
+    /// <summary>The layout this screen is drawn with; the router asks for the same one, so picture and clicks cannot disagree.</summary>
+    public static MapEditorLayout LayoutFor(
+        ShellScreen screen, MapEditorSession map, MapEditorView view)
     {
-        ArgumentNullException.ThrowIfNull(device);
-        _device = device;
-        _chrome = new EditorChromeRenderer(device);
-        _sheetTexture = new Texture2D(device, VirtualConsole.SheetWidth, VirtualConsole.SheetHeight);
-        _sheetPixels = new Color[VirtualConsole.SheetWidth * VirtualConsole.SheetHeight];
-        _minimapTexture = new Texture2D(device, MapEditorLayout.MapColumns, MapEditorLayout.MapRows);
-        _minimapPixels = new Color[MapEditorLayout.MapColumns * MapEditorLayout.MapRows];
-        _palette = new Color[Palette.VisibleCount];
-        for (int i = 0; i < Palette.VisibleCount; i++)
-        {
-            _palette[i] = PaletteColors.Opaque(i);
-        }
-    }
-
-    /// <summary>
-    /// One frame of the map editor. Owns the whole surface (clears, begins and ends the batch)
-    /// like the other two host screens. <paramref name="sheet"/> is the sibling tab's session,
-    /// the sole source of what a tile looks like; <paramref name="view"/> is the camera and
-    /// cursor the shell's hit tests read, so the picture and the clicks cannot disagree;
-    /// <paramref name="hover"/> and <paramref name="tooltipVisible"/> come from the shell's
-    /// <see cref="IconHoverTracker"/> — frame highlight now, label after its three seconds.
-    /// </summary>
-    public void Draw(
-        SpriteBatch batch, int width, int height, MapEditorSession map, SpriteEditorSession sheet,
-        MapEditorView view, HoverTarget? hover, bool tooltipVisible)
-    {
-        ArgumentNullException.ThrowIfNull(batch);
+        ArgumentNullException.ThrowIfNull(screen);
         ArgumentNullException.ThrowIfNull(map);
-        ArgumentNullException.ThrowIfNull(sheet);
         ArgumentNullException.ThrowIfNull(view);
-        var layout = MapEditorLayout.Compute(width, height);
-        UploadSheetIfChanged(sheet);
-        UploadMinimapIfChanged(map);
-
-        _device.Clear(Ink);
-        batch.Begin(samplerState: SamplerState.PointClamp);
-
-        _chrome.DrawBands(batch, layout.Chrome);
-
-        DrawCanvas(batch, layout, map, view);
-        DrawButtons(batch, layout, map, view, hover);
-        DrawPicker(batch, layout, map);
-        DrawMinimap(batch, layout, view);
-        _chrome.DrawStatusText(batch, layout.Chrome, MapCoordinates(view), $"#{map.SelectedSprite:D3}");
-        _chrome.DrawPromptLine(
-            batch, layout.Chrome, view.ExitPromptShown, map.SaveError, StandingNotice(map));
-        DrawTooltip(batch, layout, width, height, hover, tooltipVisible);
-
-        batch.End();
+        return MapEditorLayout.Compute(screen.Width, screen.Height, view.Overlay, map.SelectedSprite);
     }
 
-    public void Dispose()
+    /// <summary>
+    /// One frame of the map editor. Owns the whole surface: it resets the console's drawing
+    /// state and clears, so nothing another screen left behind can bend these pixels.
+    /// <paramref name="sheet"/> is the sibling tab's session, the sole source of what a tile
+    /// looks like; <paramref name="view"/> is the camera, the cursor and the overlay the
+    /// router's hit tests read, so the picture and the clicks cannot disagree;
+    /// <paramref name="hover"/> and <paramref name="tooltipVisible"/> come from the shell's
+    /// <see cref="IconHoverTracker"/> — the hovered control's frame lights up immediately, the
+    /// text label only after the tracker's three seconds, and the label lands in the top band
+    /// rather than under the pointer (<see cref="ConsoleChrome.TooltipChars"/> explains why).
+    /// </summary>
+    /// <returns>The layout used, so a test can assert against exactly what was drawn.</returns>
+    public static MapEditorLayout Draw(
+        ShellScreen screen, MapEditorSession map, SpriteEditorSession sheet, MapEditorView view,
+        HoverTarget? hover, bool tooltipVisible)
     {
-        _chrome.Dispose();
-        _sheetTexture.Dispose();
-        _minimapTexture.Dispose();
+        ArgumentNullException.ThrowIfNull(sheet);
+        MapEditorLayout layout = LayoutFor(screen, map, view);
+        VirtualConsole console = screen.Console;
+        screen.Begin();
+        console.Cls(Ink);
+
+        DrawBands(console, layout.Chrome);
+        if (layout.Overlay != MapEditorOverlay.World)
+        {
+            DrawCanvas(console, layout, map, sheet, view);
+        }
+        DrawPalette(console, layout, map, sheet);
+        DrawMinimap(console, layout, map, view);
+        DrawSlider(console, layout, view);
+        DrawButtons(console, layout, map, view, hover);
+        // The readouts: the cursor's cell — the pair an author would hand Mget — and the tile
+        // number in hand, which is the block's anchor when a block is in hand.
+        DrawStatusText(
+            console, layout.Chrome, $"{view.CursorX:D3},{view.CursorY:D3}", $"#{map.SelectedSprite:D3}");
+        DrawMessageLine(
+            console, layout.Chrome, view.ExitPromptShown, map.SaveError, StandingNotice(map));
+        DrawTooltipField(
+            console, layout.Chrome,
+            tooltipVisible && hover is HoverTarget target && target.Button is EditorButton button
+                ? EditorIcons.MapTooltip(button)
+                : null,
+            ScreenName);
+        return layout;
     }
 
-    /// <summary>The status band's readout: the cursor's cell — the pair an author would hand <c>Mget</c>.</summary>
-    private static string MapCoordinates(MapEditorView view) => $"{view.CursorX:D3},{view.CursorY:D3}";
-
     /// <summary>
-    /// The screen's standing line under the prompt and the save error. Not optional chrome: the
-    /// session refuses map edits while map.csv is present (MAP-FORMAT §4), and an author who is
-    /// not told discovers it by drawing into a wall.
+    /// The screen's standing line, re-cut for forty columns. Read-only wins when both apply: it
+    /// is the one that changes what saving does — the session refuses map edits while map.csv is
+    /// present (MAP-FORMAT §4), and an author who is not told discovers it by drawing into a
+    /// wall.
+    ///
+    /// <para>The tile-0 line is the palette's dim frame spelled out: the console skips tile 0
+    /// when it draws a map (MAP-FORMAT §2, the PICO-8 and LIKO-12 rule), so painting with it
+    /// clears cells, and an author who selected it deserves to read that before he wonders why
+    /// his grass will not stick.</para>
+    ///
+    /// <para>Both texts are shorter than the host screen's, which ran to 57 and 52 characters
+    /// against the console line's 39. Cutting them here, at the one place that knows what they
+    /// say, beats truncating them at the one place that knows how wide the line is — a truncated
+    /// sentence ends mid-word. This is the same trade <see cref="SpriteEditorRenderer.StandingNotice"/>
+    /// made one wave earlier.</para>
     /// </summary>
-    /// <summary>
-    /// The screen's standing line. Read-only wins when both apply: it is the one that changes
-    /// what saving does. The tile-0 line is the picker's marker spelled out — the console skips
-    /// tile 0 when it draws a map (SPEC/MAP-FORMAT §2, the PICO-8 and LIKO-12 rule), so
-    /// painting with it clears cells, and an author who selected it deserves to read that
-    /// before he wonders why his grass will not stick.
-    /// </summary>
-    public static string? StandingNotice(MapEditorSession map) =>
-        map.MapReadOnly
-            ? $"READ-ONLY: {MapEditorSession.MapSourceFileName.ToUpperInvariant()} OWNS THIS MAP - REMOVE IT TO EDIT HERE"
-            : map.SelectedSprite == 0
-                ? "TILE 000 IS THE EMPTY CELL - PAINTING WITH IT ERASES"
+    public static string? StandingNotice(MapEditorSession map)
+    {
+        ArgumentNullException.ThrowIfNull(map);
+        return map.MapReadOnly
+            ? $"READ-ONLY: {MapEditorSession.MapSourceFileName.ToUpperInvariant()} OWNS THIS MAP"
+            : map.SelectedSprite == MapEditorSession.EmptyTile
+                ? "TILE 000 IS EMPTY - IT ERASES CELLS"
                 : null;
+    }
 
-    private void UploadSheetIfChanged(SpriteEditorSession sheet)
+    /// <summary>
+    /// Every icon-button through the one mechanism <see cref="ConsoleChromeRenderer.DrawButton"/>
+    /// owns. The only decision this screen makes is which buttons read as active: the tab of the
+    /// screen you are on, the tool in hand, the grid switch while the grid is on, and wave R3's
+    /// two overlay switches while their overlay is up. Which button is which tool is not decided
+    /// here — <see cref="EditorIcons.MapToolOf"/> owns that mapping and the click router reads
+    /// the same one, so the highlight cannot point at a button whose click selects something
+    /// else.
+    /// </summary>
+    private static void DrawButtons(
+        VirtualConsole console, in MapEditorLayout layout, MapEditorSession map, MapEditorView view,
+        HoverTarget? hover)
     {
-        if (ReferenceEquals(sheet, _shownSheetSession) && sheet.Version == _shownSheetVersion)
+        foreach (EditorButtonPlace place in layout.Buttons)
         {
-            return;
+            var state = new EditorButtonState(
+                Active: place.Id == EditorButton.TilemapTab
+                    || EditorIcons.MapToolOf(place.Id) == view.Tool
+                    || (place.Id == EditorButton.GridToggle && view.GridShown)
+                    || (place.Id == EditorButton.TilesToggle
+                        && layout.Overlay == MapEditorOverlay.Tiles)
+                    || (place.Id == EditorButton.WorldToggle && view.WorldShown),
+                Hovered: hover is HoverTarget target && target.Button == place.Id,
+                Dirty: map.IsDirty,
+                CanUndo: map.CanUndo,
+                CanRedo: map.CanRedo);
+            DrawButton(console, place, state, EditorIcons.IconFor(place.Id), text: null);
         }
+    }
+
+    /// <summary>
+    /// The map viewport: every visible non-zero cell plotted out of the sibling session's sheet,
+    /// then the grid, then the marked rectangle, the floating paste and the cursor. Zero cells
+    /// draw nothing at all, which is exactly what <c>VirtualConsole.Map</c> does with them — the
+    /// editor shows the console's own truth, not a prettier one.
+    /// </summary>
+    private static void DrawCanvas(
+        VirtualConsole console, in MapEditorLayout layout, MapEditorSession map,
+        SpriteEditorSession sheet, MapEditorView view)
+    {
         ReadOnlySpan<byte> pixels = sheet.Pixels;
-        for (int i = 0; i < pixels.Length; i++)
-        {
-            _sheetPixels[i] = _palette[pixels[i]];
-        }
-        _sheetTexture.SetData(_sheetPixels);
-        _shownSheetSession = sheet;
-        _shownSheetVersion = sheet.Version;
-    }
-
-    /// <summary>
-    /// The minimap is one texel per map cell, so the whole 256x72 map is one quad however far
-    /// the author has scrolled. Occupied or empty, nothing finer: at one pixel per cell a tile's
-    /// own colours would be noise, and the question this thumbnail answers is "where is there
-    /// anything, and where am I" — the shape of the level, not its art. It is rebuilt only when
-    /// <see cref="MapEditorSession.Version"/> moves, so an idle screen costs no upload.
-    /// </summary>
-    private void UploadMinimapIfChanged(MapEditorSession map)
-    {
-        if (ReferenceEquals(map, _shownMapSession) && map.Version == _shownMapVersion)
-        {
-            return;
-        }
-        ReadOnlySpan<byte> tiles = map.Map;
-        for (int i = 0; i < tiles.Length; i++)
-        {
-            _minimapPixels[i] = tiles[i] == 0 ? Ink : Text;
-        }
-        _minimapTexture.SetData(_minimapPixels);
-        _shownMapSession = map;
-        _shownMapVersion = map.Version;
-    }
-
-    /// <summary>
-    /// The map viewport: every visible non-zero cell as one quad out of the sheet texture,
-    /// plus the cursor frame. Zero cells draw nothing at all, which is exactly what
-    /// <c>VirtualConsole.Map</c> does with them — the editor shows the console's own truth,
-    /// not a prettier one.
-    /// </summary>
-    private void DrawCanvas(SpriteBatch batch, in MapEditorLayout layout, MapEditorSession map, MapEditorView view)
-    {
-        _chrome.DrawFrame(batch, layout.Canvas, layout.Ui, Dim);
         int size = VirtualConsole.SpriteSize;
         for (int row = 0; row < layout.VisibleRows; row++)
         {
@@ -191,45 +196,68 @@ public sealed class MapEditorRenderer : IDisposable
             {
                 int cellX = view.CameraX + column;
                 byte tile = map.TileAt(cellX, cellY);
-                if (tile == 0)
+                if (tile == MapEditorSession.EmptyTile)
                 {
                     continue;
                 }
-                var source = new Rectangle(
-                    tile % VirtualConsole.SheetColumns * size,
-                    tile / VirtualConsole.SheetColumns * size,
-                    size,
-                    size);
-                batch.Draw(
-                    _sheetTexture, layout.MapCellRect(cellX, cellY, view.CameraX, view.CameraY),
-                    source, Color.White);
+                BlitSprite(
+                    console, pixels, tile,
+                    layout.Canvas.X + column * size, layout.Canvas.Y + row * size);
             }
         }
 
-        DrawGrid(batch, layout, view);
+        DrawGrid(console, layout, view);
 
         // The marked rectangle (wave 3d), under the cursor frame so the cursor stays readable
         // inside it. A frame, never a tint: the author is choosing cells by their art.
         if (view.HasSelection)
         {
-            _chrome.DrawFrame(
-                batch,
-                layout.MapAreaRect(
-                    view.SelectionX, view.SelectionY, view.SelectionWidth, view.SelectionHeight,
-                    view.CameraX, view.CameraY),
-                Math.Max(1, layout.Ui / 2),
+            Outline(
+                console,
+                Rectangle.Intersect(
+                    layout.MapAreaRect(
+                        view.SelectionX, view.SelectionY, view.SelectionWidth, view.SelectionHeight,
+                        view.CameraX, view.CameraY),
+                    layout.Canvas),
                 Warn);
         }
 
-        DrawFloatingPaste(batch, layout, view);
+        DrawFloatingPaste(console, layout, sheet, view);
 
-        // The cursor — where the keyboard pencil is and what the status bar reads. A frame
+        // The cursor — where the keyboard pencil is and what the status line reads. A frame
         // around the cell, not over it: the tile being placed must stay visible under it.
-        _chrome.DrawFrame(
-            batch,
-            layout.MapCellRect(view.CursorX, view.CursorY, view.CameraX, view.CameraY),
-            Math.Max(1, layout.Ui / 2),
-            Bright);
+        Rectangle cursor = layout.MapCellRect(view.CursorX, view.CursorY, view.CameraX, view.CameraY);
+        Outline(console, Rectangle.Intersect(cursor, layout.Canvas), Bright);
+    }
+
+    /// <summary>
+    /// The tile grid: one dim line on every cell boundary inside the viewport, over the tiles
+    /// and under the selection and cursor frames. TIC-80 has it on by default and on a key
+    /// (<c>drawGridButton</c>, <c>`</c>) and so do we — <see cref="MapEditorView.GridShown"/> is
+    /// the switch.
+    ///
+    /// <para><b>The host screen refused to draw this below map scale 2</b>, on the argument that
+    /// a one-pixel line in an eight-pixel cell reads as graph paper. Wave R3 reverses that, and
+    /// the reversal is the point of ADR-029: eight pixels to the cell with a one-pixel grid is
+    /// not a degraded case of some larger scale, it is <em>the reference's own density</em>
+    /// (TIC-80 draws exactly this, in vbank1, over a map at exactly this size). The old rule
+    /// would have left the grid button with nothing to draw on every frame of this screen, which
+    /// is a switch that cannot be seen to work.</para>
+    /// </summary>
+    private static void DrawGrid(VirtualConsole console, in MapEditorLayout layout, MapEditorView view)
+    {
+        if (!view.GridShown)
+        {
+            return;
+        }
+        for (int column = 1; column < layout.VisibleColumns; column++)
+        {
+            Fill(console, layout.GridColumnLine(column, 1), Dim);
+        }
+        for (int row = 1; row < layout.VisibleRows; row++)
+        {
+            Fill(console, layout.GridRowLine(row, 1), Dim);
+        }
     }
 
     /// <summary>
@@ -244,13 +272,14 @@ public sealed class MapEditorRenderer : IDisposable
     /// paste itself is clipped at the map's edge by the session, which is why a block hanging
     /// off the corner shows only the part that will actually be written.</para>
     /// </summary>
-    private void DrawFloatingPaste(SpriteBatch batch, in MapEditorLayout layout, MapEditorView view)
+    private static void DrawFloatingPaste(
+        VirtualConsole console, in MapEditorLayout layout, SpriteEditorSession sheet, MapEditorView view)
     {
         if (!view.PasteFloating || !view.Clipboard.HasBlock)
         {
             return;
         }
-        int size = VirtualConsole.SpriteSize;
+        ReadOnlySpan<byte> pixels = sheet.Pixels;
         int width = view.Clipboard.Width;
         int height = view.Clipboard.Height;
         ReadOnlySpan<byte> tiles = view.Clipboard.Tiles;
@@ -272,165 +301,163 @@ public sealed class MapEditorRenderer : IDisposable
                 }
                 byte tile = tiles[row * width + column];
                 Rectangle destination = layout.MapCellRect(cellX, cellY, view.CameraX, view.CameraY);
-                if (tile == 0)
+                if (tile == MapEditorSession.EmptyTile)
                 {
                     // Tile 0 is emptiness, and pasting it erases — so the ghost shows a plate
-                    // rather than nothing, or an author would read "this cell is not part of
-                    // the block" where the truth is "this cell will be cleared".
-                    batch.Draw(_chrome.White, destination, Dim);
+                    // rather than nothing, or an author would read "this cell is not part of the
+                    // block" where the truth is "this cell will be cleared".
+                    Fill(console, destination, Dim);
                     continue;
                 }
-                var source = new Rectangle(
-                    tile % VirtualConsole.SheetColumns * size,
-                    tile / VirtualConsole.SheetColumns * size,
-                    size,
-                    size);
-                batch.Draw(_sheetTexture, destination, source, Color.White);
+                BlitSprite(console, pixels, tile, destination.X, destination.Y);
             }
         }
-        _chrome.DrawFrame(
-            batch,
-            layout.MapAreaRect(view.CursorX, view.CursorY, width, height, view.CameraX, view.CameraY),
-            Math.Max(1, layout.Ui / 2),
+        Outline(
+            console,
+            Rectangle.Intersect(
+                layout.MapAreaRect(view.CursorX, view.CursorY, width, height, view.CameraX, view.CameraY),
+                layout.Canvas),
             Warn);
     }
 
     /// <summary>
-    /// The tile grid: one dim line on every cell boundary inside the viewport, drawn over the
-    /// tiles and under the selection and cursor frames. TIC-80 has it on by default and on a
-    /// key (<c>drawGridButton</c>, <c>`</c>) and so do we — <see cref="MapEditorView.GridShown"/>
-    /// is the switch.
+    /// The tile palette, one page of it, lying over the map (TIC-80 <c>drawSheetReg</c>). The
+    /// page is the <see cref="SheetStrip"/> lane holding the selected tile, which is why it
+    /// always contains the block's frame and why the palette needs no page state of its own —
+    /// <see cref="MapEditorLayout.PaletteLane"/> carries the whole argument.
     ///
-    /// <para><b>Never at <see cref="MapEditorLayout.MapScale"/> 1.</b> A map cell is then eight
-    /// window pixels across and a one-pixel line is an eighth of it: the grid would take a
-    /// visible share of every tile and the screen would read as graph paper with sprites on it
-    /// rather than a map. The switch is still honoured — it just has nothing to draw — which is
-    /// why the button's tooltip says so out loud.</para>
+    /// <para>Tile 0 wears a dim frame wherever the page shows it: it is the map's empty cell,
+    /// and the author is told so here — where he picks — and not only after painting with it and
+    /// watching his grass disappear. The chosen block wears a bright one, clipped at the page's
+    /// edge so a block sized past it by Ctrl+Shift+arrows cannot draw a frame across the map.</para>
     /// </summary>
-    private void DrawGrid(SpriteBatch batch, in MapEditorLayout layout, MapEditorView view)
+    private static void DrawPalette(
+        VirtualConsole console, in MapEditorLayout layout, MapEditorSession map, SpriteEditorSession sheet)
     {
-        if (!view.GridShown || layout.MapScale <= 1)
+        if (layout.Sheet.IsEmpty)
         {
             return;
         }
-        int thickness = Math.Max(1, layout.Ui / 4);
-        for (int column = 1; column < layout.VisibleColumns; column++)
+        ReadOnlySpan<byte> pixels = sheet.Pixels;
+        int size = VirtualConsole.SpriteSize;
+        for (int row = 0; row < SheetStrip.Rows; row++)
         {
-            batch.Draw(_chrome.White, layout.GridColumnLine(column, thickness), Dim);
+            for (int column = 0; column < SheetStrip.LaneColumns; column++)
+            {
+                if (!SheetStrip.TryStripCellToSheetCell(
+                    layout.PaletteLane * SheetStrip.LaneColumns + column, row,
+                    out int sheetX, out int sheetY))
+                {
+                    continue;
+                }
+                BlitSheetCell(
+                    console, pixels, sheetX, sheetY,
+                    layout.Sheet.X + column * size, layout.Sheet.Y + row * size);
+            }
         }
-        for (int row = 1; row < layout.VisibleRows; row++)
-        {
-            batch.Draw(_chrome.White, layout.GridRowLine(row, thickness), Dim);
-        }
-    }
-
-    /// <summary>
-    /// Every icon-button through the one mechanism <see cref="EditorChromeRenderer.DrawButton"/>
-    /// owns. The only decision this screen makes is which buttons read as active: the tab of the
-    /// screen you are on, the tool in hand, and the grid switch while the grid is on. Which
-    /// button is which tool is not decided here — <see cref="EditorIcons.MapToolOf"/> owns that
-    /// mapping and the click router reads the same one, so the highlight cannot point at a
-    /// button whose click selects something else.
-    /// </summary>
-    private void DrawButtons(
-        SpriteBatch batch, in MapEditorLayout layout, MapEditorSession map, MapEditorView view,
-        HoverTarget? hover)
-    {
-        foreach (EditorButtonPlace place in layout.Buttons)
-        {
-            var state = new EditorButtonState(
-                Active: place.Id == EditorButton.TilemapTab
-                    || EditorIcons.MapToolOf(place.Id) == view.Tool
-                    || (place.Id == EditorButton.GridToggle && view.GridShown),
-                Hovered: hover is HoverTarget target && target.Button == place.Id,
-                Dirty: map.IsDirty,
-                CanUndo: map.CanUndo,
-                CanRedo: map.CanRedo);
-            _chrome.DrawButton(
-                batch, layout.Chrome, place, state, EditorIcons.IconFor(place.Id), text: null);
-        }
-    }
-
-    /// <summary>
-    /// The tile picker: the whole <see cref="SheetStrip"/>, one quad per lane (the same
-    /// lane-block trick the sprite editor's sheet uses, so the presentation transform is not
-    /// duplicated here), then tile 0's marker, then the selected tile's frame.
-    /// There is no slider because <see cref="MapEditorLayout"/> sizes the window to hold every
-    /// column — all 256 tiles at once at the shell's window sizes.
-    /// </summary>
-    private void DrawPicker(SpriteBatch batch, in MapEditorLayout layout, MapEditorSession map)
-    {
-        _chrome.DrawFrame(batch, layout.Sheet, layout.Ui, Dim);
-        for (int lane = 0; lane < SheetStrip.Lanes; lane++)
-        {
-            int firstSprite = lane * SheetStrip.Rows * SheetStrip.LaneColumns;
-            SheetStrip.SpriteToStripCell(firstSprite, out int stripColumn, out _);
-            var source = new Rectangle(
-                0,
-                lane * SheetStrip.Rows * VirtualConsole.SpriteSize,
-                VirtualConsole.SheetWidth,
-                SheetStrip.PixelHeight);
-            var drawn = new Rectangle(
-                layout.Sheet.X + stripColumn * VirtualConsole.SpriteSize * layout.SheetScale,
-                layout.Sheet.Y,
-                source.Width * layout.SheetScale,
-                source.Height * layout.SheetScale);
-            batch.Draw(_sheetTexture, drawn, source, Color.White);
-        }
-
-        // Tile 0 wears a marker, not a lid (2026-08-25, owner's report). It used to be painted
-        // over with an opaque plate so the picker would not "promise a tile the console will
-        // never draw" — and that plate is what a first author hit: he drew grass on sprite 0,
-        // opened the map, found a blank broken-looking cell, and concluded the editor was
-        // broken. Both references that show a picker at all show sprite 0's real pixels there:
-        // TIC-80 draws the whole sheet from index 0 with no transparent colour
-        // (studio/editors/map.c, drawSheetReg), and PICO-8's navigator is the sheet itself.
-        // Hiding the art hid the author's own work; the honest thing is to show the art and
-        // say out loud what the tile does — the dim frame here, and the standing line under
-        // the prompt when this tile is the selected one.
-        _chrome.DrawFrame(batch, layout.TileCellRect(0), Math.Max(1, layout.Ui / 2), Dim);
-
-        // The chosen block, framed (wave 3e). One rectangle for both cases: at 1x1 —
-        // every path that names a single tile — this is exactly the cell frame it used to be,
-        // and a drag across the picker grows it to the N x M the author marked (TIC-80's
-        // <c>map->sheet.rect</c>). The size comes from the session, the one owner of what the
-        // pencil puts down, so the frame cannot promise a block the pencil will not stamp.
-        _chrome.DrawFrame(
-            batch,
-            layout.TileBlockRect(map.SelectedSprite, map.BlockWidth, map.BlockHeight),
-            Math.Max(1, layout.Ui / 2),
+        Outline(
+            console, Rectangle.Intersect(layout.TileCellRect(0), layout.Sheet), Dim);
+        Outline(
+            console,
+            Rectangle.Intersect(
+                layout.TileBlockRect(map.SelectedSprite, map.BlockWidth, map.BlockHeight),
+                layout.Sheet),
             Bright);
     }
 
     /// <summary>
-    /// The whole map as one quad, with the viewport's outline riding on it — the mouse's road
-    /// to the far corner (a click there is a jump) and the only place the author can see where
-    /// the window is inside eighty screens of content.
+    /// The whole-map view (TIC-80's <c>world.c</c>, reached by Tab or its button): the entire
+    /// 256x72 map folded two cells to the pixel, with the viewport's outline riding on it. A
+    /// pixel is lit when any cell of its block is occupied — at this size a tile's own colours
+    /// would be noise, and the question this view answers is "where is there anything, and where
+    /// am I": the shape of the level, not its art.
     /// </summary>
-    private void DrawMinimap(SpriteBatch batch, in MapEditorLayout layout, MapEditorView view)
+    private static void DrawMinimap(
+        VirtualConsole console, in MapEditorLayout layout, MapEditorSession map, MapEditorView view)
     {
-        _chrome.DrawFrame(batch, layout.Minimap, layout.Ui, Dim);
-        batch.Draw(_minimapTexture, layout.Minimap, Color.White);
-        _chrome.DrawFrame(
-            batch, layout.MinimapViewport(view.CameraX, view.CameraY), Math.Max(1, layout.Ui / 2),
-            Bright);
-    }
-
-    /// <summary>
-    /// The tooltip's map half: which text and which anchor. On this screen the only hover
-    /// target with a tooltip is a button, so the resolution is one lookup in
-    /// <see cref="EditorIcons.MapTooltip"/>; the box itself belongs to the shared painter.
-    /// </summary>
-    private void DrawTooltip(
-        SpriteBatch batch, in MapEditorLayout layout, int width, int height,
-        HoverTarget? hover, bool tooltipVisible)
-    {
-        if (hover is not HoverTarget target || target.Button is not EditorButton button || !tooltipVisible)
+        if (layout.Minimap.IsEmpty)
         {
             return;
         }
-        _chrome.DrawTooltip(
-            batch, layout.Chrome, width, height,
-            EditorIcons.MapTooltip(button), layout.ButtonRect(button));
+        int step = MapEditorLayout.MinimapCellsPerPixel;
+        for (int row = 0; row < layout.Minimap.Height; row++)
+        {
+            for (int column = 0; column < layout.Minimap.Width; column++)
+            {
+                if (BlockOccupied(map, column * step, row * step, step))
+                {
+                    console.Pset(layout.Minimap.X + column, layout.Minimap.Y + row, Text);
+                }
+            }
+        }
+        Outline(console, layout.MinimapViewport(view.CameraX, view.CameraY), Bright);
+    }
+
+    /// <summary>True when any cell of one minimap pixel's block carries a tile.</summary>
+    private static bool BlockOccupied(MapEditorSession map, int cellX, int cellY, int step)
+    {
+        for (int y = 0; y < step; y++)
+        {
+            for (int x = 0; x < step; x++)
+            {
+                if (map.TileAt(cellX + x, cellY + y) != MapEditorSession.EmptyTile)
+                {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    /// <summary>
+    /// The horizontal position bar: the track as a dim outline, the thumb where the camera
+    /// stands. It is drawn in every state of this screen, including under an overlay, because it
+    /// says where the map underneath is — the one piece of the working view that stays true
+    /// while something else is on top of it.
+    /// </summary>
+    private static void DrawSlider(VirtualConsole console, in MapEditorLayout layout, MapEditorView view)
+    {
+        Outline(console, layout.Slider, Dim);
+        Fill(console, layout.SliderThumb(view.CameraX), Text);
+    }
+
+    /// <summary>One tile's 8x8 art, by sprite number, plotted straight out of the sibling session's sheet.</summary>
+    private static void BlitSprite(
+        VirtualConsole console, ReadOnlySpan<byte> pixels, int sprite, int x, int y) =>
+        BlitSheetCell(
+            console, pixels,
+            sprite % VirtualConsole.SheetColumns, sprite / VirtualConsole.SheetColumns, x, y);
+
+    /// <summary>
+    /// One 8x8 cell of the canonical sheet, plotted at (<paramref name="x"/>,
+    /// <paramref name="y"/>). The one place sheet bytes become console pixels on this screen, so
+    /// the map, the palette and the paste ghost cannot acquire three different ideas of where a
+    /// sprite's pixels live.
+    /// </summary>
+    private static void BlitSheetCell(
+        VirtualConsole console, ReadOnlySpan<byte> pixels, int cellX, int cellY, int x, int y)
+    {
+        int size = VirtualConsole.SpriteSize;
+        for (int row = 0; row < size; row++)
+        {
+            int source = (cellY * size + row) * VirtualConsole.SheetWidth + cellX * size;
+            for (int column = 0; column < size; column++)
+            {
+                console.Pset(x + column, y + row, pixels[source + column]);
+            }
+        }
+    }
+
+    /// <summary>One filled rectangle, a layout rectangle unpacked into the console's call.</summary>
+    private static void Fill(VirtualConsole console, Rectangle rect, byte color) =>
+        console.RectFill(rect.X, rect.Y, rect.Width, rect.Height, color);
+
+    /// <summary>One outline, skipped when the clipped rectangle came back empty.</summary>
+    private static void Outline(VirtualConsole console, Rectangle rect, byte color)
+    {
+        if (rect.Width > 0 && rect.Height > 0)
+        {
+            console.Rect(rect.X, rect.Y, rect.Width, rect.Height, color);
+        }
     }
 }

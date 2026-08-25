@@ -59,9 +59,15 @@ public class EmptyTileNoticeTests : IDisposable
         var editor = new SpriteEditorSession(CartFolder());
 
         Assert.Equal(0, editor.SpriteIndex);
+        // Re-cut in wave R2 from 58 characters to 31: the sprite screen's message line is one
+        // console line of forty columns now (ADR-029), and a sentence that runs off the edge
+        // mid-word warns nobody. The cut is made here, where the sentence is written, rather
+        // than by the truncation at the one place that knows the width — which is why the string
+        // is asserted whole instead of being asserted "starts with".
         Assert.Equal(
-            "SPRITE 000 IS THE MAP'S EMPTY TILE - A MAP WILL NOT DRAW IT",
+            "SPR 000 IS THE MAP'S EMPTY TILE",
             SpriteEditorRenderer.StandingNotice(editor));
+        Assert.True(SpriteEditorRenderer.StandingNotice(editor)!.Length <= 39);
 
         editor.SelectRegionCell(1, 0);
         Assert.Equal(1, editor.SpriteIndex);

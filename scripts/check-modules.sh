@@ -143,6 +143,7 @@ LAYERS=(
 
   # --- 2 «вид»: геометрия и состояние показа, headless ---
   "EditorChrome.cs|2"          # рама обоих редакторов (+EditorButtonPlace, EditorPromptVerb)
+  "EditorButtonState.cs|2"     # пять булей о состоянии кнопки: читают оба художника рамы
   "SpriteEditorLayout.cs|2"    # раскладка экрана спрайтов
   "MapEditorLayout.cs|2"       # раскладка экрана карты
   "MapEditorView.cs|2"         # камера/курсор карты (+MapEditorTileStep, MapEditorPaint)
@@ -165,12 +166,19 @@ LAYERS=(
   # (Cls/RectFill/Print) и конструируется в headless-тесте. Проверяемая примета слоя 2
   # выполняется буквально: LibraryScreenGoldenTests строит его без GraphicsDevice.
   "LibraryRenderer.cs|2"       # пиксели экрана библиотеки — в консоли, не в окне
+  # Волна R2 положила рядом со старой рамой вторую — консольную. Оба файла в слое 2 по тому же
+  # признаку: устройства не держат, конструируются в headless-тесте. ConsoleChromeRenderer —
+  # не «рендер», хотя и рисует: он пишет в кадровый буфер вызовами ядра, как LibraryRenderer.
+  "ConsoleChrome.cs|2"         # рама экрана инструмента в пикселях консоли (160x90)
+  "ConsoleChromeRenderer.cs|2" # пиксели этой рамы — полосы, кнопки, статус, строка сообщения
+  # SpriteEditorRenderer переехал сюда из «рендера» в волне R2, ровно как LibraryRenderer в R1:
+  # ни GraphicsDevice, ни Texture2D, ни SpriteBatch — только ShellScreen и вызовы ядра.
+  "SpriteEditorRenderer.cs|2"  # пиксели экрана спрайтов — в консоли, не в окне
 
   # --- 3 «рендер»: владеет ресурсом устройства ---
   "PixelFontAtlas.cs|3"        # текстурная полоса глифов
   "EditorIconAtlas.cs|3"       # текстурная полоса иконок
-  "EditorChromeRenderer.cs|3"  # пиксели общей рамы (+EditorButtonState)
-  "SpriteEditorRenderer.cs|3"  # пиксели экрана спрайтов
+  "EditorChromeRenderer.cs|3"  # пиксели общей рамы (хостовой)
   "MapEditorRenderer.cs|3"     # пиксели экрана карты
   "CodeEditorRenderer.cs|3"    # пиксели экрана кода
   "SfxEditorRenderer.cs|3"     # пиксели экрана звука

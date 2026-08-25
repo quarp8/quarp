@@ -12,8 +12,8 @@ namespace Quarp.Shell.Desktop.Tests;
 ///
 /// <para><b>The seam is <see cref="SpriteEditorSession"/> itself, plus the two pure helper
 /// types either input world's own translation goes through before it lands there —
-/// <see cref="SpriteEditorLayout"/> (a pure function of window size, no <c>GraphicsDevice</c>
-/// needed: <see cref="SpriteEditorLayout.Compute"/> takes plain ints) turns a mouse point into
+/// <see cref="SpriteEditorLayout"/> (a pure function of the SURFACE's size — since wave R2 the
+/// console's own 160x90, no <c>GraphicsDevice</c> needed either way) turns a mouse point into
 /// a button id, a swatch, a sheet cell or a canvas pixel, and <see cref="EditorIcons"/>
 /// (a static routing table, extracted in wave 2g precisely so it could be tested without a
 /// window — see <see cref="EditorButtonContractTests"/>) turns a button id or a keyboard digit
@@ -64,6 +64,11 @@ namespace Quarp.Shell.Desktop.Tests;
 /// </summary>
 public class InputParityInstrumentTests : IDisposable
 {
+    /// <summary>The console — the surface this screen is laid out on since wave R2 (ADR-029).</summary>
+    private const int ConsoleWidth = 160;
+
+    private const int ConsoleHeight = 90;
+
     private readonly string _root;
 
     public InputParityInstrumentTests()
@@ -293,7 +298,10 @@ public class InputParityInstrumentTests : IDisposable
 
     // ==================================================================================
     // Channel B: mouse only. Every frame goes through the REAL EditorMouseReader, hit-tests
-    // against a REAL SpriteEditorLayout (a pure function of window size — no GraphicsDevice),
+    // against a REAL SpriteEditorLayout — in CONSOLE pixels since wave R2, which is the space
+    // the production router hit-tests in too (QuarpGame translates the window's point through
+    // EditorMouse.ToConsole before the router ever sees it), so the points below are the very
+    // numbers the shell computes,
     // then through a mirror of the mouse-reachable half of UpdateEditor, same ordering law
     // (an armed group slot's release is judged before a fresh press). No Keys value is
     // referenced anywhere below this line.
@@ -405,7 +413,7 @@ public class InputParityInstrumentTests : IDisposable
     /// </summary>
     private static void RunMouseOnlyScenario(SpriteEditorSession editor)
     {
-        var layout = SpriteEditorLayout.Compute(1280, 720, regionCells: 1);
+        var layout = SpriteEditorLayout.Compute(ConsoleWidth, ConsoleHeight, regionCells: 1);
         var mouseReader = new EditorMouseReader();
         var flyout = new ToolbarFlyout();
 
@@ -546,7 +554,7 @@ public class InputParityInstrumentTests : IDisposable
             [EditorButton.SoundTab] = "ALT+",
         };
 
-        foreach (EditorButtonPlace place in SpriteEditorLayout.Compute(1280, 720, regionCells: 1).Buttons)
+        foreach (EditorButtonPlace place in SpriteEditorLayout.Compute(ConsoleWidth, ConsoleHeight, regionCells: 1).Buttons)
         {
             EditorButton button = place.Id;
             if (EditorIcons.IsStub(button) || button == EditorButton.SpritesTab)
@@ -628,11 +636,11 @@ public class InputParityInstrumentTests : IDisposable
         KeyFrame(reader, editor, Keys.LeftShift);
 
         // The mouse twin is a real click, not a restatement: it goes through the same
-        // EditorMouseReader and the same layout hit test the shell uses, at the window pixel
+        // EditorMouseReader and the same layout hit test the shell uses, at the console pixel
         // of that strip cell. Two channels that share only the session are what parity means.
         var mouseTwin = new SpriteEditorSession(FreshCartFolder("region-anchor-parity-mouse"));
         mouseTwin.SelectRegionSize(1);
-        var layout = SpriteEditorLayout.Compute(1280, 720, mouseTwin.RegionCells);
+        var layout = SpriteEditorLayout.Compute(ConsoleWidth, ConsoleHeight, mouseTwin.RegionCells);
         var flyout = new ToolbarFlyout();
         var mouseReader = new EditorMouseReader();
         int cell = VirtualConsole.SpriteSize * layout.SheetScale;

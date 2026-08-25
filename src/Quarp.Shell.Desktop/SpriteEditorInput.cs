@@ -20,6 +20,15 @@ public readonly record struct EditorShell(
     ShellModeMachine Modes, ToolbarFlyout Flyout, IconHoverTracker Hover, SheetScroll SheetScroll,
     int BackBufferWidth, int BackBufferHeight);
 
+// Wave R2 footnote on those last two numbers: they are the size of the SURFACE the screen is
+// laid out on, which for the three host-resolution editors is still the back buffer and for the
+// sprite editor is the console itself — 160x90. Nothing in either router had to change for that,
+// which is the point: a router lays out and hit-tests in the surface it is handed, and the one
+// place that knows which surface a screen lives on is the window class that hands it over
+// (QuarpGame.ConsoleEditorContext), together with the matching pointer translation
+// (EditorMouse.ToConsole, through FramePlacement). The name stays BackBufferWidth until the last
+// screen has moved and there is only one answer left to give it.
+
 /// <summary>
 /// The sprite editor's input router: one frame of keys and mouse hits turned into calls on
 /// <see cref="SpriteEditorSession"/>, <see cref="ShellModeMachine"/> and the editor's view
@@ -29,6 +38,15 @@ public readonly record struct EditorShell(
 /// geometry belongs to <see cref="SpriteEditorLayout"/>, the button table to
 /// <see cref="EditorIcons"/>, the step to <see cref="EditorSheetStep"/>, editing policy to the
 /// session, mode policy to the machine — the law the file it came from stated about itself.
+///
+/// <para><b>Wave R2 changed nothing in this file's dispatch, on purpose.</b> The screen moved
+/// onto the console (ADR-029): its layout is now measured in console pixels and the pointer
+/// arrives already translated. Both facts reach this router as the two numbers and the two
+/// coordinates it already took, so not one branch below had to learn about scale — which is the
+/// evidence that the geometry really does have a single owner. Where it does ask the layout
+/// about pixels (<see cref="SpriteEditorLayout.TryCanvasPixel"/>, <c>Sheet.Contains</c>,
+/// <c>TrySheetCell</c>, the flyout and prompt hit tests) it asks in the surface it was given,
+/// and the surface is whatever the caller drew on.</para>
 /// </summary>
 public static class SpriteEditorInput
 {

@@ -46,6 +46,11 @@ public class MapEditorBlocksTests : IDisposable
     private const int WindowWidth = 1280;
     private const int WindowHeight = 720;
 
+    /// <summary>The console's own screen — the surface the sprite editor is laid out on since wave R2.</summary>
+    private const int ConsoleWidth = 160;
+
+    private const int ConsoleHeight = 90;
+
     /// <summary>One frame at 60 Hz — the router spends it on the tooltip clock only.</summary>
     private const double FrameSeconds = 1.0 / 60.0;
 
@@ -76,8 +81,21 @@ public class MapEditorBlocksTests : IDisposable
 
         internal MapEditorLayout Layout => MapEditorLayout.Compute(WindowWidth, WindowHeight);
 
+        /// <summary>
+        /// Rebuilt per frame, like the window's. Since wave R2 the two numbers are <b>the size
+        /// of the surface the screen on show is laid out on</b>, and the sprite editor's surface
+        /// is the console itself (ADR-029): 160x90, not the back buffer. <c>QuarpGame</c> makes
+        /// exactly this switch — see <c>ConsoleEditorContext</c> — so a frame here means what a
+        /// frame there means. The consequence for whoever writes a test against the sprite
+        /// screen: <b>its mouse points are console pixels</b>, taken straight off the layout's
+        /// own rectangles. Production reaches the same numbers by putting the window's point
+        /// through <see cref="EditorMouse.ToConsole"/>, whose own arithmetic is pinned in
+        /// <c>EditorMouseReaderTests</c> rather than re-run here.
+        /// </summary>
         internal EditorShell Context =>
-            new(Modes, Flyout, Hover, SheetScroll, WindowWidth, WindowHeight);
+            Modes.Mode == ShellMode.Editor
+                ? new(Modes, Flyout, Hover, SheetScroll, ConsoleWidth, ConsoleHeight)
+                : new(Modes, Flyout, Hover, SheetScroll, WindowWidth, WindowHeight);
 
         internal void Frame(
             Keys[] down, int mouseX, int mouseY, ButtonState left, ButtonState middle, ButtonState right)

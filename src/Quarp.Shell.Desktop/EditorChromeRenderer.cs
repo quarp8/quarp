@@ -4,13 +4,6 @@ using Microsoft.Xna.Framework.Graphics;
 namespace Quarp.Shell.Desktop;
 
 /// <summary>
-/// What an icon-button knows about itself when it is drawn, gathered by the screen that owns the
-/// session so the painter never learns which session type it is looking at.
-/// </summary>
-public readonly record struct EditorButtonState(
-    bool Active, bool Hovered, bool Dirty, bool CanUndo, bool CanRedo);
-
-/// <summary>
 /// The pixels of the shared editor frame, and their <b>single owner</b> (M9 stage 3's
 /// simplification wave): the palette roles, the 1x1 white quad, the font and the icon strip,
 /// the outline helper, the two tinted bands, one icon-button, the status band's text, the

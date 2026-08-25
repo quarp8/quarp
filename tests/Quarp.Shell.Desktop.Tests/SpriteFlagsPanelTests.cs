@@ -53,6 +53,11 @@ public class SpriteFlagsPanelTests : IDisposable
     private const int WindowWidth = 1280;
     private const int WindowHeight = 720;
 
+    /// <summary>The console's own screen — the surface the sprite editor is laid out on since wave R2.</summary>
+    private const int ConsoleWidth = 160;
+
+    private const int ConsoleHeight = 90;
+
     /// <summary>One frame at 60 Hz — the router spends it on the tooltip and long-press clocks only.</summary>
     private const double FrameSeconds = 1.0 / 60.0;
 
@@ -80,11 +85,25 @@ public class SpriteFlagsPanelTests : IDisposable
 
         internal SpriteEditorSession Editor => Modes.Editor!;
 
+        /// <summary>
+        /// Rebuilt per frame, like the window's. Since wave R2 the two numbers are <b>the size
+        /// of the surface the screen on show is laid out on</b>, and the sprite editor's surface
+        /// is the console itself (ADR-029): 160x90, not the back buffer. <c>QuarpGame</c> makes
+        /// exactly this switch — see <c>ConsoleEditorContext</c> — so a frame here means what a
+        /// frame there means. The consequence for whoever writes a test against the sprite
+        /// screen: <b>its mouse points are console pixels</b>, taken straight off the layout's
+        /// own rectangles. Production reaches the same numbers by putting the window's point
+        /// through <see cref="EditorMouse.ToConsole"/>, whose own arithmetic is pinned in
+        /// <c>EditorMouseReaderTests</c> rather than re-run here.
+        /// </summary>
         internal EditorShell Context =>
-            new(Modes, Flyout, Hover, SheetScroll, WindowWidth, WindowHeight);
+            Modes.Mode == ShellMode.Editor
+                ? new(Modes, Flyout, Hover, SheetScroll, ConsoleWidth, ConsoleHeight)
+                : new(Modes, Flyout, Hover, SheetScroll, WindowWidth, WindowHeight);
 
+        /// <summary>The sprite screen's geometry, in console pixels — the very rectangles the renderer draws.</summary>
         internal SpriteEditorLayout Layout =>
-            SpriteEditorLayout.Compute(WindowWidth, WindowHeight, Modes.Editor!.RegionCells);
+            SpriteEditorLayout.Compute(ConsoleWidth, ConsoleHeight, Modes.Editor!.RegionCells);
 
         internal void Frame(Keys[] down, int mouseX, int mouseY, ButtonState left, double seconds)
         {
@@ -509,58 +528,60 @@ public class SpriteFlagsPanelTests : IDisposable
     // ==================================================================================
 
     /// <summary>
-    /// The owner's seventh review in the one place this wave could have broken it: the flag row
-    /// shares the content column's left edge with the palette, the layer tabs, the sheet and
-    /// the slider, keeps the column's own 2*ui spacing above and below, sits UNDER the tab row
-    /// and OVER the sheet, and overlaps none of them. It is on the palette's grid, so its right
-    /// edge is the palette's too.
+    /// The middle column's rhythm, re-pinned for the console (wave R2) — <b>and this paragraph
+    /// is the explanation the re-pin owes.</b> The seventh review's law was "one left edge, equal
+    /// gaps" down the whole content column, and it survives the move intact; what changed is what
+    /// the column contains and how wide the gaps are. At host resolution the column held palette,
+    /// tab row, flag row, sheet and slider, spaced by <c>2 * ui</c>. On the console the sheet
+    /// window has to be sixty-four rows tall — the strip's own height, at the only scale ninety
+    /// rows allow — so it takes a column of its own at the screen's right edge, and the middle
+    /// column keeps the three blocks that fit in twenty pixels: palette, flags, layer tabs, in
+    /// that order, one clear pixel apart. The gap is one pixel because a console pixel is what a
+    /// gap is here; <c>ui</c> does not exist on this screen and neither does anything to
+    /// multiply by it.
     ///
-    /// <para>Break recipe: anchor <c>flagPanel</c> to anything but <c>contentX</c> in
-    /// <see cref="SpriteEditorLayout.Compute"/> — the shared-left-edge assertions go red; leave
-    /// <c>sheetTop</c> measured from the tab row instead of the flag panel and the row lands on
-    /// top of the sheet, which the overlap assertions catch.</para>
+    /// <para>Break recipe: anchor <c>flagPanel</c> to anything but <c>middleX</c> in
+    /// <see cref="SpriteEditorLayout.Compute"/> — the shared-left-edge assertions go red; drop
+    /// the <c>+ 1</c> from <c>layerTabsY</c> and the flag row lands on the tabs, which the
+    /// overlap assertions catch.</para>
     /// </summary>
     [Fact]
     public void TheFlagRowKeepsTheColumnsLeftEdgeAndSpacing()
     {
-        var layout = SpriteEditorLayout.Compute(WindowWidth, WindowHeight, regionCells: 1);
+        var layout = SpriteEditorLayout.Compute(ConsoleWidth, ConsoleHeight, regionCells: 1);
         Rectangle tabs = layout.ButtonRect(EditorButton.LayerTab1);
         Rectangle lastTab = layout.ButtonRect(EditorButton.LayerTab5);
 
         Assert.Equal(layout.Swatches.X, layout.FlagPanel.X);
         Assert.Equal(tabs.X, layout.FlagPanel.X);
-        Assert.Equal(layout.Sheet.X, layout.FlagPanel.X);
-        Assert.Equal(layout.Swatches.Width, layout.FlagPanel.Width);     // the palette's own grid
-        Assert.Equal(layout.SwatchSize, layout.FlagSize);
+        Assert.Equal(layout.SwatchSize, layout.FlagSize);        // the palette's own cell
 
-        // Under the tabs, over the sheet, one equal gap from each — the column's rhythm.
-        Assert.Equal(tabs.Bottom + 2 * layout.Ui, layout.FlagPanel.Y);
-        Assert.Equal(layout.FlagPanel.Bottom + 2 * layout.Ui, layout.Sheet.Y);
-        Assert.Equal(layout.Swatches.Bottom + 2 * layout.Ui, tabs.Y);
+        // Under the palette, over the tabs, one clear pixel from each — the column's rhythm.
+        Assert.Equal(layout.Swatches.Bottom + 1, layout.FlagPanel.Y);
+        Assert.Equal(layout.FlagPanel.Bottom + 1, tabs.Y);
+        Assert.True(lastTab.Bottom <= layout.Chrome.ContentBottom);
 
         Assert.False(layout.FlagPanel.Intersects(layout.Sheet));
         Assert.False(layout.FlagPanel.Intersects(layout.Swatches));
         Assert.False(layout.FlagPanel.Intersects(layout.Canvas));
         Assert.False(layout.FlagPanel.Intersects(tabs));
         Assert.False(layout.FlagPanel.Intersects(lastTab));
-        Assert.True(new Rectangle(0, 0, WindowWidth, WindowHeight).Contains(layout.FlagPanel));
+        Assert.True(new Rectangle(0, 0, ConsoleWidth, ConsoleHeight).Contains(layout.FlagPanel));
     }
 
     /// <summary>
     /// The discipline every clickable rectangle on this screen is held to: eight cells, each
-    /// hitting itself and nothing else, disjoint, all inside the panel — and the mark the
-    /// renderer paints inside a cell never leaves it, or the row would look like it is one bit
-    /// left of where it can be clicked.
+    /// hitting itself and nothing else, disjoint, all inside the panel.
+    ///
+    /// <para>Re-pinned in wave R2: the theory used to sweep five window sizes, and there is one
+    /// surface now — the console. The mark assertion went with the move too, because the mark and
+    /// the cell became the same four pixels; see <c>SpriteEditorRenderer.DrawFlags</c> for why a
+    /// smaller mark inside a bigger cell has nothing left to be smaller than.</para>
     /// </summary>
-    [Theory]
-    [InlineData(320, 180)]
-    [InlineData(640, 360)]
-    [InlineData(1280, 720)]
-    [InlineData(1920, 1080)]
-    [InlineData(2560, 1440)]
-    public void FlagHitTestsRoundTripThroughTheirRectangles(int width, int height)
+    [Fact]
+    public void FlagHitTestsRoundTripThroughTheirRectangles()
     {
-        var layout = SpriteEditorLayout.Compute(width, height, regionCells: 1);
+        var layout = SpriteEditorLayout.Compute(ConsoleWidth, ConsoleHeight, regionCells: 1);
 
         for (int bit = 0; bit < SpriteEditorSession.FlagBits; bit++)
         {
@@ -568,7 +589,6 @@ public class SpriteFlagsPanelTests : IDisposable
             Assert.True(layout.TryFlag(cell.Center.X, cell.Center.Y, out int hit));
             Assert.Equal(bit, hit);
             Assert.True(layout.FlagPanel.Contains(cell));
-            Assert.True(cell.Contains(layout.FlagMarkRect(bit)));
             for (int other = bit + 1; other < SpriteEditorSession.FlagBits; other++)
             {
                 Assert.False(cell.Intersects(layout.FlagRect(other)));

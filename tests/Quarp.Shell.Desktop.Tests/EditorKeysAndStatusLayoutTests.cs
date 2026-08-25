@@ -225,21 +225,28 @@ public class EditorKeysAndStatusLayoutTests
     /// buttons, because wave 2k moved the size toggle and the layer tabs into a row whose
     /// left edge is measured from the canvas box.
     ///
-    /// <para>What this sweep does NOT prove, corrected by the session audit: it runs at
-    /// 1280x720 only, and at that size the free height happens to be a multiple of 32, so the
-    /// pre-2k canvas formula agreed with the current one by luck — deleting wave 2k's rounding
-    /// would leave this test green. The negative control for THAT lives in
-    /// <c>SpriteEditorLayoutTests.TabbingTheRegionSizeMovesNoPanel</c>, which runs five window
-    /// sizes including the ones where the two formulas disagree.</para>
+    /// <para><b>Re-pinned in wave R2, and this is the paragraph that explains it.</b> The
+    /// numbers here used to be 1280x720 — a window — and the sweep asked whether the panels fit
+    /// inside it. The sprite screen no longer has a window: ADR-029 moved it onto the console,
+    /// so the surface is 160x90 and there is exactly one of them. That makes the sweep
+    /// STRONGER, not weaker: at host resolution "does it fit" depended on the window and had no
+    /// single answer, and now it has one. Nothing about what is asserted changed — whole zooms,
+    /// everything inside the surface, no two areas overlapping.</para>
+    ///
+    /// <para>What this sweep still does not prove: it runs on the one surface, so it cannot
+    /// catch a canvas formula that only misbehaves at another size. On the console there is no
+    /// other size to misbehave at, which is the whole point; the region-size sweep in
+    /// <c>SpriteEditorLayoutTests.TabbingTheRegionSizeMovesNoPanel</c> covers the axis that is
+    /// still free to vary — 8, 16 and 32 px sprites.</para>
     /// </summary>
     [Theory]
     [InlineData(1)]
     [InlineData(2)]
     [InlineData(4)]
-    public void EveryRegionSizeKeepsWholeScalesAndFitsTheDefaultWindow(int regionCells)
+    public void EveryRegionSizeKeepsWholeScalesAndFitsTheConsole(int regionCells)
     {
-        var layout = SpriteEditorLayout.Compute(1280, 720, regionCells);
-        var window = new Rectangle(0, 0, 1280, 720);
+        var layout = SpriteEditorLayout.Compute(160, 90, regionCells);
+        var window = new Rectangle(0, 0, 160, 90);
 
         Assert.True(layout.CanvasScale >= 1);
         Assert.Equal(regionCells * VirtualConsole.SpriteSize, layout.RegionPixels);
@@ -262,19 +269,23 @@ public class EditorKeysAndStatusLayoutTests
     }
 
     /// <summary>
-    /// The prompt line is reserved at every region size (it carries the dirty-exit decision
-    /// and save errors), so the canvas — the rectangle that resizes — may never grow into it
-    /// or into the status bar below it.
+    /// The message line is reserved at every region size (it carries the dirty-exit decision,
+    /// save errors and the standing notice), so the canvas — the rectangle that resizes — may
+    /// never grow into it or into the status band below it.
+    ///
+    /// <para>Re-pinned in wave R2 with the rest of this file: the line's height is the system
+    /// font's own five pixels now, not <c>PixelFontAtlas.LineHeight(ui)</c>, because the screen
+    /// prints with the console's font and the host font is not on it any more.</para>
     /// </summary>
     [Theory]
     [InlineData(1)]
     [InlineData(2)]
     [InlineData(4)]
-    public void TheCanvasStopsAboveThePromptLineAndStatusBar(int regionCells)
+    public void TheCanvasStopsAboveTheMessageLineAndStatusBar(int regionCells)
     {
-        var layout = SpriteEditorLayout.Compute(1280, 720, regionCells);
+        var layout = SpriteEditorLayout.Compute(160, 90, regionCells);
 
         Assert.True(layout.Canvas.Bottom <= layout.PromptY);
-        Assert.True(layout.PromptY + PixelFontAtlas.LineHeight(layout.Ui) <= layout.StatusBar.Y);
+        Assert.True(layout.PromptY + SystemFont.GlyphHeight <= layout.StatusBar.Y);
     }
 }

@@ -18,10 +18,20 @@ namespace Quarp.Shell.Desktop.Tests;
 /// 16x4 ones. What these tests pin is unchanged in KIND (round-trip, page order, bounds,
 /// live slider); only the numbers moved, and they are all derived from SheetStrip's own
 /// constants except the ones that state the shape itself, which is the point of stating it.</para>
+///
+/// <para><b>Wave R2 moved the window, not the strip.</b> The sprite editor now lays itself out
+/// on the console (ADR-029), so the sheet WINDOW is 56x64 console pixels — seven columns of the
+/// strip at scale 1 — instead of eighteen columns of a 1280x720 window. <see cref="SheetStrip"/>
+/// itself is untouched: <see cref="SheetStrip.Rows"/> is still 8, the lanes are still two, and
+/// the map editor's tile picker, which reads the very same constants, is still exactly where it
+/// was. That restraint was deliberate. Re-cutting the strip to four rows would have made the
+/// console's window taller in sprites, and it would also have silently re-laid-out a screen this
+/// wave was told to leave alone.</para>
 /// </summary>
 public class SheetScrollTests
 {
-    private static SpriteEditorLayout Default() => SpriteEditorLayout.Compute(1280, 720, regionCells: 1);
+    /// <summary>The console — the sprite screen's one surface since wave R2.</summary>
+    private static SpriteEditorLayout Default() => SpriteEditorLayout.Compute(160, 90, regionCells: 1);
 
     [Fact]
     public void StripMappingRoundTripsEverySprite()
@@ -69,32 +79,37 @@ public class SheetScrollTests
     }
 
     /// <summary>
-    /// The default window's own numbers. The sixth review took the strip from 12 x 4 = 48
-    /// sprites to 16 x 8 = 128; the seventh gave a button-wide tool column back to the canvas's
-    /// right side, and the sheet paid for it in width.
+    /// The console's own numbers, and <b>this is the re-pin the wave owes an explanation for</b>:
+    /// eighteen columns became seven, and 144 visible sprites became 56.
     ///
-    /// <para><b>Re-pinned in wave 3b-2, deliberately and once: 14 columns became 18.</b> The
-    /// flag row landed between the layer tabs and this window and took a swatch's height out of
-    /// the column, which is more than the eight pixels of slack the old scale-5 sheet was
-    /// standing on — so the sheet dropped to scale 4 and, being 4/5 the size, fits 18 whole
-    /// columns of the strip instead of 14. That is 144 sprites visible where 112 were, in a
-    /// window 4/5 as tall: the trade the row costs, stated in numbers rather than remembered.
-    /// Nothing else about the slider moved — the ceiling is still live and the cells are still
-    /// whole.</para>
+    /// <para>The arithmetic, because it is the design and not an accident. The console is 160
+    /// pixels across. Twenty go to the two-wide tool column, sixty-four to the canvas — an 8x8
+    /// sprite at zoom 8, which is what the order asks the canvas to be and what both PICO-8 and
+    /// TIC-80 give it — and twenty to the palette / flags / layer-tab column. That leaves
+    /// fifty-six, which is seven whole sprite cells, and the window is trimmed to them so its
+    /// edge can never show a sliced sprite. Vertically it gets all sixty-four rows of content,
+    /// which is exactly <see cref="SheetStrip.PixelHeight"/> at scale 1, so all eight strip rows
+    /// are on screen and nothing needs a second, vertical scroll.</para>
+    ///
+    /// <para>So the trade is stated rather than remembered: TIC-80 shows its whole 256-sprite
+    /// sheet at once on a screen 80 pixels wider than ours, PICO-8 shows 64 in four pages, and we
+    /// show 56 with a live horizontal scroll across the whole 256. That is the price of a 160-px
+    /// console keeping a 64-px canvas, and it is the number a future review should argue with.</para>
     ///
     /// <para>Negative control: drop the whole-cell trim in the layout and the width assertion
     /// goes red; give the tool column zero width and the count climbs, which is how this test
     /// says out loud what that column costs.</para>
     /// </summary>
     [Fact]
-    public void DefaultWindowPinsALiveSliderAndUsefulColumnCount()
+    public void TheConsolePinsALiveSliderAndSevenWholeColumns()
     {
         var layout = Default();
         int completeColumns = layout.SheetVisiblePixels / VirtualConsole.SpriteSize;
 
         Assert.Equal(SheetStrip.PixelWidth - layout.SheetVisiblePixels, layout.SheetMaxScroll);
         Assert.True(layout.SheetMaxScroll > 0);
-        Assert.Equal(18, completeColumns);                              // 18 x 8 = 144 sprites, no partial column
+        Assert.Equal(7, completeColumns);                               // 7 x 8 = 56 sprites, no partial column
+        Assert.Equal(1, layout.SheetScale);                             // 64 rows of content is exactly the strip
         Assert.Equal(completeColumns * VirtualConsole.SpriteSize * layout.SheetScale, layout.Sheet.Width);
         Assert.Equal(SheetStrip.PixelHeight * layout.SheetScale, layout.Sheet.Height);
         Assert.True(layout.SheetThumb(0).Width < layout.SheetSlider.Width);
@@ -153,10 +168,20 @@ public class SheetScrollTests
         Assert.Equal(0, scroll.Offset);
     }
 
+    /// <summary>
+    /// The re-clamp still matters, and it is still reachable — just not through a window resize
+    /// any more. The layout is a function of the console's size, and the console's size is a
+    /// function of its profile (<c>ConsoleProfile</c>), which is a parameter of
+    /// <see cref="ShellScreen"/> for exactly one reason: the day a QUARP-16 exists, the shell's
+    /// screen becomes a 16. A narrower console gives a narrower window and a higher ceiling, and
+    /// a standing offset taken on one must not survive onto the other. 120x90 is not a console we
+    /// ship; it is the smallest thing that makes the two ceilings differ, which is all the
+    /// premise needs.
+    /// </summary>
     [Fact]
-    public void ClampReactsWhenAResizeWidensTheVisibleSlice()
+    public void ClampReactsWhenTheSurfaceWidensTheVisibleSlice()
     {
-        var narrow = SpriteEditorLayout.Compute(200, 180, regionCells: 1);
+        var narrow = SpriteEditorLayout.Compute(120, 90, regionCells: 1);
         var widened = Default();
         var scroll = new SheetScroll();
         Assert.True(narrow.SheetMaxScroll > widened.SheetMaxScroll);      // pins the resize premise
@@ -168,24 +193,25 @@ public class SheetScrollTests
     }
 
     /// <summary>
-    /// A window wide enough to show the whole strip — the case wave 2k created and the session
-    /// audit caught the renderer still denying ("the strip overflows at every window size the
-    /// shell is used at"). With 32 columns instead of 64 that stopped being true: at 2560x720
-    /// the strip fits, the scroll ceiling is zero, the thumb honestly fills the track and a
-    /// drag moves nothing. The branch was live and untested.
+    /// A surface wide enough to show the whole strip: the ceiling is zero, the thumb honestly
+    /// fills the track and a drag moves nothing. On the 160-px console this branch is
+    /// unreachable — the window is seven columns of thirty-two, so the slider is always live —
+    /// but the branch is live CODE, written against the profile rather than against 160, and
+    /// code no test can reach is code nobody notices breaking. 360x90 is the narrowest surface
+    /// that reaches it: 104 pixels of chrome and canvas plus the strip's own 256.
     ///
     /// <para>Negative control: give <c>SheetMaxScroll</c> a floor of one pixel and the first
     /// assertion goes red; make <c>SheetThumb</c> return a fraction of the track when the
     /// ceiling is zero and the second does.</para>
     /// </summary>
     [Fact]
-    public void AWindowWideEnoughForTheWholeStripHasADeadButHonestSlider()
+    public void ASurfaceWideEnoughForTheWholeStripHasADeadButHonestSlider()
     {
-        var layout = SpriteEditorLayout.Compute(2560, 720, regionCells: 1);
+        var layout = SpriteEditorLayout.Compute(360, 90, regionCells: 1);
 
         Assert.True(
             layout.SheetVisiblePixels >= SheetStrip.PixelWidth,
-            $"2560x720 should show the whole {SheetStrip.PixelWidth}px strip, shows {layout.SheetVisiblePixels}");
+            $"360x90 should show the whole {SheetStrip.PixelWidth}px strip, shows {layout.SheetVisiblePixels}");
         Assert.Equal(0, layout.SheetMaxScroll);
         Assert.Equal(layout.SheetSlider.Width, layout.SheetThumb(0).Width);
 

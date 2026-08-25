@@ -35,7 +35,8 @@ public sealed class EditorButtonFaceTests : IDisposable
     /// <summary>One face and only one, on the layout's own button list — the crash's exact door.</summary>
     private static void AssertEveryButtonWearsOneFace(SpriteEditorSession session)
     {
-        var layout = SpriteEditorLayout.Compute(1280, 720, session.RegionCells);
+        // 160x90: the sprite screen's surface since wave R2 is the console, not the window.
+        var layout = SpriteEditorLayout.Compute(160, 90, session.RegionCells);
         foreach (EditorButtonPlace place in layout.Buttons)
         {
             (string? text, EditorIcon? icon) = EditorIcons.Face(place.Id, session);
@@ -96,7 +97,7 @@ public sealed class EditorButtonFaceTests : IDisposable
     [Fact]
     public void EveryFlyoutVariantOfEveryGroupSlotResolves()
     {
-        var layout = SpriteEditorLayout.Compute(1280, 720, _session.RegionCells);
+        var layout = SpriteEditorLayout.Compute(160, 90, _session.RegionCells);
         foreach (EditorButtonPlace place in layout.Buttons)
         {
             if (!EditorIcons.IsGroupSlot(place.Id))

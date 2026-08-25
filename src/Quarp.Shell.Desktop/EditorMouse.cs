@@ -61,6 +61,46 @@ public readonly struct EditorMouse
     /// previous frame.
     /// </summary>
     public int WheelDelta { get; init; }
+
+    /// <summary>
+    /// The same frame of input, with the position moved from window pixels into <b>console</b>
+    /// pixels (wave R2). One screen needs this today — the sprite editor, whose layout is
+    /// measured on the console's own 160x90 grid — and every screen will need it once the rest
+    /// of ADR-029's move is done, so the conversion lives here, once, rather than in each
+    /// router.
+    ///
+    /// <para><b>A point outside the picture is moved to <see cref="OffSurface"/>, not
+    /// clamped.</b> <see cref="FramePlacement.TryToCanvas"/> refuses the letterbox and the part
+    /// a too-small window crops, and clamping would turn a miss into a hit on the border
+    /// pixel — which on this screen means painting a stroke the author never aimed at. Minus
+    /// one is outside every rectangle any layout places, because every one of them starts at
+    /// zero or later, so the hit tests reject it without a special case.</para>
+    ///
+    /// <para><b>The button edges are kept exactly as they are.</b> A release that happens over
+    /// the letterbox is still a release: it ends a slider drag and commits a stroke, and the
+    /// gesture's own state — not the pointer's position — is what those two verbs consult. A
+    /// press out there hits nothing, which is the correct answer and not a dropped event.</para>
+    /// </summary>
+    public EditorMouse ToConsole(in FramePlacement placement)
+    {
+        bool inside = placement.TryToCanvas(X, Y, out int consoleX, out int consoleY);
+        return new EditorMouse
+        {
+            X = inside ? consoleX : OffSurface,
+            Y = inside ? consoleY : OffSurface,
+            LeftDown = LeftDown,
+            LeftPressed = LeftPressed,
+            LeftReleased = LeftReleased,
+            RightPressed = RightPressed,
+            RightDown = RightDown,
+            RightReleased = RightReleased,
+            MiddlePressed = MiddlePressed,
+            WheelDelta = WheelDelta,
+        };
+    }
+
+    /// <summary>Where a pointer outside the presented picture is reported — outside every rectangle any layout places.</summary>
+    public const int OffSurface = -1;
 }
 
 /// <summary>

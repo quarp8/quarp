@@ -161,7 +161,10 @@ public class EditorButtonContractTests : IDisposable
     [Fact]
     public void EveryPlacedLiveButtonChangesSomethingObservable()
     {
-        foreach (EditorButtonPlace place in SpriteEditorLayout.Compute(1280, 720, regionCells: 1).Buttons)
+        // Console pixels since wave R2: the sprite screen is laid out on the console's own
+        // 160x90 grid (ADR-029), not on a window. The button LIST is what this sweep needs and
+        // that list is the same twenty-two either way — only the rectangles moved.
+        foreach (EditorButtonPlace place in SpriteEditorLayout.Compute(160, 90, regionCells: 1).Buttons)
         {
             ShellModeMachine machine = MachineWithOpenEditor();
             var flyout = new ToolbarFlyout();

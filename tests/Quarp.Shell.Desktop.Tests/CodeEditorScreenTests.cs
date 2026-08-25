@@ -43,6 +43,11 @@ public class CodeEditorScreenTests : IDisposable
     private const int WindowWidth = 1280;
     private const int WindowHeight = 720;
 
+    /// <summary>The console's own screen — the surface the sprite editor is laid out on since wave R2.</summary>
+    private const int ConsoleWidth = 160;
+
+    private const int ConsoleHeight = 90;
+
     /// <summary>One frame at 60 Hz — the router spends it on the tooltip clock only.</summary>
     private const double FrameSeconds = 1.0 / 60.0;
 
@@ -81,8 +86,21 @@ public class CodeEditorScreenTests : IDisposable
 
         internal SheetScroll SheetScroll { get; } = new();
 
+        /// <summary>
+        /// Rebuilt per frame, like the window's. Since wave R2 the two numbers are <b>the size
+        /// of the surface the screen on show is laid out on</b>, and the sprite editor's surface
+        /// is the console itself (ADR-029): 160x90, not the back buffer. <c>QuarpGame</c> makes
+        /// exactly this switch — see <c>ConsoleEditorContext</c> — so a frame here means what a
+        /// frame there means. The consequence for whoever writes a test against the sprite
+        /// screen: <b>its mouse points are console pixels</b>, taken straight off the layout's
+        /// own rectangles. Production reaches the same numbers by putting the window's point
+        /// through <see cref="EditorMouse.ToConsole"/>, whose own arithmetic is pinned in
+        /// <c>EditorMouseReaderTests</c> rather than re-run here.
+        /// </summary>
         internal EditorShell Context =>
-            new(Modes, Flyout, Hover, SheetScroll, WindowWidth, WindowHeight);
+            Modes.Mode == ShellMode.Editor
+                ? new(Modes, Flyout, Hover, SheetScroll, ConsoleWidth, ConsoleHeight)
+                : new(Modes, Flyout, Hover, SheetScroll, WindowWidth, WindowHeight);
 
         internal CodeEditorLayout Layout => CodeEditorLayout.Compute(WindowWidth, WindowHeight);
 
@@ -157,9 +175,21 @@ public class CodeEditorScreenTests : IDisposable
             LeftUp(x, y);
         }
 
+        /// <summary>
+        /// Since wave R2 the two screens no longer place their tabs on the same pixels: the
+        /// sprite editor moved to the console's own 160x90 frame (ADR-029) while this one is
+        /// still on the host frame. So the rectangle has to come from the layout of the screen
+        /// ON SHOW, not from this screen's layout — clicking the code tab's host rectangle
+        /// while standing on the sprite screen lands on empty console pixels and does nothing,
+        /// which is exactly how this helper failed when the sprite editor moved.
+        /// </summary>
         internal void ClickButton(EditorButton button)
         {
-            Rectangle rect = Layout.ButtonRect(button);
+            Rectangle rect = Modes.Mode == ShellMode.Editor
+                ? SpriteEditorLayout
+                    .Compute(ConsoleWidth, ConsoleHeight, Modes.Editor!.RegionCells)
+                    .ButtonRect(button)
+                : Layout.ButtonRect(button);
             Click(rect.X + rect.Width / 2, rect.Y + rect.Height / 2);
         }
     }
@@ -263,32 +293,37 @@ public class CodeEditorScreenTests : IDisposable
     }
 
     /// <summary>
-    /// The third screen stands in the SAME frame as the other two: identical scale, margins,
+    /// This screen stands in the SAME frame as its remaining sibling: identical scale, margins,
     /// bands, prompt verbs and — the part the mouse depends on — identical rectangles for the
     /// six tabs and the three status buttons. That is what lets a test (and an author's hand)
     /// aim at a tab without first asking which editor is on screen.
     ///
+    /// <para><b>Re-pinned in wave R2.</b> The sibling used to be the sprite editor as well as
+    /// the map. The sprite screen has left this frame entirely — ADR-029 moved it onto the
+    /// console, where its exit tab is ten console pixels wide rather than 1152 window pixels
+    /// across — so comparing the two would be comparing coordinates in two different units. The
+    /// map is the reference now, and the day the code screen makes the same move this test goes
+    /// with the frame it was measuring.</para>
+    ///
     /// <para>Break recipe: give <see cref="CodeEditorLayout"/> its own copy of the chrome
     /// arithmetic instead of calling <see cref="EditorChrome.Compute"/> — every assertion here
-    /// goes red, which is exactly what the simplification wave made impossible for the first
-    /// two screens.</para>
+    /// goes red, which is exactly what the simplification wave made impossible.</para>
     /// </summary>
     [Fact]
     public void TheCodeScreenStandsInTheSameChromeAsItsSiblings()
     {
         var code = CodeEditorLayout.Compute(WindowWidth, WindowHeight);
-        var sprite = SpriteEditorLayout.Compute(WindowWidth, WindowHeight, regionCells: 1);
         var map = MapEditorLayout.Compute(WindowWidth, WindowHeight);
 
-        Assert.Equal(sprite.Ui, code.Ui);
-        Assert.Equal(sprite.Margin, code.Margin);
-        Assert.Equal(sprite.ButtonSize, code.ButtonSize);
-        Assert.Equal(sprite.TabStrip, code.TabStrip);
-        Assert.Equal(sprite.StatusBar, code.StatusBar);
-        Assert.Equal(sprite.PromptY, code.PromptY);
+        Assert.Equal(map.Ui, code.Ui);
+        Assert.Equal(map.Margin, code.Margin);
+        Assert.Equal(map.ButtonSize, code.ButtonSize);
+        Assert.Equal(map.TabStrip, code.TabStrip);
+        Assert.Equal(map.StatusBar, code.StatusBar);
+        Assert.Equal(map.PromptY, code.PromptY);
         foreach (EditorPromptVerb verb in Enum.GetValues<EditorPromptVerb>())
         {
-            Assert.Equal(sprite.PromptVerbRect(verb), code.PromptVerbRect(verb));
+            Assert.Equal(map.PromptVerbRect(verb), code.PromptVerbRect(verb));
         }
         EditorButton[] shared =
         {
@@ -298,7 +333,6 @@ public class CodeEditorScreenTests : IDisposable
         };
         foreach (EditorButton button in shared)
         {
-            Assert.Equal(sprite.ButtonRect(button), code.ButtonRect(button));
             Assert.Equal(map.ButtonRect(button), code.ButtonRect(button));
         }
     }
@@ -743,7 +777,11 @@ public class CodeEditorScreenTests : IDisposable
         machine.SwitchEditorTab(ShellMode.Editor);
         var harness = new Harness(machine);
         harness.Frame(NoKeys, string.Empty, Off, Off, ButtonState.Released);
-        Rectangle tab = CodeEditorLayout.Compute(WindowWidth, WindowHeight).ButtonRect(EditorButton.CodeTab);
+        // The author is standing on the SPRITE screen, which since wave R2 is the console's own
+        // 160x90 frame — so the tab's rectangle comes from that screen's layout, not this one's.
+        Rectangle tab = SpriteEditorLayout
+            .Compute(ConsoleWidth, ConsoleHeight, machine.Editor!.RegionCells)
+            .ButtonRect(EditorButton.CodeTab);
         harness.Click(tab.X + tab.Width / 2, tab.Y + tab.Height / 2);
 
         Assert.Equal(ShellMode.CodeEditor, machine.Mode);

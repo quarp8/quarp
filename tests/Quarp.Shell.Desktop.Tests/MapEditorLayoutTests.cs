@@ -279,29 +279,35 @@ public class MapEditorLayoutTests
 
     /// <summary>
     /// The footer prompt is one fact with one owner: this screen does not re-derive the verbs'
-    /// rectangles, it asks <see cref="SpriteEditorLayout"/> for them, so the two editors can
-    /// never disagree about where "Z SAVE+EXIT" is clickable. Break recipe: replace the
-    /// delegation in <see cref="MapEditorLayout.PromptVerbRect"/> with a local copy of the
-    /// formula and then change one constant in <see cref="SpriteEditorLayout"/> — this goes red
-    /// while both screens still "look right" in isolation.
+    /// rectangles, it asks <see cref="EditorChrome"/> for them, so no two screens still in the
+    /// host frame can disagree about where "Z SAVE+EXIT" is clickable. Break recipe: replace
+    /// the delegation in <see cref="MapEditorLayout.PromptVerbRect"/> with a local copy of the
+    /// formula and then change one constant in <see cref="EditorChrome"/> — this goes red while
+    /// both screens still "look right" in isolation.
+    ///
+    /// <para><b>Re-pinned in wave R2.</b> The reference used to be the sprite editor's own
+    /// rectangles; that screen has left the host frame for the console (ADR-029), where the
+    /// prompt is one line of forty columns with three re-cut verbs, so its rectangles are in a
+    /// different unit and mean different words. The code screen — the nearest sibling still in
+    /// this frame — is the reference now.</para>
     /// </summary>
     [Fact]
-    public void ThePromptVerbsAreTheSpriteEditorsOwnRectangles()
+    public void ThePromptVerbsAreTheSharedHostChromesOwnRectangles()
     {
         var layout = Default();
-        var sprite = SpriteEditorLayout.Compute(1280, 720, regionCells: 1);
+        var code = CodeEditorLayout.Compute(1280, 720);
 
         foreach (EditorPromptVerb verb in Enum.GetValues<EditorPromptVerb>())
         {
-            Assert.Equal(sprite.PromptVerbRect(verb), layout.PromptVerbRect(verb));
+            Assert.Equal(code.PromptVerbRect(verb), layout.PromptVerbRect(verb));
             Rectangle rect = layout.PromptVerbRect(verb);
             Assert.True(
                 layout.TryPromptVerb(rect.X + rect.Width / 2, rect.Y + rect.Height / 2, out EditorPromptVerb hit));
             Assert.Equal(verb, hit);
             Assert.True(rect.Bottom <= layout.StatusBar.Y);
         }
-        Assert.Equal(sprite.PromptY, layout.PromptY);
-        Assert.Equal(sprite.StatusBar, layout.StatusBar);
+        Assert.Equal(code.PromptY, layout.PromptY);
+        Assert.Equal(code.StatusBar, layout.StatusBar);
     }
 
     /// <summary>

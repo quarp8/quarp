@@ -51,6 +51,15 @@ public readonly struct EditorChrome
         EditorButton.SpritesTab, EditorButton.CodeTab,
     };
 
+    /// <summary>
+    /// The right-edge tab group, index 0 hugging the right corner — <b>the one owner of the tab
+    /// order</b>, published in wave R2 because a second frame now exists.
+    /// <see cref="ConsoleChrome"/> places the same five tabs on the console's own screen and
+    /// reads them from here rather than restating them; the day the last screen leaves this
+    /// frame, this list goes with the reader and not with the file.
+    /// </summary>
+    public static IReadOnlyList<EditorButton> RightTabs => _rightTabs;
+
     /// <summary>Host-UI text scale, same anchor the library uses (<see cref="PixelFontMetrics.UiScale"/>).</summary>
     public int Ui { get; private init; }
 

@@ -1,128 +1,100 @@
 using Microsoft.Xna.Framework;
-using Microsoft.Xna.Framework.Graphics;
 using Quarp.Core;
-using static Quarp.Shell.Desktop.EditorChromeRenderer;
+using static Quarp.Shell.Desktop.ConsoleChromeRenderer;
 
 namespace Quarp.Shell.Desktop;
 
 /// <summary>
-/// Draws the sprite editor screen in the owner's verdict shape (M9 stage 2.5, sixth review
-/// applied): the icon-only tab strip and the status bar as tinted full-width bands, the left
-/// toolbar column with its group slots (corner-marked, flyout on demand), the zoomed canvas
-/// with the keyboard cursor, the shape preview, the selection as marching ants (plus the
-/// holes and floating fragment during a move) and the stamp ghost — all session-state
-/// overlays, never sheet pixels — the right column (palette at the window's edge, the sixth
-/// review's one narrow row of size toggle plus layer tabs, the eight flag toggles under that
-/// row in their three states, and under them the sheet window
-/// owning the rest of the column, with its scroll slider), the size toggle's number face, the
-/// status buttons (save/undo/redo/clear), the reserved prompt line and the hover tooltips.
-/// Host UI like <see cref="LibraryRenderer"/> — window-native resolution,
-/// <see cref="Palette.Master32"/> colors, the system font and the icon strip — and just as
-/// unable to touch a framebuffer or a hash: no cartridge runs while this draws.
+/// Draws the sprite editor <b>into the console's own framebuffer</b> (wave R2, ADR-029): the
+/// top band with the exit button, the tooltip field and the five editor tabs; the two-wide tool
+/// column; the 64x64 canvas with its keyboard cursor, shape preview, marching-ant selection and
+/// stamp ghost; the middle column's 4x4 palette, eight flag toggles and five layer tabs; the
+/// sheet window with its scroll slider; the status line and the one message line.
 ///
-/// <para>All geometry comes from <see cref="SpriteEditorLayout"/>, the same struct the shell
-/// hit-tests the mouse against; this class owns only pixels-on-screen. The picture lives in
-/// one 128x128 texture holding the session's <b>composite</b> (ADR-027: what the author sees
-/// is the flattened stack, on the canvas and in the sheet window alike), drawn twice —
-/// scaled up for the canvas (source rectangle = the region) and by the sheet window's own
-/// scale for the sheet view — re-uploaded only when
-/// <see cref="SpriteEditorSession.Version"/> moves, so an idle editor costs a handful of
-/// quads per frame. A floating move's overlay reads the same composite; where another layer
-/// covers the moved pixels the ride shows the covering color, which is also exactly what the
-/// drop will leave on screen.</para>
+/// <para><b>What this file used to be.</b> Until this wave it owned a
+/// <c>GraphicsDevice</c>, a 128x128 <c>Texture2D</c> of the sheet, a font atlas and an icon
+/// atlas, and painted at the window's native resolution through a <c>SpriteBatch</c>. All of
+/// that is gone. Every pixel now goes through <c>Cls</c>, <c>RectFill</c>, <c>Rect</c>,
+/// <c>Print</c> and <c>Pset</c> on a <see cref="ShellScreen"/> — the same calls a cartridge
+/// makes — and the result is presented by the same <see cref="ConsolePresenter"/> the
+/// cartridge's frame goes through. The class is static for the same reason
+/// <see cref="LibraryRenderer"/> is: with no device resource to own there is nothing to
+/// construct and nothing to dispose.</para>
+///
+/// <para><b>The gain is not cosmetic.</b> A screen drawn into a framebuffer can be hashed by
+/// <see cref="FrameHash"/>, exactly as a cartridge's frame is, and that is what
+/// <c>SpriteEditorScreenGoldenTests</c> does. Layout regressions on this screen — a panel off by
+/// a pixel, a swatch on the wrong row, a status field running off the edge — were previously
+/// undetectable by every test in this solution: there was no buffer to look at, only draw calls
+/// into a device no headless runner has.</para>
+///
+/// <para><b>Not the cartridge's console.</b> The framebuffer written here belongs to the shell
+/// (<see cref="ShellScreen"/>); the golden master the CI compares between architectures is
+/// <see cref="CartSession"/>'s, and no call in this file can reach it.</para>
+///
+/// <para><b>Cost, measured rather than waved away.</b> The sheet window is 56x64 plotted pixels,
+/// the canvas another 64x64, so a full frame is on the order of 8000 plots against the 14400 the
+/// <c>Cls</c> on the same frame writes. This is drawing, not simulation: it happens once per
+/// rendered frame, never inside a tick, and no rewind ever replays it.</para>
 /// </summary>
-public sealed class SpriteEditorRenderer : IDisposable
+public static class SpriteEditorRenderer
 {
-    private readonly GraphicsDevice _device;
-    private readonly EditorChromeRenderer _chrome;
-    private readonly Texture2D _sheetTexture;
-    private readonly Color[] _sheetPixels;
+    /// <summary>What the tooltip field says when no control is hovered — TIC-80's <c>Names[mode]</c>.</summary>
+    public const string ScreenName = "SPRITES";
 
-    /// <summary>Palette lookup, unpacked once — 16 K pixels per sheet upload should not re-shift RGB each time.</summary>
-    private readonly Color[] _palette;
-
-    // Which session and which of its versions the sheet texture currently shows. The session
-    // reference matters: a fresh session starts at Version 0, and matching versions across
-    // different sessions would leave the previous cart's sheet on screen.
-    private SpriteEditorSession? _shownSession;
-    private int _shownVersion;
-
-    // The marching ants' dash buffer, reused every frame: the outline is rebuilt each Draw
-    // (it marches), but the list is not reallocated sixty times a second.
-    private readonly List<AntDash> _ants = new();
-
-    public SpriteEditorRenderer(GraphicsDevice device)
+    /// <summary>The layout this screen is drawn with; the router asks for the same one, so picture and clicks cannot disagree.</summary>
+    public static SpriteEditorLayout LayoutFor(ShellScreen screen, SpriteEditorSession editor)
     {
-        ArgumentNullException.ThrowIfNull(device);
-        _device = device;
-        _chrome = new EditorChromeRenderer(device);
-        _sheetTexture = new Texture2D(device, VirtualConsole.SheetWidth, VirtualConsole.SheetHeight);
-        _sheetPixels = new Color[VirtualConsole.SheetWidth * VirtualConsole.SheetHeight];
-        _palette = new Color[Palette.VisibleCount];
-        for (int i = 0; i < Palette.VisibleCount; i++)
-        {
-            _palette[i] = PaletteColors.Opaque(i);
-        }
+        ArgumentNullException.ThrowIfNull(screen);
+        ArgumentNullException.ThrowIfNull(editor);
+        return SpriteEditorLayout.Compute(screen.Width, screen.Height, editor.RegionCells);
     }
 
     /// <summary>
-    /// One frame of the editor. Owns the whole surface (clears, begins and ends the batch),
-    /// like the library does. <paramref name="hover"/> and <paramref name="tooltipVisible"/>
-    /// come from the shell's <see cref="IconHoverTracker"/>: the hovered frame lights up
-    /// immediately, the text label only after the tracker's three seconds.
-    /// <paramref name="flyoutSlot"/> is the shell's <see cref="ToolbarFlyout.OpenSlot"/> —
-    /// the flyout draws late so it floats over the canvas, and the tooltip still wins over it.
-    /// <paramref name="scroll"/> is the shell's <see cref="SheetScroll"/>: the sheet window's
-    /// slice and the slider's thumb are both drawn from its offset — the very number the hit
-    /// tests use, so the picture and the clicks cannot disagree.
-    /// <paramref name="timeSeconds"/> is the shell's draw clock, consumed only by the marching
-    /// ants' phase — host chrome time, invisible to any simulation or hash.
+    /// One frame of the editor. Owns the whole surface: it resets the console's drawing state
+    /// and clears, so nothing another screen left behind can bend these pixels.
+    /// <paramref name="hover"/> and <paramref name="tooltipVisible"/> come from the shell's
+    /// <see cref="IconHoverTracker"/> — the hovered control's frame lights up immediately, the
+    /// text label only after the tracker's three seconds, and the label lands in the top band
+    /// rather than under the pointer (<see cref="ConsoleChrome.TooltipChars"/> explains why).
+    /// <paramref name="flyoutSlot"/> is the shell's <see cref="ToolbarFlyout.OpenSlot"/>: the
+    /// flyout draws late so it floats over the canvas. <paramref name="scroll"/> is the shell's
+    /// <see cref="SheetScroll"/> — the window's slice and the slider's thumb both come from the
+    /// very offset the hit tests use. <paramref name="timeSeconds"/> is the shell's draw clock,
+    /// consumed only by the marching ants' phase.
     /// </summary>
-    public void Draw(
-        SpriteBatch batch, int width, int height, SpriteEditorSession editor,
-        HoverTarget? hover, bool tooltipVisible, EditorButton? flyoutSlot, SheetScroll scroll,
-        double timeSeconds)
+    /// <returns>The layout used, so a test can assert against exactly what was drawn.</returns>
+    public static SpriteEditorLayout Draw(
+        ShellScreen screen, SpriteEditorSession editor, HoverTarget? hover, bool tooltipVisible,
+        EditorButton? flyoutSlot, SheetScroll scroll, double timeSeconds)
     {
-        ArgumentNullException.ThrowIfNull(batch);
-        ArgumentNullException.ThrowIfNull(editor);
         ArgumentNullException.ThrowIfNull(scroll);
-        var layout = SpriteEditorLayout.Compute(width, height, editor.RegionCells);
-        UploadSheetIfChanged(editor);
+        SpriteEditorLayout layout = LayoutFor(screen, editor);
+        VirtualConsole console = screen.Console;
+        screen.Begin();
+        console.Cls(Ink);
 
-        _device.Clear(Ink);
-        batch.Begin(samplerState: SamplerState.PointClamp);
-
-        // The bands go first: everything in the strips sits ON them.
-        _chrome.DrawBands(batch, layout.Chrome);
-
-        DrawCanvas(batch, layout, editor, timeSeconds);
-        DrawButtons(batch, layout, editor, hover);
-        DrawSwatches(batch, layout, editor);
-        DrawFlags(batch, layout, editor, hover);
-        DrawSheet(batch, layout, editor, scroll.Offset);
-        DrawSlider(batch, layout, scroll, hover);
+        DrawBands(console, layout.Chrome);
+        DrawCanvas(console, layout, editor, timeSeconds);
+        DrawButtons(console, layout, editor, hover);
+        DrawSwatches(console, layout, editor);
+        DrawFlags(console, layout, editor, hover);
+        DrawSheet(console, layout, editor, scroll.Offset);
+        DrawSlider(console, layout, scroll, hover);
         // The readouts: the cursor in SHEET pixels — the coordinate an author would type into
         // code — and the sprite number, which is Spr(n)'s n for the region's anchor cell.
-        _chrome.DrawStatusText(
-            batch, layout.Chrome, SheetCoordinates(editor), $"#{editor.SpriteIndex:D3}");
-        _chrome.DrawPromptLine(
-            batch, layout.Chrome, editor.ExitPromptShown, editor.SaveError, StandingNotice(editor));
-        DrawFlyout(batch, layout, editor, flyoutSlot, hover);
-        DrawTooltip(batch, layout, width, height, editor, hover, tooltipVisible);
-
-        batch.End();
+        DrawStatusText(console, layout.Chrome, SheetCoordinates(editor), $"#{editor.SpriteIndex:D3}");
+        DrawMessageLine(
+            console, layout.Chrome, editor.ExitPromptShown, editor.SaveError, StandingNotice(editor));
+        DrawFlyout(console, layout, editor, flyoutSlot, hover);
+        DrawTooltipField(
+            console, layout.Chrome,
+            tooltipVisible && hover is HoverTarget target ? TooltipText(editor, target) : null,
+            ScreenName);
+        return layout;
     }
 
-    public void Dispose()
-    {
-        _chrome.Dispose();
-        _sheetTexture.Dispose();
-    }
-
-    /// <summary>
-    /// The status band's readout, in <b>sheet</b> pixels — the coordinate an author would type
-    /// into code, not a window position.
-    /// </summary>
+    /// <summary>The status line's left half, in <b>sheet</b> pixels — the coordinate an author would type into code, not a screen position.</summary>
     private static string SheetCoordinates(SpriteEditorSession editor)
     {
         int size = VirtualConsole.SpriteSize;
@@ -130,53 +102,56 @@ public sealed class SpriteEditorRenderer : IDisposable
     }
 
     /// <summary>
-    /// The screen's standing line under the prompt and the save error. Two things can stand
-    /// here, and the out-of-sync warning (ADR-027) wins because it changes what saving does:
-    /// gfx.png was edited outside while gfx-layers.png stood — the stack wins and the next save
-    /// will overwrite it, which must be announced, not sprung.
+    /// The screen's standing line, re-cut for forty columns. Two things can stand here and the
+    /// out-of-sync warning (ADR-027) wins, because it changes what saving does: gfx.png was
+    /// edited outside while gfx-layers.png stood — the stack wins and the next save will
+    /// overwrite it, which must be announced and not sprung.
     ///
-    /// <para>The second is the trap this editor could otherwise spring in total silence
-    /// (2026-08-25, owner's report): a map cell holding 0 means "empty" and the console skips
-    /// it, so art drawn on sprite 0 can never appear on a map. The author who hits this has
-    /// already spent his time — he drew grass on the cell the editor opens on. Sprite 0 is a
-    /// perfectly good sprite for <c>Spr</c>, so this is a notice and not a block; the map
-    /// editor's picker carries the matching marker on the same tile.</para>
+    /// <para>The second is the trap this editor could otherwise spring in total silence: a map
+    /// cell holding 0 means "empty" and the console skips it, so art drawn on sprite 0 can never
+    /// appear on a map. Sprite 0 is a perfectly good sprite for <c>Spr</c>, so this is a notice
+    /// and not a block; the map editor's picker carries the matching marker on the same tile.</para>
+    ///
+    /// <para>Both texts are shorter than the host screen's: the console line holds 39
+    /// characters and the old ones ran to 57. Cutting them here, at the one place that knows
+    /// what they say, beats truncating them at the one place that knows how wide the line is —
+    /// a truncated sentence ends mid-word.</para>
     /// </summary>
-    public static string? StandingNotice(SpriteEditorSession editor) =>
-        editor.GfxOutOfSyncOnDisk
-            ? "GFX.PNG EDITED OUTSIDE - LAYERS WIN, SAVING OVERWRITES IT"
-            : editor.SpriteIndex == 0
-                ? "SPRITE 000 IS THE MAP'S EMPTY TILE - A MAP WILL NOT DRAW IT"
-                : null;
-
-    private void UploadSheetIfChanged(SpriteEditorSession editor)
+    public static string? StandingNotice(SpriteEditorSession editor)
     {
-        if (ReferenceEquals(editor, _shownSession) && editor.Version == _shownVersion)
-        {
-            return;
-        }
-        ReadOnlySpan<byte> pixels = editor.Pixels;
-        for (int i = 0; i < pixels.Length; i++)
-        {
-            // Values are 0-15 by the session's invariant; index 0 shows as opaque ink, the
-            // same honest reading the encoder writes to disk (transparency is Palt's runtime
-            // meaning, not a sheet fact).
-            _sheetPixels[i] = _palette[pixels[i]];
-        }
-        _sheetTexture.SetData(_sheetPixels);
-        _shownSession = editor;
-        _shownVersion = editor.Version;
+        ArgumentNullException.ThrowIfNull(editor);
+        return editor.GfxOutOfSyncOnDisk
+            ? "GFX.PNG EDITED OUTSIDE - SAVING WINS"
+            : editor.SpriteIndex == 0
+                ? "SPR 000 IS THE MAP'S EMPTY TILE"
+                : null;
     }
 
     /// <summary>
-    /// Every icon-button through the one mechanism <see cref="EditorChromeRenderer.DrawButton"/>
-    /// owns. What only this screen can answer is decided here: which buttons read as active
-    /// (the sprites tab, the tool in hand, the layer tab you are on), which face a group slot
-    /// wears — its CURRENT variant's glyph (the wave's card), with the corner marker drawn over
-    /// it in the same ink as the photoshop cue that more hides underneath — and which buttons
-    /// are text-faced at all (<see cref="EditorIcons.ButtonText"/> owns that list).
+    /// The hover label for whichever kind of target is under the pointer. Five kinds (button,
+    /// flyout variant, slider, flag toggle, swatch), each naming its own text; the cut to the
+    /// field's width belongs to <see cref="ConsoleChrome.FitTooltip"/>, which is the only thing
+    /// that knows how wide the field is.
     /// </summary>
-    private void DrawButtons(SpriteBatch batch, in SpriteEditorLayout layout, SpriteEditorSession editor, HoverTarget? hover)
+    public static string TooltipText(SpriteEditorSession editor, in HoverTarget target)
+    {
+        ArgumentNullException.ThrowIfNull(editor);
+        return target.Button is EditorButton button ? EditorIcons.Tooltip(button, editor)
+            : target.FlyoutSlot is EditorButton slot ? EditorIcons.VariantTooltip(slot, target.FlyoutVariant)
+            : target.Slider ? EditorIcons.SliderTooltip
+            : target.Flag >= 0 ? EditorIcons.FlagTooltip(target.Flag)
+            : EditorIcons.SwatchTooltip(target.Swatch);
+    }
+
+    /// <summary>
+    /// Every icon-button through the one mechanism <see cref="ConsoleChromeRenderer.DrawButton"/>
+    /// owns. What only this screen can answer is decided here: which buttons read as active (the
+    /// sprites tab, the tool in hand, the layer tab you are on), which face a group slot wears —
+    /// its CURRENT variant's glyph, with the corner marker over it — and which buttons are
+    /// text-faced at all (<see cref="EditorIcons.Face"/> owns that choice).
+    /// </summary>
+    private static void DrawButtons(
+        VirtualConsole console, in SpriteEditorLayout layout, SpriteEditorSession editor, HoverTarget? hover)
     {
         foreach (EditorButtonPlace place in layout.Buttons)
         {
@@ -194,44 +169,38 @@ public sealed class SpriteEditorRenderer : IDisposable
                 Dirty: editor.IsDirty,
                 CanUndo: editor.CanUndo,
                 CanRedo: editor.CanRedo);
-            // The face — text or icon, exactly one — has one owner since the crash repair:
-            // EditorIcons.Face, the same call EditorButtonFaceTests drives headless. The old
-            // inline pick asked VariantIcon/IconFor for every button, and the first
-            // text-faced one (the size toggle) threw on the editor's first windowed frame.
             (string? text, EditorIcon? icon) = EditorIcons.Face(place.Id, editor);
-            Color color = _chrome.DrawButton(batch, layout.Chrome, place, state, icon, text);
+            byte color = DrawButton(console, place, state, icon, text);
             if (EditorIcons.IsGroupSlot(place.Id))
             {
-                DrawGroupMarker(batch, layout, place.Rect, color);
+                DrawGroupMarker(console, place.Rect, color);
             }
         }
     }
 
     /// <summary>
-    /// The corner marker of a group slot: a small stepped triangle in the bottom-right corner,
-    /// built from three ui-sized quads (no glyph — it must overlay any variant icon). Same ink
-    /// as the icon, so a dim state dims the cue with it.
+    /// The corner marker of a group slot: a three-pixel stepped triangle inside the button's
+    /// bottom-right corner, drawn over whatever variant icon the slot wears. Same ink as the
+    /// icon, so a dim state dims the cue with it. At console scale the host's ui-sized quads
+    /// become single pixels, which is what the cue always was at scale 1.
     /// </summary>
-    private void DrawGroupMarker(SpriteBatch batch, in SpriteEditorLayout layout, Rectangle slot, Color color)
+    private static void DrawGroupMarker(VirtualConsole console, Rectangle slot, byte color)
     {
-        int u = layout.Ui;
         for (int step = 0; step < 3; step++)
         {
-            batch.Draw(
-                _chrome.White,
-                new Rectangle(slot.Right - u * (step + 1), slot.Bottom - u * (3 - step), u, u * (3 - step)),
-                color);
+            console.RectFill(
+                slot.Right - 2 - step, slot.Bottom - 2 - step, 1, step + 1, color);
         }
     }
 
     /// <summary>
-    /// The open group flyout: the slot's variants as ordinary buttons floating right of it,
-    /// the remembered variant on the active-blue fill. Drawn on Ink plates because the row
-    /// overlaps the canvas — a variant icon over sheet pixels would be unreadable. The size
-    /// toggle's variants are text (8/16/32), same faces as the slot itself.
+    /// The open group flyout: the slot's variants as ordinary buttons floating right of it, the
+    /// remembered variant on the active-blue fill. Drawn on ink plates because the row overlaps
+    /// the canvas — a variant icon over sheet pixels would be unreadable. The size toggle's
+    /// variants are text (8/16/32), the same faces the slot itself wears.
     /// </summary>
-    private void DrawFlyout(
-        SpriteBatch batch, in SpriteEditorLayout layout, SpriteEditorSession editor,
+    private static void DrawFlyout(
+        VirtualConsole console, in SpriteEditorLayout layout, SpriteEditorSession editor,
         EditorButton? flyoutSlot, HoverTarget? hover)
     {
         if (flyoutSlot is not EditorButton slot)
@@ -243,76 +212,82 @@ public sealed class SpriteEditorRenderer : IDisposable
         {
             Rectangle rect = layout.FlyoutVariantRect(slot, i);
             bool hovered = hover is HoverTarget target && target.FlyoutSlot == slot && target.FlyoutVariant == i;
-            batch.Draw(_chrome.White, rect, i == current ? ActiveBg : Ink);
-            _chrome.DrawFrame(batch, rect, 1, hovered ? Bright : Dim);
-            Color ink = i == current ? Bright : Text;
+            console.RectFill(rect.X, rect.Y, rect.Width, rect.Height, i == current ? ActiveBg : Ink);
+            byte ink = i == current ? Bright : Text;
             if (slot == EditorButton.SizeToggle)
             {
                 string label = EditorIcons.SizeLabel(EditorIcons.SizeVariantCells(i));
-                _chrome.Font.Draw(
-                    batch, label,
-                    rect.X + (rect.Width - PixelFontAtlas.MeasureWidth(label, layout.Ui)) / 2,
-                    rect.Y + (rect.Height - PixelFontAtlas.LineHeight(layout.Ui)) / 2,
-                    layout.Ui, ink);
+                console.Print(
+                    label, ConsoleChrome.ButtonTextX(rect, label), ConsoleChrome.ButtonTextY(rect), ink);
             }
             else
             {
-                _chrome.Icons.Draw(batch, EditorIcons.VariantIcon(slot, i), layout.ButtonIconRect(rect), ink);
+                Rectangle destination = ConsoleChrome.ButtonIconRect(rect);
+                ConsoleIcons.Draw(console, EditorIcons.VariantIcon(slot, i), destination.X, destination.Y, ink);
             }
+            console.Rect(rect.X, rect.Y, rect.Width, rect.Height, hovered ? Bright : Dim);
         }
     }
 
-    private void DrawCanvas(SpriteBatch batch, in SpriteEditorLayout layout, SpriteEditorSession editor, double timeSeconds)
+    /// <summary>
+    /// The canvas: the region's pixels, each one a <see cref="SpriteEditorLayout.CanvasScale"/>
+    /// square. There is no second pixel store and no texture — the zoom IS the draw, one filled
+    /// rectangle per region pixel, straight out of the session's composite (ADR-027: what the
+    /// author sees is the flattened stack).
+    /// </summary>
+    private static void DrawCanvas(
+        VirtualConsole console, in SpriteEditorLayout layout, SpriteEditorSession editor, double timeSeconds)
     {
-        // The frame is what separates sheet-ink pixels from the ink-cleared window behind them.
-        _chrome.DrawFrame(batch, layout.Canvas, layout.Ui, Dim);
         int size = VirtualConsole.SpriteSize;
-        var region = new Rectangle(
-            editor.RegionCellX * size, editor.RegionCellY * size, layout.RegionPixels, layout.RegionPixels);
-        // One quad: the canvas is the sheet texture's region rectangle scaled by a whole
-        // integer under PointClamp — the zoom IS the draw, there is no second pixel store.
-        batch.Draw(_sheetTexture, layout.Canvas, region, Color.White);
+        int sheetX0 = editor.RegionCellX * size;
+        int sheetY0 = editor.RegionCellY * size;
+        ReadOnlySpan<byte> pixels = editor.Pixels;
+        for (int y = 0; y < layout.RegionPixels; y++)
+        {
+            for (int x = 0; x < layout.RegionPixels; x++)
+            {
+                byte color = pixels[(sheetY0 + y) * VirtualConsole.SheetWidth + sheetX0 + x];
+                Fill(console, PixelRect(layout, x, y), color);
+            }
+        }
 
-        // The shape preview, straight from the session's point list — the very pixels the
-        // commit will plot, tinted with the color they will get. Drawn as canvas-scale quads
-        // over the sheet quad: the preview never enters the sheet (or its texture), so
-        // cancelling a gesture costs nothing and dirt/undo stay untouched until the release.
+        // The shape preview, straight from the session's point list — the very pixels the commit
+        // will plot, in the colour they will get. The preview never enters the sheet, so
+        // cancelling a gesture costs nothing and dirt and undo stay untouched until the release.
         if (editor.ShapeActive)
         {
             foreach ((int px, int py) in editor.ShapePreview)
             {
-                batch.Draw(_chrome.White, PixelRect(layout, px, py), _palette[editor.CurrentColor]);
+                Fill(console, PixelRect(layout, px, py), (byte)editor.CurrentColor);
             }
         }
 
-        DrawSelection(batch, layout, editor, timeSeconds);
-        DrawStampGhost(batch, layout, editor);
+        DrawSelection(console, layout, editor, timeSeconds);
+        DrawStampGhost(console, layout, editor);
 
-        // The canvas cursor — where the keyboard pencil is and what the status bar's
-        // coordinates read. A frame around the pixel, not over it: the color being placed
-        // must stay visible under the cursor.
-        _chrome.DrawFrame(batch, PixelRect(layout, editor.CursorX, editor.CursorY), Math.Max(1, layout.Ui / 2), Bright);
+        // The canvas cursor — where the keyboard pencil is and what the status line's
+        // coordinates read. A frame around the pixel, not over it: the colour being placed must
+        // stay visible under the cursor.
+        Rectangle cursor = PixelRect(layout, editor.CursorX, editor.CursorY);
+        console.Rect(cursor.X, cursor.Y, cursor.Width, cursor.Height, Bright);
     }
 
-    /// <summary>One region pixel's quad on the canvas — the single mapping the shape preview, the selection, the ghost and the cursor all share.</summary>
+    /// <summary>One region pixel's square on the canvas — the single mapping the shape preview, the selection, the ghost and the cursor all share.</summary>
     private static Rectangle PixelRect(in SpriteEditorLayout layout, int x, int y) =>
         new(layout.Canvas.X + x * layout.CanvasScale,
             layout.Canvas.Y + y * layout.CanvasScale,
             layout.CanvasScale, layout.CanvasScale);
 
     /// <summary>
-    /// The selection made visible — marching ants on the mask's true boundary (the owner's
-    /// third review: the old blue wash and white bounding box are gone), rebuilt from the
-    /// session's mask every frame with the phase <see cref="SelectionOutline"/> derives from
-    /// the draw clock. Drawn only under the select tool, the same gate the stamp ghost keeps:
-    /// the session already guarantees no mask survives a tool switch, and the gate states the
-    /// same law at the one place the overlay could appear. While a move floats, the picture
-    /// still splits honestly into what the drop would produce — the holes show color 0, the
-    /// lifted pixels ride at the offset, and the ants ride with them. All of it is overlay
-    /// quads; none of it is in the sheet or its texture, which is why cancelling a move costs
-    /// nothing and why no outline can ever reach a saved PNG.
+    /// The selection made visible — marching ants on the mask's true boundary, rebuilt every
+    /// frame with the phase <see cref="SelectionOutline"/> derives from the draw clock. Drawn
+    /// only under the select tool. While a move floats, the picture splits honestly into what
+    /// the drop would produce: the holes show colour 0, the lifted pixels ride at the offset and
+    /// the ants ride with them. All of it is overlay; none of it is in the sheet, which is why
+    /// cancelling a move costs nothing and why no outline can ever reach a saved PNG.
     /// </summary>
-    private void DrawSelection(SpriteBatch batch, in SpriteEditorLayout layout, SpriteEditorSession editor, double timeSeconds)
+    private static void DrawSelection(
+        VirtualConsole console, in SpriteEditorLayout layout, SpriteEditorSession editor, double timeSeconds)
     {
         if (editor.Tool != SpriteEditorTool.Select || !editor.HasSelection)
         {
@@ -321,8 +296,8 @@ public sealed class SpriteEditorRenderer : IDisposable
         int n = layout.RegionPixels;
         int dx = editor.MoveActive ? editor.MoveOffsetX : 0;
         int dy = editor.MoveActive ? editor.MoveOffsetY : 0;
-        // Two passes while moving: every hole first, then every lifted pixel — a fragment
-        // pixel may land on another's hole, and landings must win, exactly as the drop writes.
+        // Two passes while moving: every hole first, then every lifted pixel — a fragment pixel
+        // may land on another's hole, and landings must win, exactly as the drop writes.
         if (editor.MoveActive)
         {
             int sheetX0 = editor.RegionCellX * VirtualConsole.SpriteSize;
@@ -333,7 +308,7 @@ public sealed class SpriteEditorRenderer : IDisposable
                 {
                     if (editor.IsSelected(x, y))
                     {
-                        batch.Draw(_chrome.White, PixelRect(layout, x, y), _palette[0]);
+                        Fill(console, PixelRect(layout, x, y), 0);
                     }
                 }
             }
@@ -344,35 +319,36 @@ public sealed class SpriteEditorRenderer : IDisposable
                     if (editor.IsSelected(x, y))
                     {
                         byte color = editor.Pixels[(sheetY0 + y) * VirtualConsole.SheetWidth + sheetX0 + x];
-                        batch.Draw(_chrome.White, PixelRect(layout, x + dx, y + dy), _palette[color]);
+                        Fill(console, PixelRect(layout, x + dx, y + dy), color);
                     }
                 }
             }
         }
-        // The ants outline the mask as shown — shifted while floating, which the predicate's
-        // one subtraction handles (out-of-range asks answer false, so borders stay honest).
-        // Dash length and thickness scale with the ui unit like every piece of chrome.
-        int dashLength = Math.Max(2, 3 * layout.Ui);
+        // The ants outline the mask as shown — shifted while floating, which the predicate's one
+        // subtraction handles (out-of-range asks answer false, so borders stay honest). The dash
+        // is half a canvas pixel at the console's scale, floored at two so it can still alternate.
+        int dashLength = Math.Max(2, layout.CanvasScale / 2);
+        var ants = new List<AntDash>();
         SelectionOutline.Collect(
-            (x, y) => editor.IsSelected(x - dx, y - dy), n, layout.CanvasScale, dashLength,
-            Math.Max(1, layout.Ui / 2), SelectionOutline.Phase(timeSeconds, dashLength), _ants);
-        foreach (AntDash dash in _ants)
+            (x, y) => editor.IsSelected(x - dx, y - dy), n, layout.CanvasScale, dashLength, 1,
+            SelectionOutline.Phase(timeSeconds, dashLength), ants);
+        foreach (AntDash dash in ants)
         {
-            batch.Draw(
-                _chrome.White,
-                new Rectangle(layout.Canvas.X + dash.X, layout.Canvas.Y + dash.Y, dash.Width, dash.Height),
+            console.RectFill(
+                layout.Canvas.X + dash.X, layout.Canvas.Y + dash.Y, dash.Width, dash.Height,
                 dash.Bright ? Bright : Ink);
         }
     }
 
     /// <summary>
-    /// The stamp's ghost: the source at half strength under the cursor, placed by the very
-    /// <see cref="SpriteEditorSession.StampOrigin"/> the print uses and clipped at the region
-    /// the way the print will be — the author sees exactly what the click commits. Session
-    /// state only; the sheet texture is never touched, and an inkless stamp shows nothing
-    /// (its tooltip explains why).
+    /// The stamp's ghost: the source under the cursor, placed by the very
+    /// <see cref="SpriteEditorSession.StampOrigin"/> the print uses and clipped at the region the
+    /// way the print will be. The host screen drew it at half alpha; an indexed framebuffer has
+    /// no alpha, so the ghost is drawn as a checker — every other pixel — which is the same
+    /// "this is not committed yet" reading with the palette we actually have.
     /// </summary>
-    private void DrawStampGhost(SpriteBatch batch, in SpriteEditorLayout layout, SpriteEditorSession editor)
+    private static void DrawStampGhost(
+        VirtualConsole console, in SpriteEditorLayout layout, SpriteEditorSession editor)
     {
         if (editor.Tool != SpriteEditorTool.Stamp || !editor.HasStampSource)
         {
@@ -390,169 +366,159 @@ public sealed class SpriteEditorRenderer : IDisposable
                 {
                     continue;   // transparent source, or the part the border will clip off the print
                 }
-                batch.Draw(_chrome.White, PixelRect(layout, x, y), _palette[color] * 0.5f);
+                Rectangle rect = PixelRect(layout, x, y);
+                for (int py = 0; py < rect.Height; py++)
+                {
+                    for (int px = (py + x + y) % 2; px < rect.Width; px += 2)
+                    {
+                        console.Pset(rect.X + px, rect.Y + py, color);
+                    }
+                }
             }
         }
     }
 
-    private void DrawSwatches(SpriteBatch batch, in SpriteEditorLayout layout, SpriteEditorSession editor)
+    /// <summary>
+    /// The sixteen swatches as a 4x4 grid — PICO-8's own palette shape, and the only one this
+    /// column's twenty pixels can hold. The current colour wears a ring <b>inside</b> its own
+    /// cell, leaving a 2x2 body of the colour showing: the host screen ringed the gap around
+    /// the cell, and here the gap is one pixel wide and belongs to the canvas on one side and
+    /// to the sheet window on the other, so a ring drawn out there would scribble on a
+    /// neighbour.
+    ///
+    /// <para>The ring is white except on the white swatch, where it is ink. That one exception
+    /// is not decoration: a white ring on a white body is a solid white square, and "which
+    /// colour am I holding" would then have no answer at all for exactly one of the sixteen.
+    /// The signal stays a shape either way, never a hue, so it survives an author who cannot
+    /// separate blue from grey.</para>
+    /// </summary>
+    private static void DrawSwatches(
+        VirtualConsole console, in SpriteEditorLayout layout, SpriteEditorSession editor)
     {
         for (int i = 0; i < Palette.VisibleCount; i++)
         {
             Rectangle rect = layout.SwatchRect(i);
-            // Every swatch gets a dim 1 px frame so color 0 (ink on the ink-cleared window)
-            // has a visible body; the current color's frame is bright and exactly gap-thick,
-            // filling the space between swatches without covering a neighbour — visible even
-            // when the current color is white, because thickness carries the signal, not hue.
-            bool current = i == editor.CurrentColor;
-            _chrome.DrawFrame(batch, rect, current ? layout.Ui : 1, current ? Bright : Dim);
-            batch.Draw(_chrome.White, rect, _palette[i]);
+            Fill(console, rect, (byte)i);
+            if (i == editor.CurrentColor)
+            {
+                console.Rect(rect.X, rect.Y, rect.Width, rect.Height, i == Bright ? Ink : Bright);
+            }
         }
     }
 
     /// <summary>
-    /// The eight flag toggles (wave 3b-2), bit 0 leftmost. Three states, straight from the
-    /// reference row (REFERENCES-EDITORS §2.1, TIC-80's <c>drawFlags</c>): raised on every
-    /// sprite of the region — a filled cell; raised on some of them — an empty cell with a
-    /// centre dot; raised on none — an empty cell. At region 8 px "every" and "some" are the
-    /// same sprite, so the dot simply never appears; at 16 or 32 it is the only honest thing
-    /// to draw, because one square cannot say "half of these four".
+    /// The eight flag toggles, bit 0 at the top left, four columns by two. Three states, the same
+    /// three the reference row carries (REFERENCES-EDITORS §2.1, TIC-80's <c>drawFlags</c>):
+    /// raised on every sprite of the region — a solid white cell; raised on some of them — a
+    /// solid grey one; raised on none — a hollow dim ring. At region 8 px "every" and "some" are
+    /// the same sprite, so grey never appears; at 16 or 32 it is the only honest thing to draw,
+    /// because one four-pixel square cannot say "half of these four". Fill and emptiness carry
+    /// the signal, not hue.
     ///
-    /// <para>Fill and emptiness carry the signal, not hue — the same discipline the swatch
-    /// frames use, and the reason the row stays readable for an author who cannot separate
-    /// blue from grey. The painted square is <see cref="SpriteEditorLayout.FlagMarkRect"/>, two
-    /// thirds of the cell the pointer may land on: the mark is the reference row's small square,
-    /// the cell around it is what makes it easy to hit, and only the layout knows either.</para>
+    /// <para>The host screen painted a smaller mark inside a bigger cell so the toggle could
+    /// look like TIC-80's 5x5 square while staying easy to hit. Here the cell IS four pixels, so
+    /// the mark and the hit target are the same thing and the pointer's reach comes from the
+    /// console's scale instead — four console pixels are thirty-two window pixels at the shell's
+    /// default window.</para>
     /// </summary>
-    private void DrawFlags(
-        SpriteBatch batch, in SpriteEditorLayout layout, SpriteEditorSession editor, HoverTarget? hover)
+    private static void DrawFlags(
+        VirtualConsole console, in SpriteEditorLayout layout, SpriteEditorSession editor, HoverTarget? hover)
     {
         for (int bit = 0; bit < SpriteEditorSession.FlagBits; bit++)
         {
-            Rectangle mark = layout.FlagMarkRect(bit);
-            bool hovered = hover is HoverTarget target && target.Flag == bit;
-            batch.Draw(_chrome.White, mark, Ink);
-            _chrome.DrawFrame(batch, mark, 1, hovered ? Bright : Text);
+            Rectangle cell = layout.FlagRect(bit);
             if (editor.IsFlagSetInAll(bit))
             {
-                batch.Draw(_chrome.White, mark, Bright);
+                Fill(console, cell, Bright);
             }
             else if (editor.IsFlagSetInAny(bit))
             {
-                int dot = Math.Max(1, mark.Width / 3);
-                batch.Draw(
-                    _chrome.White,
-                    new Rectangle(
-                        mark.X + (mark.Width - dot) / 2, mark.Y + (mark.Height - dot) / 2, dot, dot),
-                    Text);
+                Fill(console, cell, Text);
+            }
+            else
+            {
+                console.Rect(cell.X, cell.Y, cell.Width, cell.Height, Dim);
+            }
+            if (hover is HoverTarget target && target.Flag == bit)
+            {
+                console.Rect(cell.X, cell.Y, cell.Width, cell.Height, Bright);
             }
         }
     }
 
-    private void DrawSheet(SpriteBatch batch, in SpriteEditorLayout layout, SpriteEditorSession editor, int scroll)
+    /// <summary>
+    /// The sheet window: the presentation strip's pixels, sliced by the scroll offset. Drawn
+    /// pixel by pixel through <see cref="SheetStrip"/>'s own mapping rather than by lane blocks,
+    /// because the offset is in strip pixels and a slider drag lands on any of them — a
+    /// block-wise draw would have to re-derive the lane arithmetic to clip, which is precisely
+    /// the second owner the strip type exists to prevent.
+    ///
+    /// <para>Sprite 0 wears a dim frame wherever the window shows it: it is the map's empty tile,
+    /// and the author is told so here — where he draws — and not only after carrying the art to
+    /// the map screen and finding it missing. The selected region wears a bright one.</para>
+    /// </summary>
+    private static void DrawSheet(
+        VirtualConsole console, in SpriteEditorLayout layout, SpriteEditorSession editor, int scroll)
     {
-        _chrome.DrawFrame(batch, layout.Sheet, layout.Ui, Dim);
-        int visibleRight = scroll + layout.SheetVisiblePixels;
-        for (int lane = 0; lane < SheetStrip.Lanes; lane++)
+        ReadOnlySpan<byte> pixels = editor.Pixels;
+        int size = VirtualConsole.SpriteSize;
+        for (int row = 0; row < layout.Sheet.Height / layout.SheetScale; row++)
         {
-            // Mapping the lane's first sprite through the shared owner gives both the strip
-            // destination and canonical texture row. Drawing one lane-block instead of every
-            // individual cell keeps the presentation transform cheap without duplicating its
-            // page arithmetic here — and it is why the sixth review's taller strip needed no
-            // new drawing code, only SheetStrip's own Rows.
-            int firstSprite = lane * SheetStrip.Rows * SheetStrip.LaneColumns;
-            SheetStrip.SpriteToStripCell(firstSprite, out int stripColumn, out _);
-            int laneStart = stripColumn * VirtualConsole.SpriteSize;
-            int laneEnd = laneStart + VirtualConsole.SheetWidth;
-            int clippedStart = Math.Max(scroll, laneStart);
-            int clippedEnd = Math.Min(visibleRight, laneEnd);
-            if (clippedStart >= clippedEnd)
+            for (int column = 0; column < layout.SheetVisiblePixels; column++)
             {
-                continue;
+                int stripX = scroll + column;
+                if (!SheetStrip.TryStripCellToSheetCell(
+                    stripX / size, row / size, out int cellX, out int cellY))
+                {
+                    continue;
+                }
+                byte color = pixels[
+                    (cellY * size + row % size) * VirtualConsole.SheetWidth + cellX * size + stripX % size];
+                console.RectFill(
+                    layout.Sheet.X + column * layout.SheetScale,
+                    layout.Sheet.Y + row * layout.SheetScale,
+                    layout.SheetScale, layout.SheetScale, color);
             }
-
-            var source = new Rectangle(
-                clippedStart - laneStart,
-                lane * SheetStrip.Rows * VirtualConsole.SpriteSize,
-                clippedEnd - clippedStart,
-                SheetStrip.PixelHeight);
-            var drawn = new Rectangle(
-                layout.Sheet.X + (clippedStart - scroll) * layout.SheetScale,
-                layout.Sheet.Y,
-                source.Width * layout.SheetScale,
-                source.Height * layout.SheetScale);
-            batch.Draw(_sheetTexture, drawn, source, Color.White);
         }
 
-        // Highlight geometry is cell-derived because one canonical region may straddle two
-        // strip pages. A single bounding box would falsely select the empty gap between them.
-        // Sprite 0 wears a dim frame wherever the strip shows it: it is the map's empty tile,
-        // and the author is told so here — where he draws — and not only after he has carried
-        // the art to the map screen and found it missing.
         foreach (Rectangle zero in layout.SheetRegionHighlights(0, 0, 1, scroll))
         {
-            Rectangle visibleZero = Rectangle.Intersect(zero, layout.Sheet);
-            if (visibleZero.Width > 0 && visibleZero.Height > 0)
-            {
-                _chrome.DrawFrame(batch, visibleZero, Math.Max(1, layout.Ui / 2), Dim);
-            }
+            Outline(console, Rectangle.Intersect(zero, layout.Sheet), Dim);
         }
-
         foreach (Rectangle highlight in layout.SheetRegionHighlights(
             editor.RegionCellX, editor.RegionCellY, editor.RegionCells, scroll))
         {
-            Rectangle visible = Rectangle.Intersect(highlight, layout.Sheet);
-            if (visible.Width > 0 && visible.Height > 0)
-            {
-                _chrome.DrawFrame(batch, visible, Math.Max(1, layout.Ui / 2), Bright);
-            }
+            Outline(console, Rectangle.Intersect(highlight, layout.Sheet), Bright);
         }
     }
 
     /// <summary>
-    /// The sheet window's horizontal scroll slider (wave 2i): the track in the strip tone,
-    /// the thumb from the very <see cref="SpriteEditorLayout.SheetThumb"/> the drag inverts.
-    /// Until wave 2k the strip (64 columns) always overflowed the window and the thumb was
-    /// always live. It is 32 columns now, so a wide-enough window — 2560x720 and up after the
-    /// seventh review's tool column, measured and not guessed — shows the whole strip and the
-    /// thumb honestly fills the track, with drags
-    /// as no-ops; <c>SheetScrollTests</c> pins that case. It brightens under the pointer and
-    /// while dragging, like every hovered control.
+    /// The sheet window's horizontal scroll slider: the track as a dim outline, the thumb from
+    /// the very <see cref="SpriteEditorLayout.SheetThumb"/> the drag inverts. It brightens under
+    /// the pointer and while dragging, like every hovered control. The window shows seven of the
+    /// strip's thirty-two columns, so the thumb is always live here — unlike the host screen,
+    /// where a wide enough window could show the whole strip and the drag became a no-op.
     /// </summary>
-    private void DrawSlider(SpriteBatch batch, in SpriteEditorLayout layout, SheetScroll scroll, HoverTarget? hover)
+    private static void DrawSlider(
+        VirtualConsole console, in SpriteEditorLayout layout, SheetScroll scroll, HoverTarget? hover)
     {
-        _chrome.DrawFrame(batch, layout.SheetSlider, 1, Dim);
-        batch.Draw(_chrome.White, layout.SheetSlider, StripBg);
+        console.Rect(
+            layout.SheetSlider.X, layout.SheetSlider.Y,
+            layout.SheetSlider.Width, layout.SheetSlider.Height, Dim);
         bool hot = scroll.Dragging || (hover is HoverTarget target && target.Slider);
-        batch.Draw(_chrome.White, layout.SheetThumb(scroll.Offset), hot ? Bright : Text);
+        Fill(console, layout.SheetThumb(scroll.Offset), hot ? Bright : Text);
     }
 
-    /// <summary>
-    /// The tooltip's sprite-editor half: which text and which anchor. This screen has five
-    /// kinds of hover target (button, flyout variant, slider, flag toggle, swatch) and each names its own
-    /// tooltip and its own rectangle; the box itself belongs to the shared painter, which is
-    /// where the flip-and-clamp rules live for both editors.
-    /// </summary>
-    private void DrawTooltip(
-        SpriteBatch batch, in SpriteEditorLayout layout, int width, int height,
-        SpriteEditorSession editor, HoverTarget? hover, bool tooltipVisible)
+    /// <summary>One filled rectangle, a layout rectangle unpacked into the console's call.</summary>
+    private static void Fill(VirtualConsole console, Rectangle rect, byte color) =>
+        console.RectFill(rect.X, rect.Y, rect.Width, rect.Height, color);
+
+    /// <summary>One outline, skipped when the clipped rectangle came back empty.</summary>
+    private static void Outline(VirtualConsole console, Rectangle rect, byte color)
     {
-        if (hover is not HoverTarget target || !tooltipVisible)
+        if (rect.Width > 0 && rect.Height > 0)
         {
-            return;
+            console.Rect(rect.X, rect.Y, rect.Width, rect.Height, color);
         }
-        string text =
-            target.Button is EditorButton button ? EditorIcons.Tooltip(button, editor)
-            : target.FlyoutSlot is EditorButton slot ? EditorIcons.VariantTooltip(slot, target.FlyoutVariant)
-            : target.Slider ? EditorIcons.SliderTooltip
-            : target.Flag >= 0 ? EditorIcons.FlagTooltip(target.Flag)
-            : EditorIcons.SwatchTooltip(target.Swatch);
-        Rectangle anchor =
-            target.Button is EditorButton anchorButton ? layout.ButtonRect(anchorButton)
-            : target.FlyoutSlot is EditorButton anchorSlot ? layout.FlyoutVariantRect(anchorSlot, target.FlyoutVariant)
-            : target.Slider ? layout.SheetSlider
-            : target.Flag >= 0 ? layout.FlagRect(target.Flag)
-            : layout.SwatchRect(target.Swatch);
-        _chrome.DrawTooltip(batch, layout.Chrome, width, height, text, anchor);
     }
 }

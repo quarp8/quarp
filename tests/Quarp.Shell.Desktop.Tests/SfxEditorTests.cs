@@ -47,6 +47,11 @@ public class SfxEditorTests : IDisposable
     private const int WindowWidth = 1280;
     private const int WindowHeight = 720;
 
+    /// <summary>The console's own screen — the surface the sprite editor is laid out on since wave R2.</summary>
+    private const int ConsoleWidth = 160;
+
+    private const int ConsoleHeight = 90;
+
     /// <summary>One frame at 60 Hz — the router spends it on the tooltip clock only.</summary>
     private const double FrameSeconds = 1.0 / 60.0;
 
@@ -77,8 +82,21 @@ public class SfxEditorTests : IDisposable
 
         internal SheetScroll SheetScroll { get; } = new();
 
+        /// <summary>
+        /// Rebuilt per frame, like the window's. Since wave R2 the two numbers are <b>the size
+        /// of the surface the screen on show is laid out on</b>, and the sprite editor's surface
+        /// is the console itself (ADR-029): 160x90, not the back buffer. <c>QuarpGame</c> makes
+        /// exactly this switch — see <c>ConsoleEditorContext</c> — so a frame here means what a
+        /// frame there means. The consequence for whoever writes a test against the sprite
+        /// screen: <b>its mouse points are console pixels</b>, taken straight off the layout's
+        /// own rectangles. Production reaches the same numbers by putting the window's point
+        /// through <see cref="EditorMouse.ToConsole"/>, whose own arithmetic is pinned in
+        /// <c>EditorMouseReaderTests</c> rather than re-run here.
+        /// </summary>
         internal EditorShell Context =>
-            new(Modes, Flyout, Hover, SheetScroll, WindowWidth, WindowHeight);
+            Modes.Mode == ShellMode.Editor
+                ? new(Modes, Flyout, Hover, SheetScroll, ConsoleWidth, ConsoleHeight)
+                : new(Modes, Flyout, Hover, SheetScroll, WindowWidth, WindowHeight);
 
         internal SfxEditorLayout Layout => SfxEditorLayout.Compute(WindowWidth, WindowHeight);
 
@@ -140,7 +158,15 @@ public class SfxEditorTests : IDisposable
 
         internal void ClickRect(Rectangle rect) => Click(rect.Center.X, rect.Center.Y);
 
-        internal void ClickButton(EditorButton button) => ClickRect(Layout.ButtonRect(button));
+        /// <summary>
+        /// Since wave R2 the sprite editor lives on the console's own 160x90 frame (ADR-029)
+        /// while this screen is still on the host frame, so the two no longer place their tabs
+        /// on the same pixels. The rectangle must come from the layout of the screen ON SHOW.
+        /// </summary>
+        internal void ClickButton(EditorButton button) => ClickRect(
+            Modes.Mode == ShellMode.Editor
+                ? SpriteEditorLayout.Compute(160, 90, Modes.Editor!.RegionCells).ButtonRect(button)
+                : Layout.ButtonRect(button));
     }
 
     // ==================================================================================
@@ -746,26 +772,31 @@ public class SfxEditorTests : IDisposable
     }
 
     /// <summary>
-    /// The fourth screen stands in the SAME frame as the other three: identical scale, margins,
-    /// bands, prompt verbs and — the part the mouse depends on — identical rectangles for the six
-    /// tabs and the three status buttons.
+    /// This screen stands in the SAME frame as the two siblings still in it: identical scale,
+    /// margins, bands, prompt verbs and — the part the mouse depends on — identical rectangles
+    /// for the six tabs and the three status buttons.
+    ///
+    /// <para><b>Re-pinned in wave R2.</b> The sprite editor used to be one of the three
+    /// siblings; ADR-029 moved it onto the console (160x90, <see cref="ConsoleChrome"/>), so its
+    /// rectangles are in a different unit and comparing them here would assert a coincidence
+    /// rather than a shared owner. The code screen is the reference now.</para>
     /// </summary>
     [Fact]
     public void TheSoundScreenStandsInTheSameChromeAsItsSiblings()
     {
         var sfx = SfxEditorLayout.Compute(WindowWidth, WindowHeight);
-        var sprite = SpriteEditorLayout.Compute(WindowWidth, WindowHeight, regionCells: 1);
+        var map = MapEditorLayout.Compute(WindowWidth, WindowHeight);
         var code = CodeEditorLayout.Compute(WindowWidth, WindowHeight);
 
-        Assert.Equal(sprite.Ui, sfx.Ui);
-        Assert.Equal(sprite.Margin, sfx.Margin);
-        Assert.Equal(sprite.ButtonSize, sfx.ButtonSize);
-        Assert.Equal(sprite.TabStrip, sfx.TabStrip);
-        Assert.Equal(sprite.StatusBar, sfx.StatusBar);
-        Assert.Equal(sprite.PromptY, sfx.PromptY);
+        Assert.Equal(map.Ui, sfx.Ui);
+        Assert.Equal(map.Margin, sfx.Margin);
+        Assert.Equal(map.ButtonSize, sfx.ButtonSize);
+        Assert.Equal(map.TabStrip, sfx.TabStrip);
+        Assert.Equal(map.StatusBar, sfx.StatusBar);
+        Assert.Equal(map.PromptY, sfx.PromptY);
         foreach (EditorPromptVerb verb in Enum.GetValues<EditorPromptVerb>())
         {
-            Assert.Equal(sprite.PromptVerbRect(verb), sfx.PromptVerbRect(verb));
+            Assert.Equal(map.PromptVerbRect(verb), sfx.PromptVerbRect(verb));
         }
         EditorButton[] shared =
         {
@@ -775,7 +806,7 @@ public class SfxEditorTests : IDisposable
         };
         foreach (EditorButton button in shared)
         {
-            Assert.Equal(sprite.ButtonRect(button), sfx.ButtonRect(button));
+            Assert.Equal(map.ButtonRect(button), sfx.ButtonRect(button));
             Assert.Equal(code.ButtonRect(button), sfx.ButtonRect(button));
         }
     }
@@ -871,7 +902,9 @@ public class SfxEditorTests : IDisposable
         Harness harness = OpenSoundEditor(out _);
         harness.Modes.SwitchEditorTab(ShellMode.Editor);
         harness.Idle();
-        Rectangle tab = SpriteEditorLayout.Compute(WindowWidth, WindowHeight, regionCells: 1)
+        // Console pixels: the sprite screen is on the console now, and so is the point a click
+        // on its sound tab must land on (see Harness.Context).
+        Rectangle tab = SpriteEditorLayout.Compute(ConsoleWidth, ConsoleHeight, regionCells: 1)
             .ButtonRect(EditorButton.SoundTab);
         harness.Click(tab.X + tab.Width / 2, tab.Y + tab.Height / 2);
 

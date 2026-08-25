@@ -6,88 +6,137 @@ using Xunit;
 namespace Quarp.Shell.Desktop.Tests;
 
 /// <summary>
-/// The editor screen's geometry contract under the owner's verdict layout (M9 stage 2.5,
-/// sixth review applied): whole-integer scales, the dictated strip order (exit left;
-/// music-sounds-tilemaps-sprites-code from the right corner leftwards; the six-slot toolbar
-/// column with no action row; the right column at the window's edge — palette on top, then
-/// ONE narrow row holding the size toggle and the five layer tabs, then the sheet window
-/// owning every remaining pixel of the column down to its slider; the full-width tab and
-/// status bands), no overlapping panels at the shell's real window sizes, and — the part
-/// that actually bites — hit tests that agree with the rectangles, because
+/// The sprite screen's geometry contract on the console (wave R2, ADR-029): whole-integer
+/// scales, the dictated tab order, the two-wide tool column, the middle column of palette /
+/// flags / layer tabs, the sheet window at the right edge with its slider, the two bands — and,
+/// the part that actually bites, hit tests that agree with the rectangles, because
 /// <see cref="SpriteEditorLayout"/> is the single owner both the renderer draws from and the
-/// mouse routing asks. A drift between "where the button is" and "what a click on it means"
-/// is exactly the bug class this file exists to make impossible.
+/// mouse routing asks. A drift between "where the button is" and "what a click on it means" is
+/// exactly the bug class this file exists to make impossible.
+///
+/// <para><b>Re-pinned in wave R2, and this paragraph is the explanation the re-pin owes.</b>
+/// Every number here used to be a window pixel at 1280x720 and several of the tests swept five
+/// window sizes. There is no window any more: ADR-029 put this screen in the console's
+/// framebuffer, so the surface is 160x90 and there is exactly one of it. Three consequences,
+/// all deliberate. (1) The sweeps over window sizes are gone, because the axis they swept no
+/// longer varies — what still varies is the region size, and that sweep stayed. (2) "Does it
+/// fit" finally has a single answer instead of one per window, which makes the containment
+/// assertions stronger than they were. (3) Some furniture genuinely moved, and where it did the
+/// test says so in its own words rather than being quietly deleted: save / undo / redo / clear
+/// left the status band for the tool column, because the console's status band is five pixels
+/// tall and an icon-button is ten.</para>
+///
+/// <para>What this file no longer pins, on purpose: the pixels. Those have a golden master now
+/// (<see cref="SpriteEditorScreenGoldenTests"/>), which is the thing rectangles could never
+/// check — a renderer that drew the palette inside the sheet's rectangle passed every assertion
+/// in this file and always would have.</para>
 /// </summary>
 public class SpriteEditorLayoutTests
 {
-    /// <summary>The shell's default window (8x the console) — where the editor will actually be used.</summary>
-    private static SpriteEditorLayout Default() => SpriteEditorLayout.Compute(1280, 720, regionCells: 1);
+    /// <summary>The console — the screen's one surface.</summary>
+    private const int ScreenWidth = 160;
+
+    private const int ScreenHeight = 90;
+
+    private static SpriteEditorLayout Default() =>
+        SpriteEditorLayout.Compute(ScreenWidth, ScreenHeight, regionCells: 1);
+
+    private static Rectangle Screen => new(0, 0, ScreenWidth, ScreenHeight);
 
     private static readonly EditorButton[] AllButtons = (EditorButton[])Enum.GetValues(typeof(EditorButton));
 
     [Theory]
-    [InlineData(320, 180)]      // the UiScale anchor, the smallest sensible window
-    [InlineData(640, 360)]
-    [InlineData(1280, 720)]     // the default
-    [InlineData(1920, 1080)]
-    [InlineData(2560, 1440)]
-    public void ScalesAreWholeAndAtLeastOne(int width, int height)
+    [InlineData(1)]
+    [InlineData(2)]
+    [InlineData(4)]
+    public void ScalesAreWholeAndAtLeastOne(int regionCells)
     {
-        var layout = SpriteEditorLayout.Compute(width, height, regionCells: 1);
+        var layout = SpriteEditorLayout.Compute(ScreenWidth, ScreenHeight, regionCells);
 
         Assert.True(layout.CanvasScale >= 1);
         Assert.True(layout.SheetScale >= 1);
-        // Whole-integer scaling is checked through the rectangles being exact multiples —
-        // a fractional scale could not produce these sizes.
+        // Whole-integer scaling is checked through the rectangles being exact multiples — a
+        // fractional scale could not produce these sizes.
         Assert.Equal(layout.RegionPixels * layout.CanvasScale, layout.Canvas.Width);
         Assert.Equal(layout.Canvas.Width, layout.Canvas.Height);        // the region is square, so is its view
-        // The sheet window shows the strip's whole height and a whole number of its columns:
-        // a fractional scale or an untrimmed width would leave a sliced cell at an edge.
+        Assert.Equal(64, layout.Canvas.Width);                          // an 8x8 sprite at zoom 8, at every region size
+        // The sheet window shows the strip's whole height and a whole number of its columns: a
+        // fractional scale or an untrimmed width would leave a sliced cell at an edge.
         Assert.Equal(SheetStrip.PixelHeight * layout.SheetScale, layout.Sheet.Height);
         Assert.Equal(0, layout.Sheet.Width % (VirtualConsole.SpriteSize * layout.SheetScale));
         Assert.True(layout.SheetVisiblePixels >= 1 && layout.SheetVisiblePixels < SheetStrip.PixelWidth);
-        // Icon buttons are 8-px masks at scale Ui plus symmetric padding — whole by construction.
-        Assert.Equal((EditorIcons.IconPixels + 4) * layout.Ui, layout.ButtonSize);
+        // An icon-button is the 8x8 mask plus a one-pixel frame each side.
+        Assert.Equal(EditorIcons.IconPixels + 2, layout.ButtonSize);
+    }
+
+    /// <summary>
+    /// The whole screen adds up: one hundred and sixty columns spent on four things and no
+    /// spare, ninety rows spent on seven and no spare. This is the arithmetic the wave was asked
+    /// to solve honestly, asserted rather than described.
+    /// </summary>
+    [Fact]
+    public void TheColumnsAndRowsAddUpToTheConsoleExactly()
+    {
+        var layout = Default();
+
+        // Across: tool column, canvas, middle column, sheet window.
+        Assert.Equal(0, layout.ButtonRect(EditorButton.ToolSelect).X);
+        Assert.Equal(2 * layout.ButtonSize, layout.Canvas.X);
+        Assert.Equal(layout.Canvas.Right, layout.Swatches.X);
+        Assert.Equal(layout.Swatches.X + 2 * layout.ButtonSize, layout.Sheet.X);
+        Assert.Equal(ScreenWidth, layout.Sheet.Right);
+
+        // Down: top band, rule, content, slider, rule, message, rule, status.
+        Assert.Equal(0, layout.TabStrip.Y);
+        Assert.Equal(layout.ButtonSize, layout.TabStrip.Height);
+        Assert.Equal(layout.TabStrip.Bottom, layout.Chrome.HeaderRuleY);
+        Assert.Equal(layout.Chrome.HeaderRuleY + 1, layout.Canvas.Y);
+        Assert.Equal(64, layout.Chrome.ContentHeight);
+        Assert.Equal(layout.Canvas.Bottom, layout.SheetSlider.Y);
+        Assert.Equal(layout.SheetSlider.Bottom, layout.Chrome.FooterRuleY);
+        Assert.Equal(layout.Chrome.FooterRuleY + 1, layout.PromptY);
+        Assert.Equal(layout.PromptY + SystemFont.GlyphHeight, layout.StatusBar.Y);
+        Assert.Equal(ScreenHeight, layout.StatusBar.Bottom);
     }
 
     [Fact]
-    public void AtTheDefaultWindowNothingOverlapsAndEverythingFits()
+    public void NothingOverlapsAndEverythingIsOnTheScreen()
     {
         var layout = Default();
-        var window = new Rectangle(0, 0, 1280, 720);
 
-        Assert.True(window.Contains(layout.Canvas));
-        Assert.True(window.Contains(layout.Sheet));
-        Assert.True(window.Contains(layout.Swatches));
-        Assert.True(window.Contains(layout.SheetSlider));
-        Assert.True(window.Contains(layout.StatusBar));
+        Assert.True(Screen.Contains(layout.Canvas));
+        Assert.True(Screen.Contains(layout.Sheet));
+        Assert.True(Screen.Contains(layout.Swatches));
+        Assert.True(Screen.Contains(layout.FlagPanel));
+        Assert.True(Screen.Contains(layout.SheetSlider));
+        Assert.True(Screen.Contains(layout.StatusBar));
         Assert.False(layout.Canvas.Intersects(layout.Sheet));
         Assert.False(layout.Canvas.Intersects(layout.Swatches));
+        Assert.False(layout.Canvas.Intersects(layout.FlagPanel));
         Assert.False(layout.Sheet.Intersects(layout.Swatches));
+        Assert.False(layout.Sheet.Intersects(layout.FlagPanel));
         Assert.False(layout.SheetSlider.Intersects(layout.Sheet));
-        Assert.False(layout.SheetSlider.Intersects(layout.Swatches));
-        // Panels stop above the reserved prompt line — the prompt must never hide under the sheet.
+        // Panels stop above the reserved message line — the prompt must never hide under the sheet.
         Assert.True(layout.Canvas.Bottom <= layout.PromptY);
         Assert.True(layout.SheetSlider.Bottom <= layout.PromptY);
     }
 
     [Fact]
-    public void EveryButtonIsPlacedInsideTheWindowWithoutOverlaps()
+    public void EveryButtonIsPlacedInsideTheScreenWithoutOverlaps()
     {
         var layout = Default();
-        var window = new Rectangle(0, 0, 1280, 720);
 
-        // Every button that belongs to THIS screen is placed, none forgotten. The list stopped
-        // being "the whole enum" in M9 stage 3: one enum now serves two editors, and
-        // EditorIcons.BelongsToSpriteEditor is the one owner of which button lives where — so a
-        // button added and not placed is still red here, and the map's own is not a false alarm.
-        Assert.Equal(
-            AllButtons.Count(EditorIcons.BelongsToSpriteEditor), layout.Buttons.Count);
+        // Every button that belongs to THIS screen is placed, none forgotten.
+        // EditorIcons.BelongsToSpriteEditor is the one owner of which button lives where, so a
+        // button added and not placed is still red here, and another screen's own is not a false
+        // alarm.
+        Assert.Equal(AllButtons.Count(EditorIcons.BelongsToSpriteEditor), layout.Buttons.Count);
         Assert.All(layout.Buttons, place => Assert.True(EditorIcons.BelongsToSpriteEditor(place.Id)));
         for (int i = 0; i < layout.Buttons.Count; i++)
         {
-            Assert.True(window.Contains(layout.Buttons[i].Rect));
+            Assert.True(Screen.Contains(layout.Buttons[i].Rect));
             Assert.False(layout.Buttons[i].Rect.Intersects(layout.Canvas));
+            Assert.False(layout.Buttons[i].Rect.Intersects(layout.Sheet));
             for (int j = i + 1; j < layout.Buttons.Count; j++)
             {
                 Assert.False(layout.Buttons[i].Rect.Intersects(layout.Buttons[j].Rect));
@@ -96,9 +145,10 @@ public class SpriteEditorLayoutTests
     }
 
     /// <summary>
-    /// The verdict's tab strip, literally: exit alone at the left margin; from the right
-    /// corner leftwards music, sounds, tilemaps, sprites, code — all icon-sized, all on the
-    /// top row, no text headers anywhere in the geometry.
+    /// The tab strip, literally: exit alone at the left corner; from the right corner leftwards
+    /// music, sounds, tilemaps, sprites, code. The order has one owner — the very list the host
+    /// frame walks (<see cref="EditorChrome.RightTabs"/>) — so this screen and the three that
+    /// have not moved yet cannot present the tabs differently.
     /// </summary>
     [Fact]
     public void TheTabStripFollowsTheOwnersOrder()
@@ -111,26 +161,32 @@ public class SpriteEditorLayoutTests
         Rectangle sprites = layout.ButtonRect(EditorButton.SpritesTab);
         Rectangle code = layout.ButtonRect(EditorButton.CodeTab);
 
-        Assert.Equal((layout.Margin, layout.Margin), (exit.X, exit.Y));
-        Assert.Equal(1280 - layout.Margin, music.Right);                // music hugs the right corner
+        Assert.Equal((0, 0), (exit.X, exit.Y));
+        Assert.Equal(ScreenWidth, music.Right);                         // music hugs the right corner
         Assert.True(code.X < sprites.X);                                // left-to-right at the right edge:
         Assert.True(sprites.X < tilemap.X);                             // code, sprites, tilemaps, sounds, music
         Assert.True(tilemap.X < sound.X);
         Assert.True(sound.X < music.X);
-        Assert.All(
-            new[] { exit, music, sound, tilemap, sprites, code },
-            tab => Assert.Equal(layout.Margin, tab.Y));
+        Assert.All(new[] { exit, music, sound, tilemap, sprites, code }, tab => Assert.Equal(0, tab.Y));
+        Assert.Equal(
+            new[] { EditorButton.MusicTab, EditorButton.SoundTab, EditorButton.TilemapTab,
+                    EditorButton.SpritesTab, EditorButton.CodeTab },
+            EditorChrome.RightTabs);
     }
 
     /// <summary>
-    /// The toolbar after the owner's second review: ONE column of six slots left of the
-    /// canvas, top-to-bottom select / pencil / fill / stamp / shape / transform — the action
-    /// row is gone (its verbs live in the transform group slot and the status bar's clear).
-    /// An action row reappearing under the column would land buttons right of the margin
-    /// column and turn the All-assert red.
+    /// The tool column after the move: TWO buttons wide and six deep, tools in the first three
+    /// rows in the owner's order, then the size toggle, then the four buttons that used to sit
+    /// in the status band.
+    ///
+    /// <para><b>Why they moved, since a reader will ask.</b> The console's status band is five
+    /// pixels of text and an icon-button is ten; a band that cannot hold a button cannot hold a
+    /// button row. TIC-80 answers the same problem the same way — its cut/copy/paste/undo/redo
+    /// live in the toolbar, not in <c>drawStatus</c>. What the status line keeps is what the
+    /// order asks of it: coordinates at the left, the sprite number at the right.</para>
     /// </summary>
     [Fact]
-    public void TheToolbarIsOneColumnOfSixLeftOfTheCanvas()
+    public void TheToolColumnIsTwoWideAndCarriesTheStatusButtonsToo()
     {
         var layout = Default();
         Rectangle select = layout.ButtonRect(EditorButton.ToolSelect);
@@ -139,29 +195,47 @@ public class SpriteEditorLayoutTests
         Rectangle stamp = layout.ButtonRect(EditorButton.ToolStamp);
         Rectangle shape = layout.ButtonRect(EditorButton.ToolShape);
         Rectangle transform = layout.ButtonRect(EditorButton.ToolTransform);
-        var column = new[] { select, pencil, fill, stamp, shape, transform };
+        Rectangle size = layout.ButtonRect(EditorButton.SizeToggle);
+        Rectangle clear = layout.ButtonRect(EditorButton.Clear);
+        Rectangle save = layout.ButtonRect(EditorButton.Save);
+        Rectangle undo = layout.ButtonRect(EditorButton.Undo);
+        Rectangle redo = layout.ButtonRect(EditorButton.Redo);
+        var column = new[] { select, pencil, fill, stamp, shape, transform, size, clear, save, undo, redo };
 
-        Assert.True(select.Y < pencil.Y && pencil.Y < fill.Y && fill.Y < stamp.Y
-            && stamp.Y < shape.Y && shape.Y < transform.Y);
-        Assert.All(column, tool => Assert.Equal(layout.Margin, tool.X));
-        Assert.All(column, tool => Assert.True(tool.Right <= layout.Canvas.Left));
-        // The column starts below the tab band and stays above the prompt line.
-        Assert.True(select.Y >= layout.TabStrip.Bottom);
-        Assert.True(transform.Bottom <= layout.PromptY);
+        // Reading order, two per row: the six tools first, then the size toggle and clear, then
+        // save, undo and redo.
+        Assert.Equal((0, layout.Chrome.ContentTop), (select.X, select.Y));
+        Assert.Equal((layout.ButtonSize, layout.Chrome.ContentTop), (pencil.X, pencil.Y));
+        Assert.Equal(select.Y + layout.ButtonSize, fill.Y);
+        Assert.Equal(fill.Y, stamp.Y);
+        Assert.Equal(fill.Y + layout.ButtonSize, shape.Y);
+        Assert.Equal(shape.Y, transform.Y);
+        Assert.Equal(shape.Y + layout.ButtonSize, size.Y);
+        Assert.Equal(size.Y, clear.Y);
+        Assert.Equal(size.Y + layout.ButtonSize, save.Y);
+        Assert.Equal(save.Y, undo.Y);
+        Assert.Equal(save.Y + layout.ButtonSize, redo.Y);
+        // The whole column stands left of the canvas and inside the content band.
+        Assert.All(column, button => Assert.True(button.Right <= layout.Canvas.Left));
+        Assert.All(column, button => Assert.True(button.X == 0 || button.X == layout.ButtonSize));
+        Assert.All(column, button => Assert.True(button.Y >= layout.TabStrip.Bottom));
+        Assert.All(column, button => Assert.True(button.Bottom <= layout.Chrome.ContentBottom));
+        // And nothing of theirs is in the status band any more — that band is text only.
+        Assert.All(column, button => Assert.False(button.Intersects(layout.StatusBar)));
     }
 
     /// <summary>
-    /// The strips of the second review: both bands span the whole window width (they are the
-    /// background that separates chrome from canvas, so a gap would break the reading), hold
-    /// their buttons, and never touch the panels between them.
+    /// The two bands: the top one spans the whole width (it is the background the tabs and the
+    /// tooltip field stand on) and the status band spans it at the bottom. Neither swallows a
+    /// working panel — that is what "the chrome is separated from the canvas" means in geometry.
     /// </summary>
     [Fact]
-    public void TheTabAndStatusBandsSpanTheWindowAndHoldTheirButtons()
+    public void TheTabAndStatusBandsSpanTheScreenAndHoldTheirButtons()
     {
         var layout = Default();
 
-        Assert.Equal((0, 0, 1280), (layout.TabStrip.X, layout.TabStrip.Y, layout.TabStrip.Width));
-        Assert.Equal((0, 1280, 720), (layout.StatusBar.X, layout.StatusBar.Width, layout.StatusBar.Bottom));
+        Assert.Equal((0, 0, ScreenWidth), (layout.TabStrip.X, layout.TabStrip.Y, layout.TabStrip.Width));
+        Assert.Equal((0, ScreenWidth, ScreenHeight), (layout.StatusBar.X, layout.StatusBar.Width, layout.StatusBar.Bottom));
         foreach (EditorButton tab in new[]
         {
             EditorButton.ExitTab, EditorButton.CodeTab, EditorButton.SpritesTab,
@@ -170,96 +244,60 @@ public class SpriteEditorLayoutTests
         {
             Assert.True(layout.TabStrip.Contains(layout.ButtonRect(tab)));
         }
-        // The bands must not swallow the working panels — that is what "отделены" means in geometry.
         Assert.False(layout.TabStrip.Intersects(layout.Canvas));
         Assert.False(layout.StatusBar.Intersects(layout.Canvas));
         Assert.False(layout.TabStrip.Intersects(layout.Swatches));
         Assert.False(layout.StatusBar.Intersects(layout.Sheet));
+        // The tooltip field is the strip left between the exit button and the leftmost tab, and
+        // it is where a hover label goes (TIC-80's drawToolbar). It must not be zero.
+        Assert.True(layout.Chrome.TooltipChars > 0);
+        Assert.Equal(layout.ButtonRect(EditorButton.ExitTab).Right, layout.Chrome.TooltipField.X);
+        Assert.Equal(layout.ButtonRect(EditorButton.CodeTab).X, layout.Chrome.TooltipField.Right);
     }
 
     /// <summary>
-    /// The right side after the SEVENTH review (2026-08-24). The owner's sketch: the size
-    /// toggle rises to the top and hugs the canvas from the right at the same distance the
-    /// toolbar keeps on the left, so the drawing surface sits between two mirrored strips of
-    /// buttons; the palette follows one equal gap further right; and everything under it — the
-    /// layer tabs, the sheet window, the slider — shifts to that same left edge, leaving the
-    /// tool column free down the whole height. That last shift is what closes the air pocket
-    /// the sixth review left beside the palette.
-    ///
-    /// <para>Negative control: put the toggle back into the tabs row (its sixth-review home)
-    /// and the mirrored-gap assertions go red; leave the palette anchored to the window's right
-    /// edge and the shared-left-edge ones do.</para>
+    /// The middle column: palette on top, the eight flag toggles under it, the five layer tabs
+    /// under those — one left edge for all three, one clear pixel between them, and the whole
+    /// column two buttons wide so the tabs fit two abreast.
     /// </summary>
     [Fact]
-    public void TheRightSideFollowsTheSeventhReview()
+    public void TheMiddleColumnStacksPaletteFlagsAndLayerTabsOnOneEdge()
     {
         var layout = Default();
         Rectangle firstTab = layout.ButtonRect(EditorButton.LayerTab1);
         Rectangle lastTab = layout.ButtonRect(EditorButton.LayerTab5);
-        Rectangle toggle = layout.ButtonRect(EditorButton.SizeToggle);
-        Rectangle firstTool = layout.ButtonRect(EditorButton.ToolSelect);
 
-        // The toggle is a right-hand tool column: level with the canvas and the left toolbar,
-        // and the same gap from the canvas that the toolbar keeps on its side.
-        Assert.Equal(layout.Canvas.Y, toggle.Y);
-        Assert.Equal(firstTool.Y, toggle.Y);
-        Assert.Equal(layout.Canvas.X - firstTool.Right, toggle.X - layout.Canvas.Right);
-        Assert.Equal(layout.ButtonSize, toggle.Width);
-
-        // The palette starts one equal gap right of that column — not anchored to the window.
-        Assert.Equal(toggle.Right + layout.Margin, layout.Swatches.X);
-        Assert.Equal(layout.Canvas.Y, layout.Swatches.Y);
-
-        // Palette, tabs, sheet and slider share one left edge, and the tool column stays clear
-        // of all of them for the whole height.
+        Assert.Equal(layout.Swatches.X, layout.FlagPanel.X);
         Assert.Equal(layout.Swatches.X, firstTab.X);
-        Assert.Equal(layout.Swatches.X, layout.Sheet.X);
-        Assert.Equal(layout.Swatches.X, layout.SheetSlider.X);
-        Assert.All(
-            new[] { layout.Swatches, firstTab, lastTab, layout.Sheet, layout.SheetSlider },
-            area => Assert.True(area.X >= toggle.Right + layout.Margin, $"{area} overlaps the tool column"));
-
-        // The tabs are still one row directly above the sheet, in order, under the palette.
-        Assert.Equal(firstTab.Y, lastTab.Y);
-        Assert.True(firstTab.X < lastTab.X);
-        Assert.True(layout.Swatches.Bottom <= firstTab.Y);
-        Assert.True(firstTab.Bottom <= layout.Sheet.Y);
-
-        // The sheet still owns the rest of the column: wider than the palette, the strip's full
-        // height at a whole scale, reaching the window's right edge within one cell.
-        Assert.True(layout.Sheet.Width > layout.Swatches.Width);
-        Assert.Equal(SheetStrip.PixelHeight * layout.SheetScale, layout.Sheet.Height);
-        Assert.True(
-            1280 - layout.Margin - layout.Sheet.Right < VirtualConsole.SpriteSize * layout.SheetScale);
+        Assert.Equal(layout.Swatches.X, lastTab.X);
+        Assert.Equal(layout.Chrome.ContentTop, layout.Swatches.Y);
+        Assert.Equal(layout.Swatches.Bottom + 1, layout.FlagPanel.Y);
+        Assert.Equal(layout.FlagPanel.Bottom + 1, firstTab.Y);
+        Assert.True(firstTab.Y < lastTab.Y);                     // the five tabs wrap two abreast
+        Assert.True(lastTab.Bottom <= layout.Chrome.ContentBottom);
+        // The sheet window owns everything right of this column, full content height.
+        Assert.Equal(layout.Chrome.ContentTop, layout.Sheet.Y);
+        Assert.Equal(layout.Chrome.ContentBottom, layout.Sheet.Bottom);
         Assert.Equal(layout.Sheet.Width, layout.SheetSlider.Width);
-        Assert.True(layout.Sheet.Bottom <= layout.SheetSlider.Y);
-        Assert.True(layout.SheetSlider.Bottom < layout.PromptY);
-        Assert.True(layout.PromptY - layout.SheetSlider.Bottom < layout.ButtonSize);
+        Assert.Equal(layout.Sheet.X, layout.SheetSlider.X);
     }
 
     /// <summary>
-    /// The sixth review's other geometric law, which the eye only notices when it breaks:
-    /// pressing Tab must not move the furniture. The canvas box is a whole multiple of the
-    /// largest region, so 8, 16 and 32 px all fill exactly the same square, and everything
-    /// measured from it — the narrow row, the sheet window, the slider — stays put.
+    /// The law the eye only notices when it breaks: pressing Tab must not move the furniture.
+    /// The canvas box is a whole multiple of the largest region, so 8, 16 and 32 px sprites all
+    /// fill exactly the same 64x64 square, and everything measured from it stays put.
     ///
-    /// <para>The window sizes are a Theory on purpose: at 1280x720 the free height happens to
-    /// be a multiple of 32 and the pre-2k formula (largest square per region, no rounding)
-    /// agreed by luck. At 320x180 it does not — an 8-px region would take 72 px where a 32-px
-    /// one takes 64 — so dropping the rounding from <c>canvasBox</c> turns exactly that case
-    /// red, which is this test's negative control.</para>
+    /// <para>Negative control: drop the rounding from <c>canvasBox</c> and an 8-px region would
+    /// take the whole 64 rows while a 32-px one takes 64 as well — that particular pair survives,
+    /// but change the content band to a height that is not a multiple of 32 and the panels start
+    /// twitching, which is why the box is rounded rather than fitted.</para>
     /// </summary>
-    [Theory]
-    [InlineData(320, 180)]
-    [InlineData(640, 360)]
-    [InlineData(1280, 720)]
-    [InlineData(1920, 1080)]
-    [InlineData(2560, 1440)]
-    public void TabbingTheRegionSizeMovesNoPanel(int width, int height)
+    [Fact]
+    public void TabbingTheRegionSizeMovesNoPanel()
     {
-        var eight = SpriteEditorLayout.Compute(width, height, regionCells: 1);
-        var sixteen = SpriteEditorLayout.Compute(width, height, regionCells: 2);
-        var thirtyTwo = SpriteEditorLayout.Compute(width, height, regionCells: 4);
+        var eight = SpriteEditorLayout.Compute(ScreenWidth, ScreenHeight, regionCells: 1);
+        var sixteen = SpriteEditorLayout.Compute(ScreenWidth, ScreenHeight, regionCells: 2);
+        var thirtyTwo = SpriteEditorLayout.Compute(ScreenWidth, ScreenHeight, regionCells: 4);
 
         foreach (SpriteEditorLayout other in new[] { sixteen, thirtyTwo })
         {
@@ -267,79 +305,52 @@ public class SpriteEditorLayoutTests
             Assert.Equal(eight.Sheet, other.Sheet);
             Assert.Equal(eight.SheetSlider, other.SheetSlider);
             Assert.Equal(eight.Swatches, other.Swatches);
+            Assert.Equal(eight.FlagPanel, other.FlagPanel);
             Assert.Equal(
                 eight.ButtonRect(EditorButton.SizeToggle), other.ButtonRect(EditorButton.SizeToggle));
         }
         // The premise: the three do differ where they must — one region pixel is a different
-        // number of window pixels each time, which is the only thing Tab is allowed to change.
+        // number of console pixels each time, which is the only thing Tab is allowed to change.
         Assert.True(eight.CanvasScale > sixteen.CanvasScale && sixteen.CanvasScale > thirtyTwo.CanvasScale);
+        Assert.Equal((8, 4, 2), (eight.CanvasScale, sixteen.CanvasScale, thirtyTwo.CanvasScale));
     }
 
     /// <summary>
-    /// The status bar holds its four buttons in the second review's order: clear outermost
-    /// right ("справа от redo" — the owner's words), then redo, undo, and save innermost.
-    /// </summary>
-    [Fact]
-    public void TheStatusButtonsLiveInsideTheStatusBar()
-    {
-        var layout = Default();
-        Rectangle save = layout.ButtonRect(EditorButton.Save);
-        Rectangle undo = layout.ButtonRect(EditorButton.Undo);
-        Rectangle redo = layout.ButtonRect(EditorButton.Redo);
-        Rectangle clear = layout.ButtonRect(EditorButton.Clear);
-
-        Assert.True(layout.StatusBar.Contains(save));
-        Assert.True(layout.StatusBar.Contains(undo));
-        Assert.True(layout.StatusBar.Contains(redo));
-        Assert.True(layout.StatusBar.Contains(clear));
-        Assert.Equal(1280 - layout.Margin, clear.Right);        // clear hugs the right edge, a margin in
-        Assert.True(save.X < undo.X && undo.X < redo.X && redo.X < clear.X);
-    }
-
-    /// <summary>
-    /// Pins the stub list: only the future-editor tabs stay dead — the verdict's whole toolbar
-    /// is live (select and stamp woke last). A tab waking early, or a tool going dark again,
-    /// makes this red before any UI is even drawn.
+    /// Pins the stub list: only the music tab stays dead — it has no editor, and a button with
+    /// nothing behind it must look and act dead until it has one.
     /// </summary>
     [Fact]
     public void ExactlyTheVerdictsButtonsAreStubs()
     {
-        // The tilemap tab left this list in M9 stage 3, the CODE tab in the code-editor screen
-        // wave and the SOUND tab in the sound-editor screen wave — all three editors landed, so
-        // all three icons are live and EditorIcons.TabTarget routes them. Music alone remains
-        // honestly dead: it has no editor, and a button with nothing behind it must look and act
-        // dead until it has one.
-        var stubs = new[]
-        {
-            EditorButton.MusicTab,
-        };
+        var stubs = new[] { EditorButton.MusicTab };
         foreach (EditorButton button in AllButtons)
         {
             Assert.Equal(stubs.Contains(button), EditorIcons.IsStub(button));
         }
     }
 
-    // ---- group flyouts (wave 2e) ----
+    // ---- group flyouts ----
 
     /// <summary>
-    /// Flyout variant buttons sit in a row right of their slot, are disjoint, and their
-    /// centres hit themselves — the same roundtrip discipline as every clickable rectangle.
+    /// Flyout variant buttons sit in a row right of their slot, are disjoint, and their centres
+    /// hit themselves — the same roundtrip discipline as every clickable rectangle. They float
+    /// over the canvas on purpose: on a 160 px screen there is no space to reserve for a row
+    /// that is closed on 99 % of frames.
     /// </summary>
     [Theory]
-    [InlineData(EditorButton.ToolSelect, 3)]    // 2 → 3 in wave 2g: the owner's wand is the select group's third variant
+    [InlineData(EditorButton.ToolSelect, 3)]
     [InlineData(EditorButton.ToolShape, 2)]
     [InlineData(EditorButton.ToolTransform, 3)]
-    [InlineData(EditorButton.SizeToggle, 3)]    // 8/16/32 — the size list rides the same flyout machinery (wave 2h)
+    [InlineData(EditorButton.SizeToggle, 3)]
     public void FlyoutVariantsRoundTripThroughTheirRectangles(EditorButton slot, int count)
     {
         var layout = Default();
         Rectangle anchor = layout.ButtonRect(slot);
-        var window = new Rectangle(0, 0, 1280, 720);
 
         for (int i = 0; i < count; i++)
         {
             Rectangle rect = layout.FlyoutVariantRect(slot, i);
-            Assert.True(window.Contains(rect));
+            Assert.True(Screen.Contains(rect));
             Assert.True(rect.X > anchor.Right);                 // rightward of the slot, never over it
             Assert.Equal(anchor.Y, rect.Y);                     // one row, photoshop-style
             Assert.True(layout.TryFlyoutVariant(rect.Center.X, rect.Center.Y, slot, out int hit));
@@ -375,6 +386,7 @@ public class SpriteEditorLayoutTests
 
             Assert.True(layout.TrySwatch(rect.Center.X, rect.Center.Y, out int color));
             Assert.Equal(i, color);
+            Assert.True(layout.Swatches.Contains(rect));
         }
     }
 
@@ -397,21 +409,24 @@ public class SpriteEditorLayoutTests
         int cell = layout.SheetScale * VirtualConsole.SpriteSize;
         const int sprite = 200;
         SheetStrip.SpriteToStripCell(sprite, out int stripColumn, out int stripRow);
-        int scroll = stripColumn * VirtualConsole.SpriteSize;
+        int scroll = Math.Min(stripColumn * VirtualConsole.SpriteSize, layout.SheetMaxScroll);
 
         Assert.True(layout.TrySheetCell(
-            layout.Sheet.X + cell / 2, layout.Sheet.Y + stripRow * cell + cell / 2, scroll,
-            out int cellX, out int cellY));
+            layout.Sheet.X + (stripColumn * VirtualConsole.SpriteSize - scroll) * layout.SheetScale + cell / 2,
+            layout.Sheet.Y + stripRow * cell + cell / 2,
+            scroll,
+            out int cellX,
+            out int cellY));
 
         Assert.Equal((8, 12), (cellX, cellY));
         Assert.Equal(sprite, cellY * 16 + cellX);
     }
 
     /// <summary>
-    /// A region straddling a lane boundary is still highlighted as the two pieces it looks
-    /// like on the strip. The boundary moved with the strip's shape (it is between sheet rows
-    /// 7 and 8 now, not 3 and 4), so this pins sprite 126: its top row sits at the bottom of
-    /// lane 0 and its bottom row reappears at the top of lane 1, sixteen columns right.
+    /// A region straddling a lane boundary is still highlighted as the two pieces it looks like
+    /// on the strip. The boundary is between sheet rows 7 and 8 (<see cref="SheetStrip.Rows"/>
+    /// is untouched by wave R2), so this pins sprite 126: its top row sits at the bottom of lane
+    /// 0 and its bottom row reappears at the top of lane 1, sixteen columns right.
     /// </summary>
     [Fact]
     public void SixteenPixelRegionAtSprite126SplitsAcrossTwoStripLanes()
@@ -445,12 +460,10 @@ public class SpriteEditorLayoutTests
     }
 
     /// <summary>
-    /// The scrolled hit test agrees with the scrolled picture: the same window point names a
-    /// cell shifted by exactly the scroll offset. The second half replaces the old
-    /// "refuses the slack" check, which had become a dead branch: the sixth review's window
-    /// is trimmed to whole sprite columns, so there IS no slack any more, and the live way to
-    /// say that is the opposite claim — the last pixel inside the window is a real cell, at
-    /// rest AND scrolled to the end, where it must be the strip's very last column.
+    /// The scrolled hit test agrees with the scrolled picture: the same point names a cell
+    /// shifted by exactly the scroll offset, and the last pixel inside the window is a real cell
+    /// rather than a gap — at rest AND scrolled to the end, where it must be the strip's very
+    /// last column.
     /// </summary>
     [Fact]
     public void SheetHitTestFollowsTheScrollAndTheWindowIsWholeCellsToItsEdge()
@@ -477,21 +490,30 @@ public class SpriteEditorLayoutTests
             out int endX, out int endY));
         Assert.Equal(VirtualConsole.SpriteCount - 1, endY * SpriteEditorSession.GridCells + endX);
 
-        // One pixel further right is outside the window and belongs to nobody.
+        // One pixel further right is off the screen and belongs to nobody.
         Assert.False(layout.TrySheetCell(layout.Sheet.Right, layout.Sheet.Y + cell / 2, 0, out _, out _));
     }
 
+    /// <summary>
+    /// A point owned by nobody. On the console this is a harder thing to find than it was in a
+    /// window — the screen's corners are the exit button and the music tab — so the point picked
+    /// is the strip of rows under the canvas and left of the slider, which is exactly the slack
+    /// the vertical budget left over.
+    /// </summary>
     [Fact]
     public void APointOutsideEveryPanelHitsNothing()
     {
         var layout = Default();
+        int x = layout.Canvas.X;
+        int y = layout.SheetSlider.Y + 1;
+        Assert.True(y < layout.PromptY && x < layout.SheetSlider.X);     // the premise of the point
 
-        // The window's corner: margin space, owned by no panel and no button.
-        Assert.False(layout.TryCanvasPixel(0, 0, out _, out _));
-        Assert.False(layout.TrySheetCell(0, 0, 0, out _, out _));
-        Assert.False(layout.TrySwatch(0, 0, out _));
-        Assert.False(layout.TryButton(0, 0, out _));
-        Assert.False(layout.TryPromptVerb(0, 0, out _));
+        Assert.False(layout.TryCanvasPixel(x, y, out _, out _));
+        Assert.False(layout.TrySheetCell(x, y, 0, out _, out _));
+        Assert.False(layout.TrySwatch(x, y, out _));
+        Assert.False(layout.TryFlag(x, y, out _));
+        Assert.False(layout.TryButton(x, y, out _));
+        Assert.False(layout.TryPromptVerb(x, y, out _));
     }
 
     /// <summary>The drag clamp: a stroke wandering off the canvas keeps painting along its edge.</summary>
@@ -508,9 +530,13 @@ public class SpriteEditorLayoutTests
     }
 
     /// <summary>
-    /// The prompt's three clickable verbs (mouse parity for Z/X/Esc): disjoint, above the
-    /// status bar, and each one's centre hits itself — the same roundtrip discipline every
-    /// clickable rectangle here lives under.
+    /// The prompt's three clickable verbs (mouse parity for Z/X/Esc): disjoint, on the message
+    /// line, right-aligned to the screen's edge, and each one's centre hits itself.
+    ///
+    /// <para>Right-aligned and NOT measured from the heading, which is the one thing about this
+    /// line that changed with the move: the console's heading grows from "UNSAVED." to
+    /// "SAVE FAILED." when a save fails, and a verb that slid sideways under the pointer while
+    /// the author was deciding would be the worst possible moment to move a button.</para>
     /// </summary>
     [Fact]
     public void PromptVerbsAreDisjointHitTestableAndAboveTheStatusBar()
@@ -518,9 +544,11 @@ public class SpriteEditorLayoutTests
         var layout = Default();
         var verbs = new[] { EditorPromptVerb.SaveAndExit, EditorPromptVerb.Discard, EditorPromptVerb.Stay };
 
+        Assert.Equal(ScreenWidth - ConsoleChrome.Margin, layout.PromptVerbRect(EditorPromptVerb.Stay).Right);
         for (int i = 0; i < verbs.Length; i++)
         {
             Rectangle rect = layout.PromptVerbRect(verbs[i]);
+            Assert.Equal(layout.PromptY, rect.Y);
             Assert.True(rect.Bottom <= layout.StatusBar.Y);
             Assert.True(layout.TryPromptVerb(rect.Center.X, rect.Center.Y, out EditorPromptVerb hit));
             Assert.Equal(verbs[i], hit);
@@ -529,5 +557,7 @@ public class SpriteEditorLayoutTests
                 Assert.False(rect.Intersects(layout.PromptVerbRect(verbs[j])));
             }
         }
+        // The heading has room to its left even in its longer, failed-save form.
+        Assert.True(ConsoleChrome.PromptFailedHeading.Length <= layout.Chrome.PromptHeadingChars);
     }
 }

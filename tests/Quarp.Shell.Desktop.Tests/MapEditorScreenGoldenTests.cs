@@ -50,6 +50,21 @@ namespace Quarp.Shell.Desktop.Tests;
 /// tile's art comes off the sibling session's sheet, the palette page lies over the map, the
 /// whole-map view folds two cells into a pixel — so a failure tells whoever reads it whether the
 /// screen is broken or merely redrawn.</para>
+///
+/// <para><b>One hash re-pinned 2026-08-25, wave X7 (the whole-map view got an edge).</b> Cause
+/// named before the number was read and confirmed on the running window: Tab opened onto a
+/// void. At two cells to the pixel an empty map is colour 0, the ground behind it is colour 0,
+/// and the only thing on screen was the viewport ring floating in the dark — so "how big is the
+/// map, and where does it end" had no answer. This is the fourth panel of this console to have
+/// carried that same defect (the sprite canvas, the sprite sheet, the sound screen's pitch
+/// grid, and now this one), which is why each of the four now has a test that asks the question
+/// a hash cannot: is the edge a different colour from the ground when the thing is empty?
+/// TIC-80 never needed the border because its world view (<c>world.c</c>) fills the screen with
+/// a map that IS the screen; ours is a 128x36 thumbnail inside a much larger band. The border
+/// is Dim and lies one pixel OUTSIDE the thumbnail, so no cell is covered whatever the map
+/// holds. Every probe of this test passed the change; six new ones ask the four sides and the
+/// ground just beyond them. Was / became: <c>f5655081856eee58</c> / <c>67e018132dbbe454</c>.
+/// </para>
 /// </summary>
 public class MapEditorScreenGoldenTests : IDisposable
 {
@@ -283,8 +298,19 @@ public class MapEditorScreenGoldenTests : IDisposable
         Assert.Equal((byte)0, console.Pget(32, 19));
         // The whole-map switch reads as on.
         Assert.Equal((byte)3, console.Pget(11, 42));
+        // The map's own edge, one pixel outside its 128x36 of thumbnail. Without it Tab opened
+        // onto a void: an empty map is colour 0 and so is the ground behind it, so "where does
+        // the map end" had no answer on screen. Asked on all four sides, and asked again one
+        // pixel further out, where the ground must still be ground — a border that leaked
+        // outwards would be a panel that lies about its size.
+        Assert.Equal((byte)1, console.Pget(27, 25));            // left
+        Assert.Equal((byte)1, console.Pget(156, 25));           // right
+        Assert.Equal((byte)1, console.Pget(28, 24));            // top
+        Assert.Equal((byte)1, console.Pget(28, 61));            // bottom
+        Assert.Equal((byte)0, console.Pget(26, 25));
+        Assert.Equal((byte)0, console.Pget(28, 23));
 
-        Assert.Equal("f5655081856eee58", FrameHash.Of(screen.Framebuffer));
+        Assert.Equal("67e018132dbbe454", FrameHash.Of(screen.Framebuffer));
     }
 
     /// <summary>

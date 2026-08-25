@@ -416,6 +416,21 @@ public static class MapEditorRenderer
         {
             return;
         }
+        // The map's own edge, drawn BEFORE its cells and just outside them. Without it the whole
+        // map view is a void: at two cells to the pixel an empty map is colour 0, the chrome's
+        // ground is colour 0, and Tab used to open onto nothing but the viewport ring floating
+        // in the dark — the same defect the sprite canvas and the sound screen's pitch grid each
+        // had, found the same way, by opening the window and looking. TIC-80 does not have it
+        // because its world view (world.c) fills the screen with a map that IS the screen; ours
+        // is a thumbnail 128x36 inside a much larger band, so where the map ENDS is a fact only
+        // a border can carry. Dim, and outside the pixels, so no cell of the map is covered by
+        // it whatever the map holds.
+        Outline(
+            console,
+            new Rectangle(
+                layout.Minimap.X - 1, layout.Minimap.Y - 1,
+                layout.Minimap.Width + 2, layout.Minimap.Height + 2),
+            Dim);
         int step = MapEditorLayout.MinimapCellsPerPixel;
         for (int row = 0; row < layout.Minimap.Height; row++)
         {

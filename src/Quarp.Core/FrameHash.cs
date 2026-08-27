@@ -165,6 +165,29 @@ public static class FrameHash
         return Combine(hash, (ReadOnlySpan<short>)block.Samples);
     }
 
+    /// <summary>
+    /// Continues a running digest over one more tick's output state.
+    ///
+    /// <para>Cumulative for the same reason the audio digest is, and for a sharper one: the
+    /// display stage's whole job is to change between frames without redrawing. A fade to black
+    /// or a hit flash is thirty-two ticks in which the index buffer never moves, so a run that
+    /// only compared the final state would compare the state after the effect ended — which is
+    /// the state it started from. A port found this the hard way: its screen fade and its pain
+    /// ramp were both invisible to every pinned number it had.</para>
+    /// </summary>
+    public static ulong Combine(ulong hash, DisplayPalette display)
+    {
+        ArgumentNullException.ThrowIfNull(display);
+        Span<byte> record = stackalloc byte[display.HashLength];
+        record.Clear();
+        display.WriteHashBytes(record);
+        for (int i = 0; i < record.Length; i++)
+        {
+            hash = unchecked((hash ^ record[i]) * Prime);
+        }
+        return hash;
+    }
+
     /// <summary>The bytes' raw 64-bit hash. Allocates nothing.</summary>
     public static ulong Compute(ReadOnlySpan<byte> data)
     {

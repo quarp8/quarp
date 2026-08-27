@@ -38,6 +38,9 @@ public static class Checkpoint
     /// <summary>The prefix of the final audio line: <c>audio &lt;hash&gt;</c>.</summary>
     public const string AudioPrefix = "audio";
 
+    /// <summary>The prefix of the final output-state line: <c>display &lt;hash&gt;</c>.</summary>
+    public const string DisplayPrefix = "display";
+
     /// <summary>
     /// Formats the checkpoint line for <paramref name="tick"/>: that tick's frame, then the
     /// running audio digest over every block up to and including it.
@@ -52,6 +55,17 @@ public static class Checkpoint
     /// </summary>
     public static string AudioLine(ulong audioDigest) =>
         $"{AudioPrefix} {FrameHash.Format(audioDigest)}";
+
+    /// <summary>
+    /// The run's final output-state line, <c>display &lt;hash&gt;</c> — labelled for the same
+    /// reason as the audio one. It answers "how was all of that coloured", which the frame
+    /// hash deliberately does not: <c>Pald</c> and <c>Palr</c> never touch the index buffer, so
+    /// a fade, a hit flash or a whole screen tinted red leaves every frame hash unmoved. Before
+    /// this line existed those effects were unpinnable, and a port shipped two of them that no
+    /// golden could have caught breaking.
+    /// </summary>
+    public static string DisplayLine(ulong displayDigest) =>
+        $"{DisplayPrefix} {FrameHash.Format(displayDigest)}";
 
     /// <summary>
     /// True when a checkpoint is due after <paramref name="tick"/>: every

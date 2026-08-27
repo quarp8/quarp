@@ -104,11 +104,14 @@ public sealed class QuarpNewTests : IDisposable
 
         Assert.Equal(0, sim.ExitCode);
         string[] lines = sim.OutLines();
-        // The two lines every headless run ends with - the labelled PCM digest, then the bare
-        // framebuffer hash. This is also the output the generated tasks.json comment describes.
-        Assert.Equal(2, lines.Length);
+        // The three lines every headless run ends with: the labelled PCM digest, the labelled
+        // output-state digest, then the bare framebuffer hash. This is also the output the
+        // generated tasks.json comment describes. The bare hash stays last and stays alone on
+        // its line — every consumer greps ^[0-9a-f]{16}$ for it.
+        Assert.Equal(3, lines.Length);
         Assert.StartsWith(Checkpoint.AudioPrefix + " ", lines[0], StringComparison.Ordinal);
-        Assert.Matches("^[0-9a-f]{16}$", lines[1]);
+        Assert.StartsWith(Checkpoint.DisplayPrefix + " ", lines[1], StringComparison.Ordinal);
+        Assert.Matches("^[0-9a-f]{16}$", lines[2]);
     }
 
     /// <summary>

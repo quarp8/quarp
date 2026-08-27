@@ -463,16 +463,19 @@ static int RunSim(string path, int ticks, int every, string? inputScript)
         // AttachCart runs Init as tick 0 and produces neither a frame nor a block, so the
         // digest starts empty and covers ticks 1..N — the same ticks the frames come from.
         ulong audio = FrameHash.Empty;
+        ulong display = FrameHash.Empty;
         for (int i = 0; i < ticks; i++)
         {
             console.Tick(inputs.At(i));
             audio = FrameHash.Combine(audio, console.AudioBlock);
+            display = FrameHash.Combine(display, console.Display);
             if (Checkpoint.IsDue(i + 1, every, ticks))
             {
                 Console.WriteLine(Checkpoint.Line(i + 1, console.Framebuffer, audio));
             }
         }
         Console.WriteLine(Checkpoint.AudioLine(audio));
+        Console.WriteLine(Checkpoint.DisplayLine(display));
         // The last line of stdout stays the bare 16-hex-digit final frame hash, checkpoints
         // or not: every M1/M2 consumer greps ^[0-9a-f]{16}$ for exactly this.
         Console.WriteLine(FrameHash.Of(console.Framebuffer));

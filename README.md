@@ -54,7 +54,7 @@ quarp run carts/snake     # играть; правка кода на лету п
 quarp new mygame          # заготовка картриджа + dev-проект для подсказок IDE
                           #   и .vscode: F5 запускает игру под отладчиком с точками останова
 quarp audio build mygame  # собрать sfx.txt/music.txt в банки
-quarp sim <cart> --ticks N --every K   # headless-прогон, хэши кадра и звука
+quarp sim <cart> --ticks N --every K   # headless-прогон: хэши кадра, звука и вывода
           [--input-file файл]           #   лента кнопок: без неё прогон закрепляет только то,
                                        #   что картридж делает, когда в него не играют
 quarp replay record|play  # запись и воспроизведение реплеев (.qrpr)

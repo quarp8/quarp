@@ -256,6 +256,50 @@ switch (command)
         return ReplayCommands.Bench(args[1..]);
     }
 
+    case "shot":
+    {
+        // The eyes of the headless pipeline: run a cart for N ticks and write what the screen
+        // shows. `sim` gives a hash, which proves two runs agree and nothing about whether the
+        // picture is right; a slice that is only ever checked by hash is a slice nobody looked
+        // at. Same starting conditions as `sim` — seed 0, no save file — so a shot and a hash
+        // taken at the same tick describe the same frame.
+        const string ShotUsage = "usage: quarp shot <cart> -o <file>.bmp [--ticks N] [--input <script>] [--input-file <file>]";
+        if (args.Length < 2)
+        {
+            Console.Error.WriteLine(ShotUsage);
+            return 1;
+        }
+        string shotOut = "shot.bmp";
+        int shotTicks = 1;
+        string? shotScript = null;
+        for (int i = 2; i < args.Length; i++)
+        {
+            switch (args[i])
+            {
+                case "-o" or "--out" when i + 1 < args.Length:
+                    shotOut = args[i + 1];
+                    i++;
+                    break;
+                case "--ticks" when i + 1 < args.Length && int.TryParse(args[i + 1], out int parsed) && parsed >= 0:
+                    shotTicks = parsed;
+                    i++;
+                    break;
+                case "--input" when i + 1 < args.Length:
+                    shotScript = args[i + 1];
+                    i++;
+                    break;
+                case "--input-file" when i + 1 < args.Length:
+                    shotScript = File.ReadAllText(args[i + 1]);
+                    i++;
+                    break;
+                default:
+                    Console.Error.WriteLine($"quarp shot: unknown argument '{args[i]}' ({ShotUsage})");
+                    return 1;
+            }
+        }
+        return RunShot(args[1], shotTicks, shotOut, shotScript);
+    }
+
     case "pattern":
     {
         if (args.Length < 2)
@@ -309,12 +353,68 @@ switch (command)
         Console.WriteLine("                               defaults to <cart>/gfx.png and never overwrites without");
         Console.WriteLine("                               --force");
         Console.WriteLine("  quarp bench <cart> --ticks N  measure play and resimulation speed (rewind cost)");
+        Console.WriteLine("  quarp shot <cart> -o <file>.bmp [--ticks N] [--input-file <f>]");
+        Console.WriteLine("                               write the frame at tick N as a .bmp — headless eyes");
         Console.WriteLine("  quarp pattern <file>         write the test pattern as a .bmp image");
         Console.WriteLine();
         Console.WriteLine("time controls in `quarp run`: Space pause, . step, , step back, [ ] speed,");
         Console.WriteLine("Backspace rewind, Home to start, F5 save replay, F8 play replay, Esc quit");
         Console.WriteLine("(a cart launched from the library returns to it on Esc instead).");
         return command is "--help" or "-h" or "help" ? 0 : 1;
+}
+
+/// <summary>
+/// Runs a cartridge headless and writes the frame it ends on as a bitmap. Deliberately shares
+/// <see cref="RunSim"/>'s starting conditions so the two commands describe the same run.
+/// </summary>
+static int RunShot(string path, int ticks, string outFile, string? inputScript)
+{
+    try
+    {
+        CartData data = CartSource.Load(path);
+        CartCompileResult result = CartCompiler.Compile(data);
+        foreach (string warning in result.Warnings)
+        {
+            Console.Error.WriteLine(warning);
+        }
+        if (!result.Success)
+        {
+            foreach (string diagnostic in result.Diagnostics)
+            {
+                Console.Error.WriteLine(diagnostic);
+            }
+            return 1;
+        }
+        InputScript inputs = InputScript.Parse(inputScript);
+        using var host = CartHost.Load(result.AssemblyBytes);
+        var console = new VirtualConsole(
+            ConsoleProfile.Profile8, data.Gfx, data.Map, data.Flags, data.Sfx, data.Music, data.DataBanks);
+        console.AttachCart(host.Cartridge);
+        for (int i = 0; i < ticks; i++)
+        {
+            console.Tick(inputs.At(i));
+        }
+        string? folder = Path.GetDirectoryName(Path.GetFullPath(outFile));
+        if (!string.IsNullOrEmpty(folder))
+        {
+            Directory.CreateDirectory(folder);
+        }
+        BmpWriter.Write(outFile, console.Framebuffer);
+        Console.WriteLine($"Wrote tick {ticks} of {data.Manifest.Name} to {outFile}");
+        Console.WriteLine(FrameHash.Of(console.Framebuffer));
+        return 0;
+    }
+    catch (CartLoadException e)
+    {
+        Console.Error.WriteLine($"quarp: {e.Message}");
+        return 1;
+    }
+    catch (Exception e)
+    {
+        Console.Error.WriteLine("quarp: cartridge crashed during shot:");
+        Console.Error.WriteLine(e.ToString());
+        return 1;
+    }
 }
 
 static int RunSim(string path, int ticks, int every)

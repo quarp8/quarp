@@ -99,12 +99,18 @@ switch (command)
 
     case "sim":
     {
-        // Headless determinism probe: N ticks of empty input, then one FNV-1a hash of the
-        // framebuffer to stdout (M1 work order; the seed of future golden-master CI).
+        // Headless determinism probe: N ticks, then one FNV-1a hash of the framebuffer to
+        // stdout (M1 work order; the seed of future golden-master CI).
         // With --every N it also prints a checkpoint line per N ticks (see Checkpoint):
         // the final hash alone cannot tell "identical all the way" from "diverged and came
         // back", and for a cart sitting on a game-over screen it says almost nothing.
-        const string SimUsage = "usage: quarp sim <path> --ticks N [--every N]";
+        //
+        // --input/--input-file are the same scripted button track `shot` and `replay record`
+        // take, and they are here for the same reason those have it: a cart that opens on a
+        // title screen and is never touched hashes its title screen forever, so an untouched
+        // run pins nothing about the game. POOM was the cart that made this obvious.
+        const string SimUsage =
+            "usage: quarp sim <path> --ticks N [--every N] [--input <script>] [--input-file <file>]";
         if (args.Length < 2)
         {
             Console.Error.WriteLine(SimUsage);
@@ -112,9 +118,20 @@ switch (command)
         }
         int ticks = 600;
         int every = 0;
+        string? simScript = null;
         for (int i = 2; i < args.Length; i++)
         {
-            if (args[i] == "--ticks" && i + 1 < args.Length
+            if (args[i] == "--input" && i + 1 < args.Length)
+            {
+                simScript = args[i + 1];
+                i++;
+            }
+            else if (args[i] == "--input-file" && i + 1 < args.Length)
+            {
+                simScript = File.ReadAllText(args[i + 1]);
+                i++;
+            }
+            else if (args[i] == "--ticks" && i + 1 < args.Length
                 && int.TryParse(args[i + 1], NumberStyles.None, CultureInfo.InvariantCulture, out int parsed)
                 && parsed >= 0)
             {
@@ -134,7 +151,7 @@ switch (command)
                 return 1;
             }
         }
-        return RunSim(args[1], ticks, every);
+        return RunSim(args[1], ticks, every, simScript);
     }
 
     case "pack":
@@ -329,7 +346,8 @@ switch (command)
         Console.WriteLine("  quarp build <cart>           compile and check a cart — limits, metadata, banks —");
         Console.WriteLine("                               without opening a window or running a tick; this is");
         Console.WriteLine("                               what F5 runs before launching the debugger");
-        Console.WriteLine("  quarp sim <path> --ticks N [--every N]");
+        Console.WriteLine("  quarp sim <path> --ticks N [--every N] [--input <script>]");
+    Console.WriteLine("                               [--input-file <file>]");
         Console.WriteLine("                               run N ticks headless, print the framebuffer FNV-1a hash");
         Console.WriteLine("  quarp replay record <cart> -o <file>.qrpr --ticks N [--input <script>]");
         Console.WriteLine("                               [--input-file <file>] [--every N]");
@@ -417,7 +435,7 @@ static int RunShot(string path, int ticks, string outFile, string? inputScript)
     }
 }
 
-static int RunSim(string path, int ticks, int every)
+static int RunSim(string path, int ticks, int every, string? inputScript)
 {
     try
     {
@@ -435,6 +453,7 @@ static int RunSim(string path, int ticks, int every)
             }
             return 1;
         }
+        InputScript inputs = InputScript.Parse(inputScript);
         using var host = CartHost.Load(result.AssemblyBytes);
         // Persistent memory deliberately starts zeroed and save.dat is neither read nor
         // written: the hash must depend on the cart alone, not on this machine's saves.
@@ -446,7 +465,7 @@ static int RunSim(string path, int ticks, int every)
         ulong audio = FrameHash.Empty;
         for (int i = 0; i < ticks; i++)
         {
-            console.Tick(default);
+            console.Tick(inputs.At(i));
             audio = FrameHash.Combine(audio, console.AudioBlock);
             if (Checkpoint.IsDue(i + 1, every, ticks))
             {

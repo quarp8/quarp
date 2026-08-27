@@ -55,6 +55,8 @@ quarp new mygame          # заготовка картриджа + dev-прое
                           #   и .vscode: F5 запускает игру под отладчиком с точками останова
 quarp audio build mygame  # собрать sfx.txt/music.txt в банки
 quarp sim <cart> --ticks N --every K   # headless-прогон, хэши кадра и звука
+          [--input-file файл]           #   лента кнопок: без неё прогон закрепляет только то,
+                                       #   что картридж делает, когда в него не играют
 quarp replay record|play  # запись и воспроизведение реплеев (.qrpr)
 ```
 

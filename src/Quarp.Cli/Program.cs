@@ -339,7 +339,7 @@ static int RunSim(string path, int ticks, int every)
         // Persistent memory deliberately starts zeroed and save.dat is neither read nor
         // written: the hash must depend on the cart alone, not on this machine's saves.
         var console = new VirtualConsole(
-            ConsoleProfile.Profile8, data.Gfx, data.Map, data.Flags, data.Sfx, data.Music);
+            ConsoleProfile.Profile8, data.Gfx, data.Map, data.Flags, data.Sfx, data.Music, data.DataBanks);
         console.AttachCart(host.Cartridge);
         // AttachCart runs Init as tick 0 and produces neither a frame nor a block, so the
         // digest starts empty and covers ticks 1..N — the same ticks the frames come from.

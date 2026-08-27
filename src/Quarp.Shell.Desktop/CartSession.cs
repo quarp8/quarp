@@ -67,6 +67,10 @@ public sealed class CartSession : IDisposable
     private byte[] _sfx;
     private byte[] _music;
 
+    /// <summary>The cartridge's data banks (ADR-035), kept for the same reason as the audio
+    /// banks above: a playback machine needs the same ones the live session was given.</summary>
+    private IReadOnlyList<byte[]> _dataBanks;
+
     /// <summary>Non-null while a saved replay is being watched; it shadows the live session.</summary>
     private TimeMachine? _playback;
     private string? _playbackName;
@@ -131,6 +135,7 @@ public sealed class CartSession : IDisposable
         _flags = data.Flags;
         _sfx = data.Sfx;
         _music = data.Music;
+        _dataBanks = data.DataBanks;
         _progressCallback = OnResimulationProgress;   // cached once: it runs inside the seek loop
         machine.Progress = _progressCallback;
         machine.ProgressInterval = ProgressIntervalTicks;
@@ -287,7 +292,7 @@ public sealed class CartSession : IDisposable
             var header = new ReplayHeader(identity, seed: 0, persistent);
             var machine = new TimeMachine(
                 consoleProfile, host.Cartridge, header, new ReplayLog(),
-                data.Gfx, data.Map, data.Flags, data.Sfx, data.Music);
+                data.Gfx, data.Map, data.Flags, data.Sfx, data.Music, data.DataBanks);
 
             var session = new CartSession(fullPath, savePath, watcher, machine, host, data, identity, consoleProfile)
             {
@@ -676,7 +681,8 @@ public sealed class CartSession : IDisposable
         RebuildResult rebuild;
         try
         {
-            rebuild = _machine.Rebuild(newHost.Cartridge, data.Gfx, data.Map, data.Flags, data.Sfx, data.Music);
+            rebuild = _machine.Rebuild(
+                newHost.Cartridge, data.Gfx, data.Map, data.Flags, data.Sfx, data.Music, data.DataBanks);
         }
         finally
         {
@@ -743,6 +749,7 @@ public sealed class CartSession : IDisposable
         _flags = data.Flags;
         _sfx = data.Sfx;
         _music = data.Music;
+        _dataBanks = data.DataBanks;
         Name = data.Manifest.Name;
     }
 
@@ -893,7 +900,7 @@ public sealed class CartSession : IDisposable
             // and re-runs Init, which is why leaving playback has to put the live session back
             // together rather than simply dropping the reference — see StopPlayback.
             var playback = new TimeMachine(
-                _profile, _host.Cartridge, header, log, _gfx, _map, _flags, _sfx, _music)
+                _profile, _host.Cartridge, header, log, _gfx, _map, _flags, _sfx, _music, _dataBanks)
             {
                 Progress = _progressCallback,
                 ProgressInterval = ProgressIntervalTicks,

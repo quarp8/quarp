@@ -82,6 +82,7 @@ public static class CartSource
         RequireBuiltAsset(root, "map.csv", "map.bin", "map build");
         byte[] sfx = LoadSfx(ReadOptionalFile(root, "sfx.bin"));
         byte[] music = LoadMusic(ReadOptionalFile(root, "music.bin"));
+        byte[][] dataBanks = LoadFolderDataBanks(root);
 
         CodeBudget.Validate(sources);
         return new CartData
@@ -93,7 +94,83 @@ public static class CartSource
             Flags = flags,
             Sfx = sfx,
             Music = music,
+            DataBanks = dataBanks,
         };
+    }
+
+    /// <summary>
+    /// Reads <c>data/00.bin</c>..<c>data/63.bin</c> (ADR-035). A folder without <c>data/</c>, or
+    /// with only some of the numbers, is normal: absent banks stay empty. Names that are not
+    /// exactly two digits in range are ignored the same way the package ignores unknown entries —
+    /// but a bank over the size limits is an error, because silently truncating a cartridge's
+    /// data would show up as a corrupted level, not as a diagnostic.
+    /// </summary>
+    private static byte[][] LoadFolderDataBanks(string root)
+    {
+        byte[][] banks = CartData.EmptyDataBanks();
+        string dir = Path.Combine(root, "data");
+        if (!Directory.Exists(dir))
+        {
+            return banks;
+        }
+        long total = 0;
+        for (int i = 0; i < CartData.DataBankCount; i++)
+        {
+            string path = Path.Combine(dir, BankFileName(i));
+            if (!File.Exists(path))
+            {
+                continue;
+            }
+            byte[] bytes = File.ReadAllBytes(path);
+            total = ValidateBank(bytes, BankEntryName(i), total);
+            banks[i] = bytes;
+        }
+        return banks;
+    }
+
+    /// <summary>The file name of bank <paramref name="bank"/>: two decimal digits (ADR-035).</summary>
+    public static string BankFileName(int bank) => $"{bank:00}.bin";
+
+    /// <summary>The package entry name of bank <paramref name="bank"/> (ADR-035).</summary>
+    public static string BankEntryName(int bank) => $"data/{bank:00}.bin";
+
+    /// <summary>
+    /// The two size limits of ADR-035, checked as the banks are read so the message names the
+    /// bank rather than the sum. Returns the running total including this bank.
+    /// </summary>
+    private static long ValidateBank(byte[] bytes, string entryName, long runningTotal)
+    {
+        if (bytes.Length > CartData.DataBankMaxBytes)
+        {
+            throw new CartLoadException(
+                $"{entryName}: data bank is {bytes.Length} bytes, over the {CartData.DataBankMaxBytes}-byte "
+                + "per-bank limit (SPEC-8 §6, ADR-035).");
+        }
+        long total = runningTotal + bytes.Length;
+        if (total > CartData.DataBanksMaxTotalBytes)
+        {
+            throw new CartLoadException(
+                $"{entryName}: data banks total {total} bytes, over the {CartData.DataBanksMaxTotalBytes}-byte "
+                + "limit for all banks together (SPEC-8 §6, ADR-035).");
+        }
+        return total;
+    }
+
+    /// <summary>
+    /// Maps a package entry name to its bank number, or -1 when the name is not
+    /// <c>data/NN.bin</c> with <c>NN</c> two digits in range. Ordinal and case-sensitive:
+    /// SPEC-8 §6 requires package names to match byte for byte.
+    /// </summary>
+    private static int BankNumberOf(string entryName)
+    {
+        for (int i = 0; i < CartData.DataBankCount; i++)
+        {
+            if (string.Equals(entryName, BankEntryName(i), StringComparison.Ordinal))
+            {
+                return i;
+            }
+        }
+        return -1;
     }
 
     public static CartData LoadPackage(string quarp8File)
@@ -130,6 +207,7 @@ public static class CartSource
             ZipArchiveEntry? flagsEntry = null;
             ZipArchiveEntry? sfxEntry = null;
             ZipArchiveEntry? musicEntry = null;
+            var dataEntries = new ZipArchiveEntry?[CartData.DataBankCount];
             foreach (ZipArchiveEntry entry in zip.Entries)
             {
                 string name = entry.FullName.Replace('\\', '/');
@@ -162,6 +240,12 @@ public static class CartSource
                             && name.EndsWith(".cs", StringComparison.Ordinal))
                         {
                             sourceEntries.Add(entry);
+                            break;
+                        }
+                        int bank = BankNumberOf(name);
+                        if (bank >= 0)
+                        {
+                            dataEntries[bank] = entry;
                         }
                         break;
                 }
@@ -199,6 +283,19 @@ public static class CartSource
                 "flags.bin", CartData.FlagCount);
             byte[] sfx = LoadSfx(sfxEntry is null ? null : ReadEntry(sfxEntry, "sfx.bin"));
             byte[] music = LoadMusic(musicEntry is null ? null : ReadEntry(musicEntry, "music.bin"));
+            byte[][] dataBanks = CartData.EmptyDataBanks();
+            long dataTotal = 0;
+            for (int i = 0; i < CartData.DataBankCount; i++)
+            {
+                ZipArchiveEntry? bankEntry = dataEntries[i];
+                if (bankEntry is null)
+                {
+                    continue;
+                }
+                byte[] bytes = ReadEntry(bankEntry, BankEntryName(i));
+                dataTotal = ValidateBank(bytes, BankEntryName(i), dataTotal);
+                dataBanks[i] = bytes;
+            }
 
             CodeBudget.Validate(sources);
             return new CartData
@@ -210,6 +307,7 @@ public static class CartSource
                 Flags = flags,
                 Sfx = sfx,
                 Music = music,
+                DataBanks = dataBanks,
             };
         }
     }

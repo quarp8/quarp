@@ -110,6 +110,7 @@ public static class CartIdentity
         AppendBlock(hash, cart.Flags);
         AppendBlock(hash, cart.Sfx);
         AppendBlock(hash, cart.Music);
+        AppendDataBanks(hash, cart);
 
         byte[] digest = hash.GetHashAndReset();
         if (digest.Length != Size)
@@ -156,6 +157,41 @@ public static class CartIdentity
             builder.Append(c);
         }
         return builder.ToString();
+    }
+
+    /// <summary>
+    /// Folds the data banks of ADR-035 into the identity — but <b>only when at least one bank
+    /// carries bytes</b>.
+    ///
+    /// <para>The exception is not a shortcut, it is the point. A cartridge without banks means
+    /// exactly what it meant before banks existed, so its identity must not move: every replay
+    /// already recorded stores the identity it was taken against (REPLAY-FORMAT §5), and a
+    /// hash that shifted "because the console grew a feature this cart does not use" would
+    /// detach every one of them at once. A cartridge that does carry banks is a different
+    /// cartridge from one that does not, and gets a different identity, which is what the ADR
+    /// asks for.</para>
+    /// </summary>
+    private static void AppendDataBanks(IncrementalHash hash, CartData cart)
+    {
+        IReadOnlyList<byte[]> banks = cart.DataBanks;
+        bool any = false;
+        for (int i = 0; i < banks.Count; i++)
+        {
+            if (banks[i].Length > 0)
+            {
+                any = true;
+                break;
+            }
+        }
+        if (!any)
+        {
+            return;
+        }
+        AppendInt32(hash, banks.Count);
+        for (int i = 0; i < banks.Count; i++)
+        {
+            AppendBlock(hash, banks[i]);
+        }
     }
 
     private static void AppendInt32(IncrementalHash hash, int value)

@@ -116,6 +116,20 @@ public abstract class Cartridge
     /// <summary>Writes a sprite-sheet pixel (color masked to 0-15); outside the sheet it is ignored.</summary>
     protected void Sset(int x, int y, byte color) => Q.Sset(x, y, color);
 
+    /// <inheritdoc cref="IConsoleApi.DataLength"/>
+    protected int DataLength(int bank) => Q.DataLength(bank);
+
+    /// <inheritdoc cref="IConsoleApi.DataGet"/>
+    protected byte DataGet(int bank, int offset) => Q.DataGet(bank, offset);
+
+    /// <inheritdoc cref="IConsoleApi.DataToGfx"/>
+    protected void DataToGfx(int bank, int offset, int pixel, int count) =>
+        Q.DataToGfx(bank, offset, pixel, count);
+
+    /// <inheritdoc cref="IConsoleApi.DataToMap"/>
+    protected void DataToMap(int bank, int offset, int cell, int count) =>
+        Q.DataToMap(bank, offset, cell, count);
+
     /// <summary>Draws text with the small 4x6 cell (40 columns on QUARP-8) and returns the x after
     /// the last glyph; '\n' starts a new line.</summary>
     protected int Print(string text, int x, int y, byte color) => Q.Print(text, x, y, color);

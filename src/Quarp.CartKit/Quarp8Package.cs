@@ -63,6 +63,16 @@ public static class Quarp8Package
             AddOptionalFile(zip, root, "sfx.bin");
             AddOptionalFile(zip, root, "music.bin");
             AddOptionalFile(zip, root, "cover.png");
+            // Data banks last and in numeric order (ADR-035): the packer's entry order is part
+            // of the format, so two packs of an unchanged folder stay byte-identical.
+            for (int bank = 0; bank < CartData.DataBankCount; bank++)
+            {
+                string bankPath = Path.Combine(root, "data", CartSource.BankFileName(bank));
+                if (File.Exists(bankPath))
+                {
+                    AddFile(zip, bankPath, CartSource.BankEntryName(bank));
+                }
+            }
         }
 
         long size = new FileInfo(outPath).Length;

@@ -53,6 +53,14 @@ public sealed class VirtualConsole : IConsoleApi
     // a hot-reload resimulation restores from these (SPEC-8 §7: a cart that edits its own map
     // must resimulate from the map it started with, not from the one the last run left behind).
     // The duplicate costs 35 KB per console — cheap next to a determinism hole.
+    /// <summary>
+    /// The data banks of ADR-035, exactly <see cref="DataBankCount"/> of them. Read-only for
+    /// the whole life of the cartridge, which is why they need no boot image and no reset:
+    /// rewinding replays the cartridge's own copies out of them, and the source bytes cannot
+    /// have changed in between.
+    /// </summary>
+    private byte[][] _dataBanks = EmptyDataBanks();
+
     private readonly byte[] _sheetImage = new byte[SheetWidth * SheetHeight];
     private readonly byte[] _mapImage = new byte[MapWidth * MapHeight];
     private readonly byte[] _flagsImage = new byte[SpriteCount];
@@ -157,7 +165,8 @@ public sealed class VirtualConsole : IConsoleApi
         byte[]? map = null,
         byte[]? flags = null,
         byte[]? sfx = null,
-        byte[]? music = null)
+        byte[]? music = null,
+        IReadOnlyList<byte[]>? dataBanks = null)
     {
         Profile = profile;
         Framebuffer = new Framebuffer(profile);
@@ -167,6 +176,7 @@ public sealed class VirtualConsole : IConsoleApi
         _display = new DisplayPalette(profile);
         LoadAssets(sheet, map, flags);
         LoadAudio(sfx, music);
+        LoadDataBanks(dataBanks);
         ResetRuntimeState(0);
     }
 
@@ -218,6 +228,112 @@ public sealed class VirtualConsole : IConsoleApi
     /// else, and a rewind that skipped them would replay the same inputs against a different
     /// world.
     /// </summary>
+    /// <summary>Number of data banks a cartridge can carry (ADR-035).</summary>
+    public const int DataBankCount = 64;
+
+    /// <summary>
+    /// Installs the cartridge's data banks. A null list, a short list or a null entry all mean
+    /// "no bank" — the format's "missing asset = zeros" rule, which for a blob is emptiness.
+    /// The arrays are taken as given rather than copied: they are never written to, and a
+    /// cartridge may legitimately carry megabytes of them.
+    /// </summary>
+    public void LoadDataBanks(IReadOnlyList<byte[]>? banks)
+    {
+        byte[][] installed = EmptyDataBanks();
+        if (banks is not null)
+        {
+            int count = banks.Count < DataBankCount ? banks.Count : DataBankCount;
+            for (int i = 0; i < count; i++)
+            {
+                installed[i] = banks[i] ?? Array.Empty<byte>();
+            }
+        }
+        _dataBanks = installed;
+    }
+
+    private static byte[][] EmptyDataBanks()
+    {
+        var banks = new byte[DataBankCount][];
+        for (int i = 0; i < DataBankCount; i++)
+        {
+            banks[i] = Array.Empty<byte>();
+        }
+        return banks;
+    }
+
+    /// <inheritdoc/>
+    public int DataLength(int bank) =>
+        (uint)bank < DataBankCount ? _dataBanks[bank].Length : 0;
+
+    /// <inheritdoc/>
+    public byte DataGet(int bank, int offset)
+    {
+        if ((uint)bank >= DataBankCount)
+        {
+            return 0;
+        }
+        byte[] data = _dataBanks[bank];
+        return (uint)offset < (uint)data.Length ? data[offset] : (byte)0;
+    }
+
+    /// <inheritdoc/>
+    public void DataToGfx(int bank, int offset, int pixel, int count) =>
+        CopyBank(bank, offset, pixel, count, _sheet);
+
+    /// <inheritdoc/>
+    public void DataToMap(int bank, int offset, int cell, int count) =>
+        CopyBank(bank, offset, cell, count, _map);
+
+    /// <summary>
+    /// The one copy both bulk calls are: whatever part of the request lies inside the bank and
+    /// inside the destination is copied, the rest is dropped (ADR-035).
+    ///
+    /// <para>Clipping rather than throwing is the same choice <c>Mget</c> and <c>Sget</c> make
+    /// for reads outside the field: a cartridge doing arithmetic near an edge must behave
+    /// identically on every machine, and "identical" is much easier to guarantee for a
+    /// well-defined no-op than for an exception travelling through the shell.</para>
+    /// </summary>
+    private void CopyBank(int bank, int offset, int destination, int count, byte[] target)
+    {
+        if ((uint)bank >= DataBankCount || count <= 0)
+        {
+            return;
+        }
+        byte[] data = _dataBanks[bank];
+        if (offset < 0)
+        {
+            // A negative source offset shifts the destination by the same amount, so the byte
+            // at bank offset 0 still lands where the caller's arithmetic said it would.
+            count += offset;
+            destination -= offset;
+            offset = 0;
+        }
+        if (destination < 0)
+        {
+            count += destination;
+            offset -= destination;
+            destination = 0;
+        }
+        if (count <= 0 || offset >= data.Length || destination >= target.Length)
+        {
+            return;
+        }
+        int available = data.Length - offset;
+        if (count > available)
+        {
+            count = available;
+        }
+        int room = target.Length - destination;
+        if (count > room)
+        {
+            count = room;
+        }
+        if (count > 0)
+        {
+            Array.Copy(data, offset, target, destination, count);
+        }
+    }
+
     public void ResetAssets()
     {
         _sheetImage.CopyTo(_sheet, 0);

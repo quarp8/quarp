@@ -44,4 +44,35 @@ public sealed class CartData
     /// means every pattern is empty, i.e. no music.
     /// </summary>
     public byte[] Music { get; init; } = AudioFormat.EmptyMusicPayload();
+
+    /// <summary>Highest data-bank number a cartridge may carry (ADR-035): <c>data/00.bin</c>
+    /// through <c>data/63.bin</c>.</summary>
+    public const int DataBankCount = 64;
+
+    /// <summary>Largest single data bank, in bytes (ADR-035).</summary>
+    public const int DataBankMaxBytes = 1024 * 1024;
+
+    /// <summary>Largest sum of all data banks, in bytes (ADR-035).</summary>
+    public const int DataBanksMaxTotalBytes = 4 * 1024 * 1024;
+
+    /// <summary>
+    /// The data banks of ADR-035: <see cref="DataBankCount"/> blobs of arbitrary bytes the
+    /// cartridge carries and reads through <c>DataGet</c>/<c>DataToGfx</c>/<c>DataToMap</c>.
+    ///
+    /// <para>Always exactly <see cref="DataBankCount"/> entries; an absent bank is a zero-length
+    /// array, never null — the "missing asset = zeros" rule of the format spec, spelled for a
+    /// blob whose natural zero is emptiness rather than a field of zero bytes.</para>
+    /// </summary>
+    public IReadOnlyList<byte[]> DataBanks { get; init; } = EmptyDataBanks();
+
+    /// <summary>A full set of empty banks — what a cartridge without <c>data/**</c> gets.</summary>
+    public static byte[][] EmptyDataBanks()
+    {
+        var banks = new byte[DataBankCount][];
+        for (int i = 0; i < DataBankCount; i++)
+        {
+            banks[i] = Array.Empty<byte>();
+        }
+        return banks;
+    }
 }

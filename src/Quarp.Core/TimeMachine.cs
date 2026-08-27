@@ -49,13 +49,14 @@ public sealed class TimeMachine
         byte[]? map = null,
         byte[]? flags = null,
         byte[]? sfx = null,
-        byte[]? music = null)
+        byte[]? music = null,
+        IReadOnlyList<byte[]>? dataBanks = null)
     {
         ArgumentNullException.ThrowIfNull(profile);
         ArgumentNullException.ThrowIfNull(cart);
         ArgumentNullException.ThrowIfNull(header);
         ArgumentNullException.ThrowIfNull(log);
-        _console = new VirtualConsole(profile, sheet, map, flags, sfx, music);
+        _console = new VirtualConsole(profile, sheet, map, flags, sfx, music, dataBanks);
         _cart = cart;
         _header = header;
         _log = log;
@@ -254,7 +255,7 @@ public sealed class TimeMachine
     /// and the same replay puts the old code back exactly where it was.
     /// </summary>
     public RebuildResult Rebuild(Cartridge newCart) =>
-        RebuildCore(newCart, replaceAssets: false, null, null, null, null, null);
+        RebuildCore(newCart, replaceAssets: false, null, null, null, null, null, null);
 
     /// <summary>
     /// <see cref="Rebuild(Cartridge)"/> with new assets too — the author edited gfx.png, the
@@ -269,8 +270,9 @@ public sealed class TimeMachine
         byte[]? map,
         byte[]? flags,
         byte[]? sfx = null,
-        byte[]? music = null) =>
-        RebuildCore(newCart, replaceAssets: true, sheet, map, flags, sfx, music);
+        byte[]? music = null,
+        IReadOnlyList<byte[]>? dataBanks = null) =>
+        RebuildCore(newCart, replaceAssets: true, sheet, map, flags, sfx, music, dataBanks);
 
     private RebuildResult RebuildCore(
         Cartridge newCart,
@@ -279,7 +281,8 @@ public sealed class TimeMachine
         byte[]? map,
         byte[]? flags,
         byte[]? sfx,
-        byte[]? music)
+        byte[]? music,
+        IReadOnlyList<byte[]>? dataBanks)
     {
         ArgumentNullException.ThrowIfNull(newCart);
         // Where the player was. The log can be one tick ahead of the console when the old code
@@ -294,6 +297,9 @@ public sealed class TimeMachine
             // and a bank loaded afterwards would mean the run that produced the current tick
             // was scored against the old sound.
             _console.LoadAudio(sfx, music);
+            // Same reasoning as the audio banks, and the same moment: the banks a cartridge
+            // copies from must be the edited ones before the resimulation replays those copies.
+            _console.LoadDataBanks(dataBanks);
         }
         try
         {

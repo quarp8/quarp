@@ -504,7 +504,8 @@ public static class ReplayCommands
                     data.Map,
                     data.Flags,
                     data.Sfx,
-                    data.Music);
+                    data.Music,
+                    data.DataBanks);
                 machine.Boot();
                 return new Session(host, machine, identity, data.Manifest.Name);
             }

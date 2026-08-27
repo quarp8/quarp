@@ -62,6 +62,39 @@ public sealed class DrawPurityTests
             }
         """));
 
+    /// <summary>ADR-035: paging a data bank into the sheet changes console state, so it is the
+    /// same build error inside Draw that Sset and Mset are.</summary>
+    [Fact]
+    public Task DataToGfxInDraw() => VerifyAsync(CartVerifier.Cart("""
+            public override void Draw()
+            {
+                {|QRP1004:DataToGfx|}(0, 0, 0, 16);
+            }
+        """));
+
+    /// <summary>ADR-035, the map half of the same rule.</summary>
+    [Fact]
+    public Task DataToMapInDraw() => VerifyAsync(CartVerifier.Cart("""
+            public override void Draw()
+            {
+                {|QRP1004:DataToMap|}(0, 0, 0, 16);
+            }
+        """));
+
+    /// <summary>
+    /// The other half of ADR-035, and the reason reading was split from copying: a data bank is
+    /// immutable, so reading one inside Draw changes nothing and must stay legal — a port that
+    /// unpacks geometry while drawing depends on it.
+    /// </summary>
+    [Fact]
+    public Task DataGetInDrawIsClean() => VerifyAsync(CartVerifier.Cart("""
+            public override void Draw()
+            {
+                Pset(0, 0, DataGet(0, 0));
+                Pset(1, 0, (byte)DataLength(0));
+            }
+        """));
+
     [Fact]
     public Task FsetInDraw() => VerifyAsync(CartVerifier.Cart("""
             public override void Draw()

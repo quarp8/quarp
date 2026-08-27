@@ -80,6 +80,8 @@ internal sealed class MutatingConsoleApi
     private static readonly string[] MemberNames =
     {
         "Rnd", "RndInt", "Srand", "Sset", "Mset", "Fset", "Dset", "Sfx", "Music",
+        // ADR-035: the two bulk copies change the sheet and the map, exactly like Sset/Mset.
+        "DataToGfx", "DataToMap",
         // "PaintPattern" (Quarp.Api.Std, an IConsoleApi extension method — M4 stage 4.1, Р30):
         // writes the sprite sheet through Sset the same way a hand-written loop would, so it
         // carries the same rule. Two things had to be true for this entry to actually fire

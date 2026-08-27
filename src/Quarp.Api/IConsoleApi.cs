@@ -104,6 +104,36 @@ public interface IConsoleApi
     void Sset(int x, int y, byte color);
 
     /// <summary>
+    /// Length in bytes of data bank <paramref name="bank"/> (0-63), or 0 for an empty bank and
+    /// for a number outside that range (ADR-035).
+    /// </summary>
+    int DataLength(int bank);
+
+    /// <summary>
+    /// Reads one byte of a data bank. Outside the bank — and for a bank number outside 0-63 —
+    /// reads 0, the same soft geometry <see cref="Mget"/> and <see cref="Sget"/> have (ADR-035).
+    /// Reading is pure, so it is legal in <c>Draw</c>.
+    /// </summary>
+    byte DataGet(int bank, int offset);
+
+    /// <summary>
+    /// Copies <paramref name="count"/> bytes of a data bank into the sprite sheet, starting at
+    /// sheet pixel <paramref name="pixel"/> counted row-major from the top-left (ADR-035).
+    /// Whatever part of the request falls outside the bank or the sheet is dropped.
+    ///
+    /// <para>This changes console state, so like <see cref="Mset"/> it is a build error inside
+    /// <c>Draw</c> (analyzer rule QRP1004).</para>
+    /// </summary>
+    void DataToGfx(int bank, int offset, int pixel, int count);
+
+    /// <summary>
+    /// Copies <paramref name="count"/> bytes of a data bank into the map, starting at map cell
+    /// <paramref name="cell"/> counted row-major (ADR-035). Clipped like
+    /// <see cref="DataToGfx"/>, and like it a build error inside <c>Draw</c>.
+    /// </summary>
+    void DataToMap(int bank, int offset, int cell, int count);
+
+    /// <summary>
     /// Draws text with the small system font (3x5 ink in a 4x6 cell) and returns the x
     /// coordinate after the last glyph (decided: yes, API-8 §reviewed) — that is, x + 4 per
     /// printed character, which is what a caller chains or centers with. '\n' starts a new line

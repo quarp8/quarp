@@ -38,6 +38,9 @@ void Map(int cellX, int cellY, int screenX, int screenY,
 byte Mget(int cellX, int cellY);              void Mset(int cellX, int cellY, byte tile);
 bool Fget(int sprite, int flag);              void Fset(int sprite, int flag, bool value);
 byte Sget(int x, int y);                      void Sset(int x, int y, byte color);
+int  DataLength(int bank);                    byte DataGet(int bank, int offset);
+void DataToGfx(int bank, int offset, int pixel, int count);
+void DataToMap(int bank, int offset, int cell, int count);
 int  Print(string text, int x, int y, byte color);                  // мелким шрифтом, ячейка 4x6
 int  Print(string text, int x, int y, byte color, Font font);       // Font.Small или Font.Large (5x7)
 void Camera(int x = 0, int y = 0);
@@ -403,6 +406,41 @@ void Sset(int x, int y, byte color);
 ```csharp
 Sset(0, 0, 7);          // пиксель в спрайте 0
 byte c = Sget(8, 0);    // левый верхний пиксель спрайта 1
+```
+
+### `DataLength` / `DataGet` / `DataToGfx` / `DataToMap` — банки данных (ADR-035)
+
+```csharp
+int  DataLength(int bank);
+byte DataGet(int bank, int offset);
+void DataToGfx(int bank, int offset, int pixel, int count);
+void DataToMap(int bank, int offset, int cell, int count);
+```
+
+Картридж может нести до **64 банков данных** — произвольных байт, лежащих рядом с кодом
+(`data/00.bin`..`data/63.bin`, SPEC-8 §6). Это ответ консоли на игру, которая крупнее одного
+набора банков: уровни, атласы текстур, таблицы — всё, чему тесно в листе на 16 384 пикселя
+и карте на 18 432 клетки.
+
+`DataLength` возвращает длину банка, `DataGet` — байт по смещению. **Вне банка — ноль**, как
+`Mget` и `Sget` вне поля, и номер вне 0–63 ведёт себя как пустой банк. Чтение ничего не
+меняет, поэтому оно **законно в `Draw`**: распаковывать геометрию по ходу отрисовки можно.
+
+`DataToGfx` и `DataToMap` копируют кусок банка в лист спрайтов или в карту: `pixel` — номер
+пикселя листа построчно от левого верхнего, `cell` — номер клетки карты построчно. Что не
+поместилось — в банк, в лист или в карту — **обрезается молча**, а не падает: картридж,
+считающий адреса у края, обязан вести себя одинаково на всех машинах. Отрицательное
+`offset` сдвигает и приёмник, так что байт с нулевого смещения ложится туда, куда указала
+арифметика вызывающего.
+
+Обе копии меняют состояние консоли, поэтому в `Draw` они — **ошибка сборки** (QRP1004),
+ровно как `Sset` и `Mset`. Подкачка живёт в `Init` и `Update`.
+
+```csharp
+// Уровень 3 лежит в банке 3: первые 4096 байт — тайлы стен, дальше геометрия.
+DataToGfx(3, 0, 0, 4096);                  // в Init или Update, не в Draw
+int size = DataLength(3);
+byte first = DataGet(3, 4096);             // можно и в Draw: чтение ничего не трогает
 ```
 
 ### `Print`

@@ -3,14 +3,18 @@ namespace Quarp.Core.Audio;
 /// <summary>
 /// A cartridge's sound data: 64 SFX slots and 64 music patterns (SPEC-8 §4). The audio
 /// counterpart of the sprite sheet and the map — supplied by the cartridge pipeline, read by
-/// the <see cref="Apu"/>, never written by cartridge code.
+/// the <see cref="Apu"/>.
 ///
-/// <para><b>Why there is no boot image here.</b> Sheet, map and flags need one, because
-/// <c>Sset</c>/<c>Mset</c>/<c>Fset</c> let a cartridge edit them and a rewind has to start from
-/// the bytes the run started with (see <see cref="VirtualConsole.ResetAssets"/>). The audio
-/// bank has no such API in profile 8 — there is deliberately no <c>Sfxset</c> — so it is
-/// constant for the whole run, a resimulation reads exactly the same data as the original run,
-/// and a second copy would buy nothing.</para>
+/// <para><b>Where the boot image lives, and why it exists.</b> Sheet, map and flags have one
+/// because <c>Sset</c>/<c>Mset</c>/<c>Fset</c> let a cartridge edit them and a rewind has to
+/// start from the bytes the run started with (<see cref="VirtualConsole.ResetAssets"/>). Until
+/// ADR-036 the sound bank needed none: profile 8 gave a cartridge no way to write it — there
+/// is still deliberately no per-step <c>Sfxset</c> — so it was constant for a whole run and a
+/// second copy would have bought nothing. <c>DataToSfx</c> and <c>DataToMusic</c> ended that:
+/// a cartridge can now replace a whole table from one of its own data banks. The boot image is
+/// therefore <em>a second instance of this class</em>, kept by the <see cref="Apu"/>
+/// (<c>_bootBank</c>), which is why nothing about it appears in this type — a bank is still
+/// just a bank, and the one that is authoritative at boot is a matter of who holds it.</para>
 ///
 /// <para><b>Where the file format stops and the core starts.</b> <c>Quarp.CartKit</c> owns
 /// <c>sfx.bin</c> and <c>music.bin</c>: their magic, version, validation and the text compiler

@@ -17,7 +17,46 @@ namespace Quarp.CartKit;
 /// </summary>
 public static class Quarp8Package
 {
+    /// <summary>
+    /// The budget every part of a cartridge except its data banks has to fit in, compressed.
+    ///
+    /// <para>Data banks are excluded, and the exclusion is the point. The arithmetic behind
+    /// this number — 256 KB of code plus about 31 KB of assets, raw, so that the code budget
+    /// is the limit an author actually meets — was written before ADR-035, and ADR-035
+    /// ratified up to 4 MiB of banks. That left a cartridge the console explicitly permits
+    /// unable to satisfy its own package limit. The POOM port hit it with 514 KB of banks for
+    /// six levels; nobody had reached it earlier because <c>quarp build</c> does not package.
+    /// Banks carry their own predictable limits (<see cref="CartData.DataBankMaxBytes"/> each,
+    /// <see cref="CartData.DataBanksMaxTotalBytes"/> together, checked on both forms), so both
+    /// ceilings stay predictable on their own — which is the whole of ADR-024's argument.</para>
+    /// </summary>
     public const long MaxPackageBytes = 327680;
+
+    /// <summary>
+    /// The largest a <c>.quarp8</c> file can be at all: this budget plus every byte of banks
+    /// the console allows. A file over it is refused before the zip is opened, so a
+    /// mis-named multi-gigabyte file is not read into memory to be rejected.
+    /// </summary>
+    public const long MaxFileBytes = MaxPackageBytes + CartData.DataBanksMaxTotalBytes;
+
+    /// <summary>
+    /// Compressed bytes of everything the package budget covers — every entry that is not a
+    /// data bank. Counted from the archive rather than from the files, because the limit is on
+    /// the packed form.
+    /// </summary>
+    public static long BudgetedBytes(ZipArchive zip)
+    {
+        ArgumentNullException.ThrowIfNull(zip);
+        long total = 0;
+        foreach (ZipArchiveEntry entry in zip.Entries)
+        {
+            if (!entry.FullName.StartsWith(CartSource.BankEntryPrefix, StringComparison.Ordinal))
+            {
+                total += entry.CompressedLength;
+            }
+        }
+        return total;
+    }
 
     private static readonly DateTimeOffset FixedEntryTime = new(2000, 1, 1, 0, 0, 0, TimeSpan.Zero);
 
@@ -75,12 +114,17 @@ public static class Quarp8Package
             }
         }
 
-        long size = new FileInfo(outPath).Length;
-        if (size > MaxPackageBytes)
+        long budgeted;
+        using (ZipArchive written = ZipFile.OpenRead(outPath))
+        {
+            budgeted = BudgetedBytes(written);
+        }
+        if (budgeted > MaxPackageBytes)
         {
             File.Delete(outPath);
             throw new CartLoadException(
-                $"{Path.GetFileName(outPath)}: packed size is {size} bytes, over the {MaxPackageBytes}-byte limit (SPEC-8 §6).");
+                $"{Path.GetFileName(outPath)}: packed size is {budgeted} bytes without data banks, "
+                + $"over the {MaxPackageBytes}-byte limit (SPEC-8 §6).");
         }
     }
 

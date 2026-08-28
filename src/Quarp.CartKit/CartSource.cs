@@ -132,7 +132,10 @@ public static class CartSource
     public static string BankFileName(int bank) => $"{bank:00}.bin";
 
     /// <summary>The package entry name of bank <paramref name="bank"/> (ADR-035).</summary>
-    public static string BankEntryName(int bank) => $"data/{bank:00}.bin";
+    /// <summary>Folder every data bank entry lives under, inside the package.</summary>
+    public const string BankEntryPrefix = "data/";
+
+    public static string BankEntryName(int bank) => $"{BankEntryPrefix}{bank:00}.bin";
 
     /// <summary>
     /// The two size limits of ADR-035, checked as the banks are read so the message names the
@@ -181,11 +184,15 @@ public static class CartSource
             throw new CartLoadException($"package not found: {path}");
         }
         string fileName = Path.GetFileName(path);
+        // Two limits, and they are different questions. The file may be as large as the
+        // budget plus every bank ADR-035 allows — checked here, before the zip is opened, so a
+        // wrong file is refused without being read. The budget itself covers everything except
+        // the banks and can only be measured once the entries are known: see below.
         long fileSize = new FileInfo(path).Length;
-        if (fileSize > Quarp8Package.MaxPackageBytes)
+        if (fileSize > Quarp8Package.MaxFileBytes)
         {
             throw new CartLoadException(
-                $"{fileName}: package is {fileSize} bytes, over the {Quarp8Package.MaxPackageBytes}-byte limit (SPEC-8 §6).");
+                $"{fileName}: package is {fileSize} bytes, over the {Quarp8Package.MaxFileBytes}-byte limit (SPEC-8 §6).");
         }
 
         ZipArchive zip;
@@ -200,6 +207,14 @@ public static class CartSource
 
         using (zip)
         {
+            long budgeted = Quarp8Package.BudgetedBytes(zip);
+            if (budgeted > Quarp8Package.MaxPackageBytes)
+            {
+                throw new CartLoadException(
+                    $"{fileName}: package is {budgeted} bytes without data banks, over the "
+                    + $"{Quarp8Package.MaxPackageBytes}-byte limit (SPEC-8 §6).");
+            }
+
             byte[]? manifestBytes = null;
             var sourceEntries = new List<ZipArchiveEntry>();
             ZipArchiveEntry? gfxEntry = null;

@@ -5,8 +5,8 @@ namespace Quarp.Analyzers.Tests;
 /// <summary>
 /// QRP1004 — a state-mutating console call reached from <c>Draw</c>.
 ///
-/// The two halves of this file matter equally. The first proves the rule fires on the nine
-/// members that write simulation state, directly and through Draw-only helpers; the second
+/// The two halves of this file matter equally. The first proves the rule fires on every
+/// member that writes simulation state, directly and through Draw-only helpers; the second
 /// proves it stays quiet on the code cartridges are actually made of — drawing, reads,
 /// helpers shared with <c>Update</c>, and the engine's own source. A determinism rule that
 /// cried wolf on <c>carts/snake</c>'s <c>Draw</c> would be turned off within a day.
@@ -18,7 +18,7 @@ public sealed class DrawPurityTests
     private static Task VerifyManyAsync(params string[] sources) =>
         CartVerifier.VerifyManyAsync<DrawPurityAnalyzer>(sources);
 
-    // --- fires: the nine mutating members, written straight into Draw ---
+    // --- fires: the mutating members, written straight into Draw ---
 
     /// <summary>The realistic case: a sparkle drawn with Rnd advances the RNG, which is simulation state.</summary>
     [Fact]
@@ -78,6 +78,29 @@ public sealed class DrawPurityTests
             public override void Draw()
             {
                 {|QRP1004:DataToMap|}(0, 0, 0, 16);
+            }
+        """));
+
+    /// <summary>
+    /// ADR-036: paging a whole SFX table out of a data bank rewrites what every later Sfx call
+    /// will play and silences the four channels doing it. From Draw that would run a different
+    /// number of times than the simulation did and cut notes in half; it is the same build
+    /// error Sfx itself is.
+    /// </summary>
+    [Fact]
+    public Task DataToSfxInDraw() => VerifyAsync(CartVerifier.Cart("""
+            public override void Draw()
+            {
+                {|QRP1004:DataToSfx|}(1, 0);
+            }
+        """));
+
+    /// <summary>ADR-036, the music half of the same rule.</summary>
+    [Fact]
+    public Task DataToMusicInDraw() => VerifyAsync(CartVerifier.Cart("""
+            public override void Draw()
+            {
+                {|QRP1004:DataToMusic|}(1, 0);
             }
         """));
 

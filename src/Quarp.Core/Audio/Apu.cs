@@ -104,6 +104,19 @@ public sealed class Apu
     private static readonly int[] VibratoDepth = { 0, 45, 64, 45, 0, -45, -64, -45 };
 
     private readonly AudioBank _bank = new();
+
+    /// <summary>
+    /// The bank exactly as the cartridge pipeline handed it over: the audio boot image, the
+    /// counterpart of <c>VirtualConsole</c>'s sheet, map and flag images. It exists because
+    /// ADR-036 gave a cartridge a way to write the live bank (<c>DataToSfx</c>,
+    /// <c>DataToMusic</c>) and a rewind has to resimulate from the sound the run started with,
+    /// not from whichever episode the previous run happened to page in last.
+    /// <see cref="ResetBank"/> puts it back, and <c>VirtualConsole.ResetAssets</c> is what
+    /// calls it. Before ADR-036 the bank could not drift and this copy would have bought
+    /// nothing, which is exactly what <see cref="AudioBank"/> used to say.
+    /// </summary>
+    private readonly AudioBank _bootBank = new();
+
     private readonly AudioBlock _block = new();
     private readonly AudioChannel[] _channels = new AudioChannel[ChannelCount];
 
@@ -174,22 +187,74 @@ public sealed class Apu
     public void LoadBank(AudioBank? bank)
     {
         _bank.CopyFrom(bank);
+        _bootBank.CopyFrom(bank);
         Reset();
     }
 
-    /// <summary>Fills the SFX half of the bank from a cartridge payload; see <see cref="AudioBank.LoadSfxPayload"/>.</summary>
+    /// <summary>
+    /// Fills the SFX half of the bank from a cartridge payload; see
+    /// <see cref="AudioBank.LoadSfxPayload"/>. This is the <em>loader's</em> door, so it moves
+    /// the boot bank too — what it installs is what a rewind comes back to. The cartridge's
+    /// own door is <see cref="PageSfx"/>, and the difference between them is that one line.
+    /// </summary>
     public void LoadSfxPayload(ReadOnlySpan<byte> payload)
+    {
+        _bank.LoadSfxPayload(payload);
+        _bootBank.LoadSfxPayload(payload);
+        Reset();
+    }
+
+    /// <summary>The music half of <see cref="LoadSfxPayload"/>; see <see cref="AudioBank.LoadMusicPayload"/>.</summary>
+    public void LoadMusicPayload(ReadOnlySpan<byte> payload)
+    {
+        _bank.LoadMusicPayload(payload);
+        _bootBank.LoadMusicPayload(payload);
+        Reset();
+    }
+
+    /// <summary>
+    /// Pages a new SFX table in from the cartridge's own data banks (ADR-036) — what
+    /// <c>DataToSfx(bank, offset)</c> reaches. The payload is already exactly
+    /// <see cref="AudioBank.SfxPayloadSize"/> bytes: the console checks the bank holds a whole
+    /// one before calling, because at the cartridge boundary a short bank has to be a defined
+    /// no-op rather than an exception travelling through the shell.
+    ///
+    /// <para>Two things separate this from <see cref="LoadSfxPayload"/>, and both are the
+    /// point. It does <b>not</b> move the boot bank: this is the cartridge writing its own
+    /// sound, and a resimulation must start again from the bank the pipeline loaded, exactly
+    /// as it starts again from the loaded sprite sheet rather than the one <c>Sset</c> left
+    /// behind. And it silences the chip through the same <see cref="Reset"/> the loader uses,
+    /// so no channel can go on stepping through a slot whose bytes have just been replaced —
+    /// a channel parked on step 12 knows nothing about the new slot's length, and neither
+    /// does the new slot know what note the old one was sliding from.</para>
+    /// </summary>
+    public void PageSfx(ReadOnlySpan<byte> payload)
     {
         _bank.LoadSfxPayload(payload);
         Reset();
     }
 
-    /// <summary>Fills the music half of the bank from a cartridge payload; see <see cref="AudioBank.LoadMusicPayload"/>.</summary>
-    public void LoadMusicPayload(ReadOnlySpan<byte> payload)
+    /// <summary>
+    /// The music half of <see cref="PageSfx"/> — what <c>DataToMusic(bank, offset)</c>
+    /// reaches. Same two rules: the boot bank is left alone, and the chip is silenced, which
+    /// here also means the pattern sequencer stops rather than turning over into a pattern
+    /// table it never started in.
+    /// </summary>
+    public void PageMusic(ReadOnlySpan<byte> payload)
     {
         _bank.LoadMusicPayload(payload);
         Reset();
     }
+
+    /// <summary>
+    /// Puts the live bank back to the one the cartridge pipeline loaded, undoing every
+    /// <see cref="PageSfx"/> and <see cref="PageMusic"/> the run made. The audio half of
+    /// <c>VirtualConsole.ResetAssets</c> and called from it, so every cold boot — a rewind, a
+    /// restart, a hot reload — resimulates against the sound the original run started with.
+    /// Chip state is not touched here; <see cref="Reset"/> owns that, and the console calls
+    /// both.
+    /// </summary>
+    public void ResetBank() => _bank.CopyFrom(_bootBank);
 
     /// <summary>
     /// Starts a sound effect. This is what <c>Sfx(id, channel)</c> reaches (API-8 §5), and it

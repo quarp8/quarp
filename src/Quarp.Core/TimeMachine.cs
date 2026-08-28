@@ -259,10 +259,12 @@ public sealed class TimeMachine
 
     /// <summary>
     /// <see cref="Rebuild(Cartridge)"/> with new assets too — the author edited gfx.png, the
-    /// map or the sound, not just the code. Sheet, map and flags become the new boot image, so
-    /// the resimulation and every later rewind start from them; the audio banks are read-only
-    /// to a profile-8 cartridge and so need no boot image, only to be in place before the
-    /// resimulation runs.
+    /// map or the sound, not just the code. Sheet, map, flags and the sound bank all become the
+    /// new boot image, so the resimulation and every later rewind start from them. Since
+    /// ADR-036 the sound has to be a boot image and not merely "in place before the
+    /// resimulation runs": a cartridge that pages an episode in with <c>DataToSfx</c> writes
+    /// the live bank, and a rewind that did not restore the loaded one would replay the same
+    /// inputs against whatever episode the last run finished on.
     /// </summary>
     public RebuildResult Rebuild(
         Cartridge newCart,

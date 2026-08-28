@@ -11,7 +11,7 @@ namespace Quarp.Analyzers;
 /// <em>does this call change something a resimulation from tick 0 has to reproduce?</em>
 /// SPEC-8 §7 names that state — the RNG, the sprite sheet, the map, sprite flags and the
 /// 64 slots of persistent memory — and since M3 the sound chip, whose PCM the
-/// cross-architecture CI job compares block by block. The nine members below are the whole of
+/// cross-architecture CI job compares block by block. The members below are the whole of
 /// what writes to it:
 /// <list type="table">
 ///   <item><term><c>Rnd</c>, <c>RndInt</c></term><description>consume one xoshiro128** draw
@@ -25,6 +25,16 @@ namespace Quarp.Analyzers;
 ///     <c>Map</c>'s flag filter;</description></item>
 ///   <item><term><c>Dset</c></term><description>writes persistent memory — the second
 ///     external input of the simulation (REPLAY-FORMAT §2);</description></item>
+///   <item><term><c>DataToGfx</c>, <c>DataToMap</c></term><description>copy a data bank into
+///     the sheet and into the map in bulk (ADR-035) — the same two pieces of state
+///     <c>Sset</c> and <c>Mset</c> write, one call instead of thousands;</description></item>
+///   <item><term><c>DataToSfx</c>, <c>DataToMusic</c></term><description>replace the whole SFX
+///     table and the whole music table from a data bank (ADR-036), and silence the chip on
+///     the way. Before ADR-036 a cartridge could <em>start</em> sound but not change what a
+///     slot contained; now it can, so the bank joined the sheet and the map as state a
+///     resimulation has to arrive at the same way. From <c>Draw</c> that is doubly wrong: the
+///     paging would happen a different number of times, and each time it would silence four
+///     channels mid-note;</description></item>
 ///   <item><term><c>Sfx</c>, <c>Music</c></term><description>start a sound, which is to say
 ///     they write channel and sequencer state inside <c>Quarp.Core.Audio.Apu</c>. Added in M3
 ///     (organizer decision, M3 work order §"Решения организатора"). Draw runs once per
@@ -55,7 +65,7 @@ namespace Quarp.Analyzers;
 /// <c>IConsoleApi</c> extension method that writes the sprite sheet through it in a loop
 /// (M4 stage 4.1, ADR-019). It does not name a new state category — the sprite sheet is
 /// still the one <c>Sset</c> writes — so <see cref="Resolve"/> walks <c>Std</c> by metadata
-/// name for the same nine-plus-one member set rather than growing this list, and
+/// name for the same member set rather than growing this list, and
 /// <see cref="Contains"/> unwraps the reduced extension-method symbol a call written
 /// <c>Q.PaintPattern(...)</c> binds to before comparing.
 /// </summary>
@@ -74,7 +84,7 @@ internal sealed class MutatingConsoleApi
 
     /// <summary>
     /// The member names, and also the pre-filter: an invocation whose callee is not spelled
-    /// with one of these ten names cannot bind to a mutating member, and skipping it costs
+    /// with one of these names cannot bind to a mutating member, and skipping it costs
     /// one string comparison instead of a symbol lookup.
     /// </summary>
     private static readonly string[] MemberNames =
@@ -82,6 +92,9 @@ internal sealed class MutatingConsoleApi
         "Rnd", "RndInt", "Srand", "Sset", "Mset", "Fset", "Dset", "Sfx", "Music",
         // ADR-035: the two bulk copies change the sheet and the map, exactly like Sset/Mset.
         "DataToGfx", "DataToMap",
+        // ADR-036: the same shape for sound — each replaces a whole table in the APU's bank
+        // and stops every channel doing so, which is Sset and Sfx(-1) in one call.
+        "DataToSfx", "DataToMusic",
         // "PaintPattern" (Quarp.Api.Std, an IConsoleApi extension method — M4 stage 4.1, Р30):
         // writes the sprite sheet through Sset the same way a hand-written loop would, so it
         // carries the same rule. Two things had to be true for this entry to actually fire

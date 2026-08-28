@@ -189,18 +189,25 @@ public class CartSourceTests : IDisposable
         Assert.Contains("not a valid .quarp8", e.Message);
     }
 
+    /// <summary>
+    /// The outer gate: a file larger than the budget plus every data bank the console allows
+    /// is refused before the zip is opened, so a mis-named huge file is not read to be
+    /// rejected. The inner gate — the budget itself, which excludes <c>data/</c> — can only be
+    /// measured once the entries are known and lives in
+    /// <see cref="PackageBankBudgetTests"/>.
+    /// </summary>
     [Fact]
     public void OversizedPackageIsRejectedOnLoad()
     {
         string package = Path.Combine(_root, "big.quarp8");
-        File.WriteAllBytes(package, new byte[Quarp8Package.MaxPackageBytes + 1]);
+        File.WriteAllBytes(package, new byte[Quarp8Package.MaxFileBytes + 1]);
         var e = Assert.Throws<CartLoadException>(() => CartSource.Load(package));
-        Assert.Contains("327680", e.Message);
+        Assert.Contains(Quarp8Package.MaxFileBytes.ToString(), e.Message);
     }
 
     /// <summary>
     /// The companion to <see cref="OversizedPackageIsRejectedOnLoad"/>: the gate is
-    /// <c>&gt;</c>, not <c>&gt;=</c>, so a file of exactly <see cref="Quarp8Package.MaxPackageBytes"/>
+    /// <c>&gt;</c>, not <c>&gt;=</c>, so a file of exactly <see cref="Quarp8Package.MaxFileBytes"/>
     /// bytes must clear the size check. It still fails one gate later — raw zero bytes are not
     /// a valid zip — and that different failure is the proof the size check itself let it
     /// through rather than the test accidentally passing for the wrong reason.
@@ -209,9 +216,9 @@ public class CartSourceTests : IDisposable
     public void ExactlyAtTheLimitPassesTheSizeGate()
     {
         string package = Path.Combine(_root, "exact.quarp8");
-        File.WriteAllBytes(package, new byte[Quarp8Package.MaxPackageBytes]);
+        File.WriteAllBytes(package, new byte[Quarp8Package.MaxFileBytes]);
         var e = Assert.Throws<CartLoadException>(() => CartSource.Load(package));
-        Assert.DoesNotContain("327680", e.Message);
+        Assert.DoesNotContain(Quarp8Package.MaxFileBytes.ToString(), e.Message);
         Assert.Contains("not a valid .quarp8", e.Message);
     }
 

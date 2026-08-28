@@ -75,9 +75,10 @@ public sealed class VirtualConsole : IConsoleApi
 
     private readonly int[] _persistent = new int[PersistentSlots];
 
-    // The sound chip. Its bank is cartridge data (no boot image needed — nothing can write it
-    // from a cartridge), its channels and sequencers are simulation state and reset with
-    // everything else.
+    // The sound chip. Its channels and sequencers are simulation state and reset with
+    // everything else; its bank is cartridge data, and since ADR-036 a cartridge can page that
+    // bank from a data bank (DataToSfx/DataToMusic), so the chip keeps a boot image of it the
+    // way this class keeps _sheetImage — ResetAssets restores both.
     private readonly Apu _apu = new();
 
     private int _cameraX;
@@ -205,9 +206,11 @@ public sealed class VirtualConsole : IConsoleApi
     /// A null or empty payload means an empty bank, so a cartridge without sound is silent
     /// rather than broken. Anything currently playing stops.
     ///
-    /// <para>Unlike sheet, map and flags this needs no boot image: profile 8 gives a cartridge
-    /// no way to write its own sound data, so the bank cannot drift during a run and a
-    /// resimulation reads the same bytes the original run did.</para>
+    /// <para>What is installed here is also the audio boot image, exactly as
+    /// <see cref="LoadAssets"/>'s copy is the boot image of the sheet: since ADR-036 a
+    /// cartridge can page its own sound in with <see cref="DataToSfx"/>, so
+    /// <see cref="ResetAssets"/> has to be able to put these bytes back before a
+    /// resimulation replays that paging.</para>
     /// </summary>
     public void LoadAudio(byte[]? sfx, byte[]? music)
     {
@@ -222,12 +225,6 @@ public sealed class VirtualConsole : IConsoleApi
     /// </summary>
     public void LoadAudio(AudioBank? bank) => _apu.LoadBank(bank);
 
-    /// <summary>
-    /// Restores sheet, map and flags to the assets last loaded, undoing every Sset/Mset/Fset the
-    /// cartridge made. Resimulation starts here: assets are simulation state like everything
-    /// else, and a rewind that skipped them would replay the same inputs against a different
-    /// world.
-    /// </summary>
     /// <summary>Number of data banks a cartridge can carry (ADR-035).</summary>
     public const int DataBankCount = 64;
 
@@ -284,9 +281,56 @@ public sealed class VirtualConsole : IConsoleApi
     public void DataToMap(int bank, int offset, int cell, int count) =>
         CopyBank(bank, offset, cell, count, _map);
 
+    /// <inheritdoc/>
+    public void DataToSfx(int bank, int offset)
+    {
+        if (TryPayload(bank, offset, AudioBank.SfxPayloadSize, out ReadOnlySpan<byte> payload))
+        {
+            _apu.PageSfx(payload);
+        }
+    }
+
+    /// <inheritdoc/>
+    public void DataToMusic(int bank, int offset)
+    {
+        if (TryPayload(bank, offset, AudioBank.MusicPayloadSize, out ReadOnlySpan<byte> payload))
+        {
+            _apu.PageMusic(payload);
+        }
+    }
+
     /// <summary>
-    /// The one copy both bulk calls are: whatever part of the request lies inside the bank and
-    /// inside the destination is copied, the rest is dropped (ADR-035).
+    /// A whole fixed-size record inside a data bank, or nothing (ADR-036). Where
+    /// <see cref="CopyBank"/> clips a request down to the intersection, this refuses one that
+    /// does not fit: a sound payload is a record with a defined length and layout, so
+    /// <paramref name="size"/> minus one byte is not a smaller payload, it is a torn slot.
+    ///
+    /// <para>Refusing is not throwing. A bank number outside 0-63, a negative offset, an empty
+    /// bank and a bank that ends one byte early all answer false, and the caller then leaves
+    /// the table exactly as it was — the same soft, machine-independent behaviour every other
+    /// out-of-range argument on this surface has.</para>
+    /// </summary>
+    private bool TryPayload(int bank, int offset, int size, out ReadOnlySpan<byte> payload)
+    {
+        payload = default;
+        if ((uint)bank >= DataBankCount || offset < 0)
+        {
+            return false;
+        }
+        byte[] data = _dataBanks[bank];
+        if (data.Length - offset < size)
+        {
+            return false;
+        }
+        payload = data.AsSpan(offset, size);
+        return true;
+    }
+
+    /// <summary>
+    /// The one copy <see cref="DataToGfx"/> and <see cref="DataToMap"/> both are: whatever part
+    /// of the request lies inside the bank and inside the destination is copied, the rest is
+    /// dropped (ADR-035). The two sound calls above deliberately do not come through here —
+    /// see <see cref="TryPayload"/> for why clipping is wrong for a fixed-size record.
     ///
     /// <para>Clipping rather than throwing is the same choice <c>Mget</c> and <c>Sget</c> make
     /// for reads outside the field: a cartridge doing arithmetic near an edge must behave
@@ -334,11 +378,20 @@ public sealed class VirtualConsole : IConsoleApi
         }
     }
 
+    /// <summary>
+    /// Restores sheet, map, flags and the sound bank to the assets last loaded, undoing every
+    /// Sset/Mset/Fset the cartridge made and every table it paged in with
+    /// <see cref="DataToSfx"/> or <see cref="DataToMusic"/>. Resimulation starts here: assets
+    /// are simulation state like everything else, and a rewind that skipped them would replay
+    /// the same inputs against a different world — or, since ADR-036, against a different
+    /// episode's sound. The data banks themselves need no restoring: nothing can write them.
+    /// </summary>
     public void ResetAssets()
     {
         _sheetImage.CopyTo(_sheet, 0);
         _mapImage.CopyTo(_map, 0);
         _flagsImage.CopyTo(_flags, 0);
+        _apu.ResetBank();
     }
 
     private static void ValidateAsset(byte[]? source, int expectedLength, string name)

@@ -1,7 +1,7 @@
 namespace Quarp.Core.Audio;
 
 /// <summary>
-/// A cartridge's sound data: 64 SFX slots and 64 music patterns (SPEC-8 §4). The audio
+/// A cartridge's sound data: 64 SFX slots and one tracker song of 64 patterns (SPEC-8 §4). The audio
 /// counterpart of the sprite sheet and the map — supplied by the cartridge pipeline, read by
 /// the <see cref="Apu"/>.
 ///
@@ -47,16 +47,34 @@ public sealed class AudioBank
     /// <summary>Bytes of a complete SFX payload: 4352, header already stripped.</summary>
     public const int SfxPayloadSize = SfxSlotTableSize + SfxStepTableSize;
 
-    /// <summary>The channel table at the front of the music payload: 64 x 4 = 256 bytes.</summary>
-    public const int MusicChannelTableSize = PatternCount * MusicPattern.ChannelCount;
+    // --- music payload geometry (docs/AUDIO-FORMAT.md §4, ADR-041) ---
+    //
+    // These five offsets and this size are the only place in the core that knows the layout of
+    // music.bin. Everything past LoadMusicPayload is structs.
 
-    /// <summary>Bytes of a complete music payload: 320 — the channel table plus 64 flag bytes.</summary>
-    public const int MusicPayloadSize = MusicChannelTableSize + PatternCount;
+    /// <summary>Rows a pattern can hold: 32.</summary>
+    public const int SongRowCount = MusicSong.RowCount;
+
+    /// <summary>Offset of the instrument table in a music payload; the 8 bytes before it are the preamble.</summary>
+    public const int SongInstrumentTableOffset = 8;
+
+    /// <summary>Offset of the order table in a music payload.</summary>
+    public const int SongOrderTableOffset = SongInstrumentTableOffset + (MusicInstrument.Count * 4);
+
+    /// <summary>Offset of the pattern header table in a music payload.</summary>
+    public const int SongPatternTableOffset = SongOrderTableOffset + (MusicOrderEntry.Count * 4);
+
+    /// <summary>Offset of the cell table in a music payload.</summary>
+    public const int SongCellTableOffset = SongPatternTableOffset + (PatternCount * 4);
+
+    /// <summary>Bytes of a complete music payload: 33800.</summary>
+    public const int SongPayloadSize =
+        SongCellTableOffset + (PatternCount * SongRowCount * Apu.ChannelCount * 4);
 
     private readonly SfxSlot[] _sfx = new SfxSlot[SfxCount];
-    private readonly MusicPattern[] _patterns = new MusicPattern[PatternCount];
+    private readonly MusicSong _song = new();
 
-    /// <summary>An empty bank: 64 empty slots and 64 empty patterns. Playing any of it is legal and silent.</summary>
+    /// <summary>An empty bank: 64 empty slots and an empty song. Playing any of it is legal and silent.</summary>
     public AudioBank()
     {
         for (int i = 0; i < _sfx.Length; i++)
@@ -77,21 +95,11 @@ public sealed class AudioBank
         return _sfx[id];
     }
 
-    /// <summary>A music pattern. Out of range throws, for the reason <see cref="GetSfx"/> does.</summary>
-    public MusicPattern GetPattern(int index)
-    {
-        ArgumentOutOfRangeException.ThrowIfNegative(index);
-        ArgumentOutOfRangeException.ThrowIfGreaterThanOrEqual(index, PatternCount);
-        return _patterns[index];
-    }
-
-    /// <summary>Writes a music pattern. Out of range throws, for the reason <see cref="GetSfx"/> does.</summary>
-    public void SetPattern(int index, MusicPattern pattern)
-    {
-        ArgumentOutOfRangeException.ThrowIfNegative(index);
-        ArgumentOutOfRangeException.ThrowIfGreaterThanOrEqual(index, PatternCount);
-        _patterns[index] = pattern;
-    }
+    /// <summary>
+    /// The song: patterns of cells, instruments and the order — the whole of a cartridge's
+    /// music (ADR-041). This is also the model the tracker of the next wave edits.
+    /// </summary>
+    public MusicSong Song => _song;
 
     /// <summary>True when nothing in the bank can make a sound — every slot empty or all rests.</summary>
     public bool IsSilent
@@ -116,7 +124,7 @@ public sealed class AudioBank
         {
             _sfx[i].Clear();
         }
-        Array.Clear(_patterns);
+        _song.Clear();
     }
 
     /// <summary>
@@ -136,7 +144,7 @@ public sealed class AudioBank
         {
             _sfx[i].CopyFrom(other._sfx[i]);
         }
-        other._patterns.CopyTo(_patterns, 0);
+        _song.CopyFrom(other._song);
     }
 
     /// <summary>
@@ -202,30 +210,95 @@ public sealed class AudioBank
     }
 
     /// <summary>
-    /// Fills the 64 music patterns from the payload of <c>music.bin</c> (docs/AUDIO-FORMAT.md
-    /// §4): 64 x 4 channel bytes — bit 6 set means the channel plays, bits 0-5 name the slot —
-    /// followed by 64 pattern flag bytes. An empty span clears the bank's music half; any other
-    /// wrong length throws, for the reason <see cref="LoadSfxPayload"/> gives.
+    /// Fills the song from the payload of <c>music.bin</c> (docs/AUDIO-FORMAT.md §4). An empty
+    /// span clears the bank's music half — that is what a cartridge without <c>music.bin</c>
+    /// means — and any other length than <see cref="SongPayloadSize"/> throws, for the reason
+    /// <see cref="LoadSfxPayload"/> gives: a payload that is nearly the right size is a bug in
+    /// the pipeline, and playing the first 320 bytes of it would hide that bug behind a wrong
+    /// noise. There is exactly one music layout (ADR-041); the 320-byte pattern list this
+    /// console used to read is gone, and a payload of that length is refused by name.
     /// </summary>
     public void LoadMusicPayload(ReadOnlySpan<byte> payload)
     {
+        _song.Clear();
         if (payload.IsEmpty)
         {
-            Array.Clear(_patterns);
             return;
         }
-        if (payload.Length != MusicPayloadSize)
+        if (payload.Length != SongPayloadSize)
         {
             throw new ArgumentException(
-                $"A music payload must be exactly {MusicPayloadSize} bytes, got {payload.Length}.", nameof(payload));
+                $"A music payload must be exactly {SongPayloadSize} bytes, got {payload.Length}.", nameof(payload));
+        }
+        LoadSongPayload(payload);
+    }
+
+    /// <summary>
+    /// Fills the song from the payload of <c>music.bin</c> (docs/AUDIO-FORMAT.md §4): an 8-byte
+    /// preamble, 64 four-byte instruments, 128 four-byte order entries, 64 four-byte pattern
+    /// headers, and 64 x 32 x 4 cells of 32 bits, little-endian.
+    ///
+    /// <para><b>Nothing here throws and nothing here trusts.</b> The loader of
+    /// <c>Quarp.CartKit</c> has already refused a malformed file with a sentence naming the
+    /// pattern, the row and the channel; but the same bytes can also arrive from a data bank
+    /// (ADR-036), which is by definition unvalidated, and at that door the console must do
+    /// something harmless and defined. So the preamble's redundant fields are ignored, every
+    /// index is clamped by the struct that stores it, and a row past a pattern's length is simply
+    /// never read. The result is still deterministic — the same bytes give the same PCM on every
+    /// machine — it is merely not canonical.</para>
+    ///
+    /// <para>Words are assembled from bytes by hand rather than through <c>MemoryMarshal</c> or
+    /// <c>BitConverter</c>, for the reason <see cref="LoadSfxPayload"/> gives: a struct overlay
+    /// would quietly mean something else on a big-endian host.</para>
+    /// </summary>
+    private void LoadSongPayload(ReadOnlySpan<byte> payload)
+    {
+        _song.OrderLength = payload[4] | (payload[5] << 8);
+
+        for (int i = 0; i < MusicInstrument.Count; i++)
+        {
+            int at = SongInstrumentTableOffset + (i * 4);
+            _song.SetInstrument(i, new MusicInstrument(
+                payload[at],
+                payload[at + 1],
+                (payload[at + 2] & MusicInstrument.OnceFlag) != 0,
+                payload[at + 3]));
         }
 
-        for (int index = 0; index < PatternCount; index++)
+        for (int i = 0; i < MusicOrderEntry.Count; i++)
         {
-            int at = index * MusicPattern.ChannelCount;
-            _patterns[index] = MusicPattern.FromBytes(
-                payload[at], payload[at + 1], payload[at + 2], payload[at + 3],
-                payload[MusicChannelTableSize + index]);
+            int at = SongOrderTableOffset + (i * 4);
+            _song.SetOrder(i, new MusicOrderEntry(
+                payload[at] & (PatternCount - 1),
+                (MusicFlags)(payload[at + 1]
+                    & (byte)(MusicFlags.LoopStart | MusicFlags.LoopEnd | MusicFlags.Stop | MusicFlags.Jump)),
+                payload[at + 2],
+                (sbyte)payload[at + 3]));
+        }
+
+        for (int pattern = 0; pattern < PatternCount; pattern++)
+        {
+            int at = SongPatternTableOffset + (pattern * 4);
+            int rows = payload[at + 2];
+            _song.SetPatternRows(pattern, rows);
+            _song.SetPatternSpeed(pattern, rows == 0 ? 0 : payload[at] | (payload[at + 1] << 8));
+        }
+
+        for (int pattern = 0; pattern < PatternCount; pattern++)
+        {
+            for (int row = 0; row < SongRowCount; row++)
+            {
+                for (int channel = 0; channel < Apu.ChannelCount; channel++)
+                {
+                    int at = SongCellTableOffset
+                        + ((((pattern * SongRowCount) + row) * Apu.ChannelCount + channel) * 4);
+                    uint word = payload[at]
+                        | ((uint)payload[at + 1] << 8)
+                        | ((uint)payload[at + 2] << 16)
+                        | ((uint)payload[at + 3] << 24);
+                    _song.SetCell(pattern, row, channel, new MusicCell(word));
+                }
+            }
         }
     }
 }

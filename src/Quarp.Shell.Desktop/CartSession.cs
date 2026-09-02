@@ -504,6 +504,14 @@ public sealed class CartSession : IDisposable
             {
                 machine.Advance(1, input);
                 PublishAudio(machine);
+                if (input.MouseWheel != 0)
+                {
+                    // The wheel is a per-tick delta (ADR-030 п.6): the frame's notches belong
+                    // to the frame's FIRST tick alone. Position and buttons rightly repeat
+                    // across the batch — the hand really was there for all of it — but a
+                    // repeated wheel delta would scroll eight lists at x8 for one flick.
+                    input = input.WithMouseWheel(0);
+                }
             }
         }
         catch (Exception e)

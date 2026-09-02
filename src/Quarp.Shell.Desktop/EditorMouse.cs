@@ -50,9 +50,16 @@ public readonly struct EditorMouse
     /// <summary>
     /// Middle button went down this frame — the map's tile eyedropper (TIC-80
     /// <c>processMouseDrawMode</c>: the middle button puts the tile under the cursor back in
-    /// the picker). No screen reads it as a hold, so there is no MiddleDown to keep in step.
+    /// the picker).
     /// </summary>
     public bool MiddlePressed { get; init; }
+
+    /// <summary>
+    /// Middle button held. No editor screen reads it — their gesture is the press — but the
+    /// cartridge's <c>MouseBtn(MouseButton.Middle)</c> (ADR-030) is a hold by definition, and
+    /// the game input snapshot is built from this frame.
+    /// </summary>
+    public bool MiddleDown { get; init; }
 
     /// <summary>
     /// This frame's wheel movement in MonoGame detents (+120 per notch toward the user's
@@ -95,6 +102,7 @@ public readonly struct EditorMouse
             RightDown = RightDown,
             RightReleased = RightReleased,
             MiddlePressed = MiddlePressed,
+            MiddleDown = MiddleDown,
             WheelDelta = WheelDelta,
         };
     }
@@ -137,6 +145,7 @@ public sealed class EditorMouseReader
             RightDown = right,
             RightReleased = !right && wasRight,
             MiddlePressed = middle && !wasMiddle,
+            MiddleDown = middle,
             WheelDelta = wheel,
         };
     }

@@ -158,7 +158,7 @@ public class ClipboardTextTests : IDisposable
         byte[] original = RegionPixels(session);
 
         string text = session.CopyToText();
-        Assert.StartsWith("quarp1 gfx 8 8 ", text, StringComparison.Ordinal);
+        Assert.StartsWith("quarp0 gfx 8 8 ", text, StringComparison.Ordinal);
 
         // The negative control: destroy the region, and prove it is destroyed.
         session.ClearRegion();
@@ -203,7 +203,7 @@ public class ClipboardTextTests : IDisposable
         Assert.Equal(3, view.SelectionHeight);
 
         string text = MapEditorPaint.CopySelectionToText(map, view);
-        Assert.StartsWith("quarp1 map 4 3 ", text, StringComparison.Ordinal);
+        Assert.StartsWith("quarp0 map 4 3 ", text, StringComparison.Ordinal);
 
         map.ClearArea(2, 1, 4, 3);
         for (int y = 1; y <= 3; y++)
@@ -255,7 +255,7 @@ public class ClipboardTextTests : IDisposable
 
         byte[] source = SlotRecord(session, 5);
         string text = session.CopySlotToText(5);
-        Assert.StartsWith("quarp1 sfx 1 1 ", text, StringComparison.Ordinal);
+        Assert.StartsWith("quarp0 sfx 1 1 ", text, StringComparison.Ordinal);
 
         // The negative control: the destination is empty, and provably not the source already.
         Assert.True(session.SlotIsEmpty(9));
@@ -302,7 +302,7 @@ public class ClipboardTextTests : IDisposable
         Assert.Contains(-1, original);
 
         string text = session.CopySelectionToText();
-        Assert.StartsWith("quarp1 mus 2 4 ", text, StringComparison.Ordinal);
+        Assert.StartsWith("quarp0 mus 2 4 ", text, StringComparison.Ordinal);
 
         session.ClearSelectedCells();
         Assert.All(MusicCells(session, 10, 1, 4, 2), cell => Assert.Equal(-1, cell));
@@ -664,8 +664,8 @@ public class ClipboardTextTests : IDisposable
         var defaulted = new ShellModeMachine(
             library, _ => throw new InvalidOperationException("no cart is started here"), () => { });
         Assert.NotNull(defaulted.TextClipboard);
-        defaulted.TextClipboard.Write("quarp1 map 1 1 07");
-        Assert.Equal("quarp1 map 1 1 07", defaulted.TextClipboard.Read());
+        defaulted.TextClipboard.Write("quarp0 map 1 1 07");
+        Assert.Equal("quarp0 map 1 1 07", defaulted.TextClipboard.Read());
 
         // The negative control: an injected clipboard is the one that comes back.
         ITextClipboard injected = new InMemoryTextClipboard();
@@ -714,7 +714,7 @@ public class ClipboardTextTests : IDisposable
         view.UpdateSelection(3, 1);
         view.EndSelection();
         string something = MapEditorPaint.CopySelectionToText(map, view);
-        Assert.StartsWith("quarp1 map 2 1 ", something, StringComparison.Ordinal);
+        Assert.StartsWith("quarp0 map 2 1 ", something, StringComparison.Ordinal);
         Assert.Null(MapEditorRenderer.StandingNotice(map));
     }
 
@@ -746,7 +746,7 @@ public class ClipboardTextTests : IDisposable
         var readOnly = new SfxEditorSession(locked);
         Assert.True(readOnly.BankReadOnly);
         string cut = readOnly.CutSlotToText(0);
-        Assert.StartsWith("quarp1 sfx 1 1 ", cut, StringComparison.Ordinal);
+        Assert.StartsWith("quarp0 sfx 1 1 ", cut, StringComparison.Ordinal);
         Assert.Equal("CUT: SFX.TXT OWNS THIS BANK", SfxEditorRenderer.StandingNotice(readOnly));
         Assert.False(readOnly.PasteSlotFromText(0, text));
         Assert.Equal("PASTE: SFX.TXT OWNS THIS BANK", SfxEditorRenderer.StandingNotice(readOnly));

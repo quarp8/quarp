@@ -63,6 +63,17 @@ public static class SystemFontLarge
     public static uint GetGlyph(char c) =>
         c is >= FirstChar and <= LastChar ? _glyphs[c - FirstChar] : Fallback;
 
+    /// <summary>
+    /// Packed 4x6 glyph for a Unicode codepoint — the shape <c>Print</c> asks through since the
+    /// PICO-8 symbol block arrived (ADR-038). Here it answers ASCII and nothing else: this
+    /// font's glyph work is parked until the owner's post-release v2 pass
+    /// (tasks/open/later-large-font-glyphs.md — no glyph ships past the owner's eye), so the
+    /// symbols draw the same <see cref="Fallback"/> box any unknown character draws. The small
+    /// font's <see cref="SystemFont.TryGetP8Glyph"/> is where the symbols actually live.
+    /// </summary>
+    public static uint GetGlyph(int codepoint) =>
+        codepoint is >= FirstChar and <= LastChar ? _glyphs[codepoint - FirstChar] : Fallback;
+
     /// <summary>True if the glyph has an ink pixel at (col, row); col 0..3 left to right, row 0..5 top to bottom.</summary>
     public static bool IsSet(uint glyph, int col, int row) =>
         ((glyph >> ((GlyphHeight - 1 - row) * GlyphWidth + (GlyphWidth - 1 - col))) & 1) != 0;

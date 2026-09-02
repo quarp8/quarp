@@ -76,6 +76,12 @@ public class DisplayPaletteTests
     /// and it moves the day the record's layout deliberately changes, with
     /// <see cref="DisplayPalette.HashVersion"/> moving in the same commit.</para>
     ///
+    /// <para><b>Re-pinned 2026-09-01, ADR-041</b>: <c>HashVersion</c> went 1 -> 0 with every other
+    /// format number in the prototype, so the record's first byte changed and the digest moved
+    /// <c>98c930226b19a232</c> -> <c>808f7dcc6aaacdd9</c>. The layout did not change — the same
+    /// derivation over the same 223 bytes with a leading 0 instead of a leading 1 reproduces the
+    /// new value, which is what makes this a re-pin and not a discovery.</para>
+    ///
     /// <para>Break recipe: drop the version byte from <c>WriteHashBytes</c>, or write the height
     /// high byte first. The length assertion or the digest reddens, and nothing else in the suite
     /// notices — which is the reason this test states the bytes and not only the digest.</para>
@@ -106,7 +112,7 @@ public class DisplayPaletteTests
             Assert.Equal(0, record[DisplayPalette.HashHeaderLength + 128 + y]);
         }
 
-        Assert.Equal("98c930226b19a232", FrameHash.Of(display));
+        Assert.Equal("808f7dcc6aaacdd9", FrameHash.Of(display));
     }
 
     /// <summary>
@@ -139,7 +145,7 @@ public class DisplayPaletteTests
         Assert.Equal(plain.Framebuffer.Pixels, tinted.Framebuffer.Pixels);
 
         Assert.NotEqual(FrameHash.Of(plain.Display), FrameHash.Of(tinted.Display));
-        Assert.Equal("98c930226b19a232", FrameHash.Of(plain.Display));
+        Assert.Equal("808f7dcc6aaacdd9", FrameHash.Of(plain.Display));
 
         // And the picture really is a different picture: every pixel is shown as master 16.
         for (int y = 0; y < tinted.ScreenHeight; y += 7)
@@ -361,7 +367,7 @@ public class DisplayPaletteTests
 
         console.AttachCart(new PaintingCart());
         Assert.True(console.Display.IsIdentity);                  // a new run starts clean
-        Assert.Equal("98c930226b19a232", FrameHash.Of(console.Display));
+        Assert.Equal("808f7dcc6aaacdd9", FrameHash.Of(console.Display));
 
         // And a cart's own calls survive its ticks: this is drawing state, not simulation state.
         console.Tick(default);

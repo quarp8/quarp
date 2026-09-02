@@ -68,6 +68,9 @@ public class SfxEditorTests : IDisposable
 
     private sealed class Harness
     {
+        /// <summary>One detent of a real wheel, the unit both MonoGame and the router count in.</summary>
+        private const int WheelNotch = 120;
+
         private readonly ShellCommandReader _keys = new();
         private readonly EditorMouseReader _pointer = new();
         private int _wheelTotal;
@@ -157,6 +160,18 @@ public class SfxEditorTests : IDisposable
         }
 
         internal void ClickRect(Rectangle rect) => Click(rect.Center.X, rect.Center.Y);
+
+        /// <summary>
+        /// A wheel notch at (<paramref name="x"/>, <paramref name="y"/>). The value MonoGame
+        /// hands us is a running total, not a delta — <see cref="EditorMouseReader"/> is the one
+        /// that subtracts — so the harness has to accumulate it exactly the way the window does,
+        /// or a second notch in the same direction would read as no movement at all.
+        /// </summary>
+        internal void Wheel(int notches, int x, int y)
+        {
+            _wheelTotal += notches * WheelNotch;
+            Frame(NoKeys, x, y, ButtonState.Released, ButtonState.Released);
+        }
 
         /// <summary>
         /// Every screen this harness can put on show now lives on the console's own 160x90
@@ -1498,5 +1513,39 @@ public class SfxEditorTests : IDisposable
                 line.Length + SfxEditorRenderer.Summary(harness.View).Length + 1 <= layout.Chrome.LineChars,
                 $"the status line's two fields collide: \"{line}\" plus the slot field");
         }
+    }
+
+    /// <summary>
+    /// The wheel over the selector walks the bank, one slot a notch (<c>SfxEditorInput</c>) --
+    /// and until this test nothing could drive it: the field feeding
+    /// <c>MouseState.ScrollWheelValue</c> in the harness was written nowhere, so every frame
+    /// reported a still wheel and the compiler said so (CS0649). A gesture the production router
+    /// runs on every frame had no test at all, which is exactly what this section is about.
+    ///
+    /// <para>Break recipe: delete the <c>WheelDelta</c> branch from
+    /// <c>SfxEditorInput.Update</c>, or drop the minus in front of it -- the first assertion
+    /// goes red either way.</para>
+    /// </summary>
+    [Fact]
+    public void TheWheelOverTheSelectorWalksTheBankOneSlotANotch()
+    {
+        Harness harness = OpenSoundEditor(out _);
+        Rectangle slots = harness.Layout.Slots;
+        Assert.Equal(0, harness.View.SelectedSlot);
+
+        // Scrolling down walks forward through the bank: the running total falls, so the delta
+        // is negative, and the router negates it.
+        harness.Wheel(-1, slots.Center.X, slots.Center.Y);
+        Assert.Equal(1, harness.View.SelectedSlot);
+
+        harness.Wheel(-1, slots.Center.X, slots.Center.Y);
+        Assert.Equal(2, harness.View.SelectedSlot);
+
+        harness.Wheel(1, slots.Center.X, slots.Center.Y);
+        Assert.Equal(1, harness.View.SelectedSlot);
+
+        // Off the selector the wheel belongs to nobody, and the bank stays where it was.
+        harness.Wheel(-1, Off, Off);
+        Assert.Equal(1, harness.View.SelectedSlot);
     }
 }

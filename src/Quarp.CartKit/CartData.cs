@@ -39,9 +39,9 @@ public sealed class CartData
     public byte[] Sfx { get; init; } = AudioFormat.EmptySfxPayload();
 
     /// <summary>
-    /// The music bank as the console consumes it: <see cref="AudioFormat.MusicPayloadSize"/> bytes,
-    /// 64 x 4 channel bytes followed by 64 pattern flag bytes (docs/AUDIO-FORMAT.md §4). All-zero
-    /// means every pattern is empty, i.e. no music.
+    /// The music bank as the console consumes it: <see cref="MusicFormat.PayloadSize"/> bytes —
+    /// the preamble, the instruments, the order and the cells (docs/AUDIO-FORMAT.md §4). An empty
+    /// song (order length 0) means no music.
     /// </summary>
     public byte[] Music { get; init; } = AudioFormat.EmptyMusicPayload();
 

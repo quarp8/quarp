@@ -48,6 +48,18 @@ internal struct AudioChannel
     /// <summary>Pitch the previous step ended on, in 1/256 semitones — what <see cref="NoteEffect.Slide"/> slides from.</summary>
     public int PreviousPitch;
 
+    /// <summary>
+    /// One past the last step this channel is allowed to play, or 0 when the channel plays the
+    /// whole slot the ordinary way (loop and all). Non-zero only for a segment started by
+    /// <c>Sfx(id, channel, offsetSteps, lengthSteps)</c> (ADR-037): the sequencer stops the
+    /// channel when the next step would reach this bound, and the slot's own loop is not
+    /// consulted — the caller named the exact steps to play, and a loop would make that count
+    /// a lie. Zero is unambiguous as "no segment" because a real segment always ends at least
+    /// one step past its first. Simulation state like every other field here: a segment
+    /// replayed from tick 0 must stop on the same tick.
+    /// </summary>
+    public int SegmentEnd;
+
     /// <summary>Waveform phase; wraps at 2^32, one wrap per cycle.</summary>
     public uint Phase;
 
@@ -56,6 +68,46 @@ internal struct AudioChannel
 
     /// <summary>True when the music sequencer started this SFX, false when the cartridge did.</summary>
     public bool FromMusic;
+
+    // --- what a version 2 cell can put on a voice (ADR-040) ---
+    //
+    // Eight more integers, and every one of them holds its neutral value for the whole life of a
+    // version 1 run: PitchOffset 0, Gain GainUnity, SpeedOverride 0, CellEffect 0. That is not a
+    // hope, it is the proof that v1 PCM is untouched — the render path adds PitchOffset (zero),
+    // skips the gain multiply behind a `!= GainUnity` guard, and reads the slot's own speed when
+    // the override is 0. A tracker cell is the only thing that ever writes them.
+
+    /// <summary>
+    /// Pitch added to every step of the slot, in 1/256 semitones — the cell's note minus the
+    /// instrument's root, plus the order entry's transpose. This is what makes an SFX slot an
+    /// instrument instead of a fixed sound.
+    /// </summary>
+    public int PitchOffset;
+
+    /// <summary>Where a <see cref="MusicEffect.Slide"/> glide started, in 1/256 semitones.</summary>
+    public int GlideFrom;
+
+    /// <summary>Where a <see cref="MusicEffect.Slide"/> glide is going, in 1/256 semitones.</summary>
+    public int GlideTo;
+
+    /// <summary>
+    /// The voice's level in the fade's fixed-point scale, 0..<see cref="Apu.GainUnity"/> — what
+    /// a cell's volume column sets. <see cref="Apu.GainUnity"/> is "no attenuation", and it is
+    /// the value every channel holds unless a version 2 cell says otherwise.
+    /// </summary>
+    public int Gain;
+
+    /// <summary>Ticks per SFX step the instrument overrides the slot with; 0 means the slot's own speed.</summary>
+    public int SpeedOverride;
+
+    /// <summary>The <see cref="MusicEffect"/> a cell armed on this voice, or 0 for none.</summary>
+    public int CellEffect;
+
+    /// <summary>The armed effect's parameter, 1-255.</summary>
+    public int CellParam;
+
+    /// <summary>Ticks since the cell armed the effect. Masked like <see cref="Age"/>, and for the same reason.</summary>
+    public int EffectTick;
 
     /// <summary>Nothing is playing here.</summary>
     public readonly bool IsIdle => SfxId < 0;
@@ -73,9 +125,11 @@ internal struct AudioChannel
         StepTick = 0;
         Age = 0;
         PreviousPitch = 0;
+        SegmentEnd = 0;
         Phase = 0;
         Noise = NoiseSeed;
         FromMusic = false;
+        ClearCellState();
     }
 
     /// <summary>
@@ -90,8 +144,43 @@ internal struct AudioChannel
         StepTick = 0;
         Age = 0;
         PreviousPitch = firstPitch;
+        SegmentEnd = 0;
         Phase = 0;
         Noise = NoiseSeed;
         FromMusic = fromMusic;
+        ClearCellState();
+    }
+
+    /// <summary>
+    /// Puts the version 2 columns back to their neutral values: no transposition, full level, the
+    /// slot's own speed, no effect. Called from both <see cref="Stop"/> and <see cref="Start"/>,
+    /// so a voice can never inherit the pitch, the level or the effect of the note before it —
+    /// the cell that wants any of those says so, and the tracker's latching lives in the
+    /// sequencer where it can be read, not in the register file where it would be a surprise.
+    /// </summary>
+    public void ClearCellState()
+    {
+        PitchOffset = 0;
+        GlideFrom = 0;
+        GlideTo = 0;
+        Gain = Apu.GainUnity;
+        SpeedOverride = 0;
+        CellEffect = 0;
+        CellParam = 0;
+        EffectTick = 0;
+    }
+
+    /// <summary>
+    /// Starts a segment of an SFX: steps <paramref name="firstStep"/> up to but not including
+    /// <paramref name="endStep"/> (ADR-037). Everything else — phase, noise, age — restarts
+    /// exactly as <see cref="Start"/> restarts it, so a segment attacks the same way a whole
+    /// slot does; only the starting step and the stopping bound differ. Never from music: the
+    /// pattern sequencer plays whole slots only.
+    /// </summary>
+    public void StartSegment(int sfxId, int firstPitch, int firstStep, int endStep)
+    {
+        Start(sfxId, firstPitch, fromMusic: false);
+        Step = firstStep;
+        SegmentEnd = endStep;
     }
 }

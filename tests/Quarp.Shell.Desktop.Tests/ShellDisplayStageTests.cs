@@ -20,7 +20,7 @@ namespace Quarp.Shell.Desktop.Tests;
 /// </summary>
 public class ShellDisplayStageTests
 {
-    private const string IdentityDisplay = "98c930226b19a232";
+    private const string IdentityDisplay = "808f7dcc6aaacdd9";
 
     /// <summary>
     /// A fresh shell screen is at identity, and so is one that has just drawn a real screen: the

@@ -142,96 +142,56 @@ public static class AudioTextCompiler
         return payload;
     }
 
-    /// <summary>Compiles <c>music.txt</c> into a 320-byte music payload.</summary>
+    /// <summary>
+    /// Compiles <c>music.txt</c> into the one music payload there is: the 33800-byte song of
+    /// <see cref="MusicTextCompiler"/> (docs/AUDIO-FORMAT.md §6). The grammar has a single
+    /// version and the file has to say so — <c>version 0</c> on its first non-blank,
+    /// non-comment line — so a text nobody has converted is refused by name instead of being
+    /// read as something it is not (ADR-041).
+    /// </summary>
     public static byte[] CompileMusic(string text, string sourceName)
     {
         ArgumentNullException.ThrowIfNull(text);
-        const string RowShape = "<pattern> <ch0> <ch1> <ch2> <ch3> [loop-start] [loop-end] [stop]";
-        byte[] payload = AudioFormat.EmptyMusicPayload();
-        int[] definedAt = new int[AudioFormat.MusicPatternCount];
-        int lastPattern = -1;
-        string[] lines = SplitLines(text);
-
-        for (int i = 0; i < lines.Length; i++)
+        int version = MusicTextVersion(text);
+        if (version != MusicFormat.Version)
         {
-            int line = i + 1;
-            string[] tokens = Tokenize(lines[i]);
+            throw Error(sourceName, 1,
+                $"music.txt says version {version}; this build compiles version {MusicFormat.Version} and no other. "
+                + "The pattern-list grammar is gone with its format (ADR-041) — write the song as rows of notes, "
+                + "instruments and an order (docs/AUDIO-FORMAT.md §6).");
+        }
+        return MusicTextCompiler.Compile(text, sourceName);
+    }
+
+    /// <summary>
+    /// Which version a <c>music.txt</c> declares, decided by its first line that is neither blank
+    /// nor a comment: <c>version N</c> says N, and a file that says nothing answers -1. Reported
+    /// as itself rather than clamped, so the caller can refuse a text by name instead of guessing
+    /// what grammar it meant.
+    /// </summary>
+    public static int MusicTextVersion(string text)
+    {
+        ArgumentNullException.ThrowIfNull(text);
+        foreach (string line in SplitLines(text))
+        {
+            string[] tokens = Tokenize(line);
             if (tokens.Length == 0)
             {
                 continue;
             }
-            if (!char.IsAsciiDigit(tokens[0][0]))
+            if (tokens.Length >= 2
+                && string.Equals(tokens[0], "version", StringComparison.OrdinalIgnoreCase)
+                && int.TryParse(tokens[1], NumberStyles.None, CultureInfo.InvariantCulture, out int version))
             {
-                throw Error(sourceName, line,
-                    $"'{tokens[0]}' is not a pattern number; music.txt has no directives, every line is "
-                    + $"'{RowShape}'.");
+                return version;
             }
-
-            int pattern = ParseIndex(tokens, 0, AudioFormat.MusicPatternCount - 1, "pattern", sourceName, line, RowShape);
-            if (definedAt[pattern] != 0)
-            {
-                throw Error(sourceName, line, $"pattern {pattern} is already defined on line {definedAt[pattern]}.");
-            }
-            if (pattern < lastPattern)
-            {
-                throw Error(sourceName, line,
-                    $"pattern {pattern} comes after pattern {lastPattern}; rows go in ascending order.");
-            }
-            if (tokens.Length < 1 + AudioFormat.MusicChannelCount)
-            {
-                throw Error(sourceName, line,
-                    $"a pattern row needs {AudioFormat.MusicChannelCount} channel columns ('--' for a silent "
-                    + $"channel): '{RowShape}'.");
-            }
-
-            for (int channel = 0; channel < AudioFormat.MusicChannelCount; channel++)
-            {
-                string token = tokens[1 + channel];
-                int slot;
-                if (token == "--")
-                {
-                    slot = -1;
-                }
-                else if (!char.IsAsciiDigit(token[0]))
-                {
-                    throw Error(sourceName, line,
-                        $"channel {channel} '{token}': write an SFX slot number 0..{AudioFormat.SfxSlotCount - 1}, "
-                        + "or '--' for a channel that stays silent in this pattern.");
-                }
-                else
-                {
-                    slot = ParseIndex(tokens, 1 + channel, AudioFormat.SfxSlotCount - 1, $"channel {channel}",
-                        sourceName, line, RowShape);
-                }
-                AudioFormat.WritePatternChannel(payload, pattern, channel, slot);
-            }
-
-            byte flags = 0;
-            for (int t = 1 + AudioFormat.MusicChannelCount; t < tokens.Length; t++)
-            {
-                byte flag = tokens[t].ToLowerInvariant() switch
-                {
-                    "loop-start" => AudioFormat.PatternFlagLoopStart,
-                    "loop-end" => AudioFormat.PatternFlagLoopEnd,
-                    "stop" => AudioFormat.PatternFlagStop,
-                    _ => throw Error(sourceName, line,
-                        $"unknown flag '{tokens[t]}' (expected loop-start, loop-end or stop)."),
-                };
-                if ((flags & flag) != 0)
-                {
-                    throw Error(sourceName, line, $"flag '{tokens[t]}' is repeated.");
-                }
-                flags |= flag;
-            }
-            AudioFormat.WritePatternFlags(payload, pattern, flags);
-
-            definedAt[pattern] = line;
-            lastPattern = pattern;
+            return NoVersionLine;
         }
-
-        AudioFormat.ValidateMusicPayload(payload, sourceName);
-        return payload;
+        return NoVersionLine;
     }
+
+    /// <summary>What <see cref="MusicTextVersion"/> answers for a text with no version line at all.</summary>
+    public const int NoVersionLine = -1;
 
     /// <summary>Wave index for a text name, or -1.</summary>
     public static int ParseWave(string name) => IndexOfName(WaveNames, name);
@@ -448,14 +408,14 @@ public static class AudioTextCompiler
     /// Windows and the same file saved on Linux compile to the same bytes and report the same
     /// line numbers.
     /// </summary>
-    private static string[] SplitLines(string text) => text.ReplaceLineEndings("\n").Split('\n');
+    internal static string[] SplitLines(string text) => text.ReplaceLineEndings("\n").Split('\n');
 
     /// <summary>
     /// Strips the comment and splits on whitespace. A '#' only starts a comment where a token
     /// starts — at the beginning of the line or after whitespace — which is what keeps
     /// <c>C#4</c> a note.
     /// </summary>
-    private static string[] Tokenize(string line)
+    internal static string[] Tokenize(string line)
     {
         for (int i = 0; i < line.Length; i++)
         {

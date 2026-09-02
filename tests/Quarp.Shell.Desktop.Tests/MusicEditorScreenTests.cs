@@ -382,10 +382,15 @@ public class MusicEditorScreenTests : IDisposable
     // 4. The button contract.
     // ==================================================================================
 
-    /// <summary>Everything a music button click may legally touch, in one comparable value.</summary>
+    /// <summary>
+    /// Everything a music button click may legally touch, in one comparable value.
+    /// <c>SaveReported</c> is in it because since ADR-041 a dirty save cannot reach the disk —
+    /// what SAVE changes is the message the author is shown, and a button whose only effect is a
+    /// message is still a button that did something.
+    /// </summary>
     private sealed record Snapshot(
         ShellMode Mode, int Version, bool Dirty, bool CanUndo, bool CanRedo, bool PromptShown,
-        bool PlayWanted, int Cursor);
+        bool PlayWanted, int Cursor, bool SaveReported);
 
     private static Snapshot Observe(ShellModeMachine machine)
     {
@@ -393,7 +398,7 @@ public class MusicEditorScreenTests : IDisposable
         MusicEditorView view = machine.MusicView!;
         return new Snapshot(
             machine.Mode, music.Version, music.IsDirty, music.CanUndo, music.CanRedo,
-            view.ExitPromptShown, view.PlayWanted, music.CursorPattern);
+            view.ExitPromptShown, view.PlayWanted, music.CursorPattern, music.SaveError is not null);
     }
 
     /// <summary>The shell's press dispatch over the real router pieces — the same two-line mirror its four siblings use.</summary>
@@ -745,16 +750,16 @@ public class MusicEditorScreenTests : IDisposable
         byte[] audible = harness.View.AudiblePayload(session);
 
         Assert.Equal(MusicEditorSession.PayloadSize, audible.Length);
-        Assert.Equal(-1, AudioFormat.PatternChannel(audible, 0, 0));     // muted
-        Assert.Equal(2, AudioFormat.PatternChannel(audible, 0, 1));      // heard
+        Assert.Equal(-1, MusicPatternList.PatternChannel(audible, 0, 0));     // muted
+        Assert.Equal(2, MusicPatternList.PatternChannel(audible, 0, 1));      // heard
         Assert.Equal(before, session.Payload.ToArray());                 // and the song is untouched
         Assert.NotSame(before, audible);
 
         // Solo silences everything it does not name, whatever the mutes say.
         harness.View.ToggleSolo(1);
         byte[] soloed = harness.View.AudiblePayload(session);
-        Assert.Equal(-1, AudioFormat.PatternChannel(soloed, 0, 0));
-        Assert.Equal(2, AudioFormat.PatternChannel(soloed, 0, 1));
+        Assert.Equal(-1, MusicPatternList.PatternChannel(soloed, 0, 0));
+        Assert.Equal(2, MusicPatternList.PatternChannel(soloed, 0, 1));
     }
 
     /// <summary>
@@ -838,24 +843,34 @@ public class MusicEditorScreenTests : IDisposable
     }
 
     /// <summary>
-    /// Z on the prompt saves and leaves, and the bytes that land are the ones the format's owner
-    /// writes — the session's payload wrapped by <see cref="AudioFormat.WriteMusicFile"/>, which
-    /// re-validates it on the way out.
+    /// Z on the prompt still tries to save, and since ADR-041 the try comes back with a sentence
+    /// instead of a file: the pattern navigator has no format to write into, so nothing lands on
+    /// the disk. The shell's existing rule for a save that failed then applies unchanged — the
+    /// editor stays open with the message and the author's work, exactly as it does for a full
+    /// disk — and X on the prompt is still the way out (see the test above).
     /// </summary>
     [Fact]
-    public void SaveAndExitWritesTheBankTheFormatsOwnerWould()
+    public void SaveAndExitReportsThatThereIsNothingToSaveInto()
     {
         Harness harness = OpenMusicEditor(out string folder);
         harness.Session.SetChannelSlot(2, 1, 11);
         harness.Session.SetPatternFlags(2, MusicEditorSession.FlagStop);
-        byte[] expected = AudioFormat.WriteMusicFile(harness.Session.Payload);
 
         harness.Tap(Keys.Escape);
         harness.Tap(Keys.Z);
 
+        Assert.Equal(ShellMode.MusicEditor, harness.Modes.Mode);
+        Assert.False(File.Exists(MusicPath(folder)));
+        Assert.True(harness.Session.IsDirty);
+        Assert.NotNull(harness.Session.SaveError);
+        Assert.Contains("quarp audio build", harness.Session.SaveError!);
+
+        // The prompt is still up — a failed save does not close it — so the way out is X, which
+        // discards and leaves, writing nothing.
+        Assert.True(harness.Modes.MusicView!.ExitPromptShown);
+        harness.Tap(Keys.X);
         Assert.Equal(ShellMode.Library, harness.Modes.Mode);
-        Assert.True(File.Exists(MusicPath(folder)));
-        Assert.Equal(expected, File.ReadAllBytes(MusicPath(folder)));
+        Assert.False(File.Exists(MusicPath(folder)));
     }
 
     /// <summary>

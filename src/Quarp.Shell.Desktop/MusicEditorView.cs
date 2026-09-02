@@ -393,7 +393,7 @@ public sealed class MusicEditorView
     /// <em>inaudible</em> channel silenced. A copy, always — the session's bytes are the
     /// cartridge and are never touched by a listening decision (see the type note).
     ///
-    /// <para>The silencing goes through <see cref="AudioFormat.WritePatternChannel"/> rather than
+    /// <para>The silencing goes through <see cref="MusicPatternList.WritePatternChannel"/> rather than
     /// through a zeroed byte, for the same reason every writer in
     /// <see cref="MusicEditorSession"/> does: that method is the one hand that can spell a silent
     /// channel, so a muted payload is as canonical as the one on disk and the chip cannot be
@@ -411,7 +411,7 @@ public sealed class MusicEditorView
             }
             for (int pattern = 0; pattern < MusicEditorSession.PatternCount; pattern++)
             {
-                AudioFormat.WritePatternChannel(copy, pattern, channel, MusicEditorSession.SilentSlot);
+                MusicPatternList.WritePatternChannel(copy, pattern, channel, MusicEditorSession.SilentSlot);
             }
         }
         return copy;

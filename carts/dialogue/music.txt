@@ -1,11 +1,30 @@
-# carts/dialogue — the harbour theme: bass alone, two bars with the lead over it, then
-# bass alone again, and back to the start. The theme runs on channels 2 and 3 only, so
-# Sfx() — which takes the lowest free channel (API-8 §5) — always lands on 0 or 1 and the
-# page turns never cut a note out of the tune.
-#
-#  P  ch0 ch1 ch2 ch3   flags
+# music.txt — Quarp audio format version 0 (docs/AUDIO-FORMAT.md §6).
+version 0
 
-   0   --  --  02  --   loop-start
-   1   --  --  02  03
-   2   --  --  02  03
-   3   --  --  02  --   loop-end
+# instruments — an SFX slot used as a timbre, plus the note it is written at
+inst 02 sfx 02 root D-3
+inst 03 sfx 03 root A-4
+
+# order — which pattern plays, in which key, and what happens when it ends
+order
+#  ##  pat  flags
+   00  00   loop-start
+   01  01
+   02  02
+   03  03   loop-back
+
+pattern 00 rows 1 speed 96
+#  row   ch0              ch1              ch2              ch3
+   00   ===             |  ===             |  D-3 02 - ---    |  ===
+
+pattern 01 rows 1 speed 96
+#  row   ch0              ch1              ch2              ch3
+   00   ===             |  ===             |  D-3 02 - ---    |  A-4 03 - ---
+
+pattern 02 rows 1 speed 96
+#  row   ch0              ch1              ch2              ch3
+   00   ===             |  ===             |  D-3 02 - ---    |  A-4 03 - ---
+
+pattern 03 rows 1 speed 96
+#  row   ch0              ch1              ch2              ch3
+   00   ===             |  ===             |  D-3 02 - ---    |  ===

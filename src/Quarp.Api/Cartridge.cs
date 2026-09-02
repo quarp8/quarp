@@ -130,6 +130,12 @@ public abstract class Cartridge
     protected void DataToMap(int bank, int offset, int cell, int count) =>
         Q.DataToMap(bank, offset, cell, count);
 
+    /// <inheritdoc cref="IConsoleApi.DataToSfx"/>
+    protected void DataToSfx(int bank, int offset) => Q.DataToSfx(bank, offset);
+
+    /// <inheritdoc cref="IConsoleApi.DataToMusic"/>
+    protected void DataToMusic(int bank, int offset) => Q.DataToMusic(bank, offset);
+
     /// <summary>Draws text with the small 4x6 cell (40 columns on QUARP-8) and returns the x after
     /// the last glyph; '\n' starts a new line.</summary>
     protected int Print(string text, int x, int y, byte color) => Q.Print(text, x, y, color);
@@ -192,6 +198,21 @@ public abstract class Cartridge
     /// <summary>True only on the tick the button went down — the one to use for menus and turns.</summary>
     protected bool Btnp(Button button, int player = 0) => Q.Btnp(button, player);
 
+    /// <summary>Pointer x in console screen pixels, clamped to 0..ScreenWidth-1 (ADR-030).</summary>
+    protected int MouseX => Q.MouseX;
+
+    /// <summary>Pointer y in console screen pixels, clamped to 0..ScreenHeight-1.</summary>
+    protected int MouseY => Q.MouseY;
+
+    /// <summary>True while the pointer button is held on this tick.</summary>
+    protected bool MouseBtn(MouseButton button) => Q.MouseBtn(button);
+
+    /// <summary>True only on the tick the pointer button went down — Btnp's rule for the pointer.</summary>
+    protected bool MouseBtnp(MouseButton button) => Q.MouseBtnp(button);
+
+    /// <summary>Wheel steps turned on this tick, signed; zero when the wheel did not move.</summary>
+    protected int MouseWheel => Q.MouseWheel;
+
     // --- audio (SPEC-8 §4) ---
 
     /// <summary>
@@ -204,11 +225,33 @@ public abstract class Cartridge
     protected void Sfx(int id, int channel = -1) => Q.Sfx(id, channel);
 
     /// <summary>
+    /// Plays steps [<paramref name="offsetSteps"/>; <paramref name="offsetSteps"/> +
+    /// <paramref name="lengthSteps"/>) of sound effect 0-63, once, ignoring the slot's loop —
+    /// several short sounds can share one 32-step slot (ADR-037). Channel rules and
+    /// <paramref name="id"/> = -1 are those of the two-argument call; an offset outside the
+    /// slot's steps or a non-positive length plays nothing, an overhanging segment is clipped.
+    /// <para>Changes simulation state: use it in Update or Init, never in Draw.</para>
+    /// </summary>
+    protected void Sfx(int id, int channel, int offsetSteps, int lengthSteps) =>
+        Q.Sfx(id, channel, offsetSteps, lengthSteps);
+
+    /// <summary>
     /// Starts music pattern 0-63, or stops the music with the default -1. Pattern channel N
     /// plays on chip channel N, yielding to a sound effect already holding it.
     /// <para>Changes simulation state: use it in Update or Init, never in Draw.</para>
     /// </summary>
     protected void Music(int pattern = -1) => Q.Music(pattern);
+
+    /// <summary>
+    /// <see cref="Music(int)"/> with a linear fade over <paramref name="fadeTicks"/> ticks —
+    /// in on a start, out then stop on <c>Music(-1, fadeTicks)</c> — and, with a non-zero
+    /// <paramref name="channelMask"/> (bit i = channel i), a reservation of only those
+    /// channels for the music; the rest stay free for <see cref="Sfx(int, int)"/> (ADR-037).
+    /// Zero fade and zero mask are <see cref="Music(int)"/> to the bit.
+    /// <para>Changes simulation state: use it in Update or Init, never in Draw.</para>
+    /// </summary>
+    protected void Music(int pattern, int fadeTicks, int channelMask = 0) =>
+        Q.Music(pattern, fadeTicks, channelMask);
 
     // --- random / persistence / time ---
 

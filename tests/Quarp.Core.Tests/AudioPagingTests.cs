@@ -114,20 +114,7 @@ public class AudioPagingTests
     }
 
     /// <summary>Encodes the music half the same way (docs/AUDIO-FORMAT.md §4).</summary>
-    private static byte[] MusicPayload(AudioBank bank)
-    {
-        byte[] payload = new byte[AudioBank.MusicPayloadSize];
-        for (int index = 0; index < AudioBank.PatternCount; index++)
-        {
-            MusicPattern pattern = bank.GetPattern(index);
-            for (int channel = 0; channel < MusicPattern.ChannelCount; channel++)
-            {
-                payload[(index * MusicPattern.ChannelCount) + channel] = pattern.ChannelByte(channel);
-            }
-            payload[AudioBank.MusicChannelTableSize + index] = (byte)pattern.Flags;
-        }
-        return payload;
-    }
+    private static byte[] MusicPayload(AudioBank bank) => LegacyPatternBank.SongPayload(bank);
 
     /// <summary>
     /// Both payloads back to back, which is how a port actually packs an episode: one bank,
@@ -604,7 +591,7 @@ public class AudioPagingTests
     [Fact]
     public void PagingArbitraryBytesIsDefinedRatherThanAnException()
     {
-        byte[] junk = new byte[AudioBank.SfxPayloadSize + AudioBank.MusicPayloadSize];
+        byte[] junk = new byte[AudioBank.SfxPayloadSize + AudioBank.SongPayloadSize];
         for (int i = 0; i < junk.Length; i++)
         {
             junk[i] = (byte)(i * 37);

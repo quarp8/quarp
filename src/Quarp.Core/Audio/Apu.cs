@@ -79,6 +79,18 @@ public sealed class Apu
     /// </summary>
     public const int StopSfx = -1;
 
+    /// <summary>
+    /// Full music volume in the fade's fixed-point scale: amplitudes of music-driven channels
+    /// are multiplied by gain/256 (ADR-037). 256 exactly, so that at full gain the
+    /// multiply-and-divide is the identity and a run that never fades renders bit-identical
+    /// PCM to a build that never heard of fading — which is what keeps every recorded audio
+    /// hash where it is.
+    /// </summary>
+    public const int GainUnity = 256;
+
+    /// <summary>All four channel bits of a music channel mask; the mask argument is ANDed with this.</summary>
+    public const int ChannelMaskAll = (1 << ChannelCount) - 1;
+
     // Waveforms are generated at +/-32768 and scaled by (wave * amplitude) >> 15.
     private const int WaveShift = 15;
 
@@ -130,6 +142,43 @@ public sealed class Apu
     private int _musicLoopStart;
     private bool _musicPlaying;
 
+    // The order walk (ADR-040): which entry of the song's order table is playing, and the
+    // transposition that entry asked for.
+    private int _musicOrderIndex;
+    private int _musicTranspose;
+
+    // The row clock: _musicRowClock counts in 1/32 ticks and _musicRowSpeed is the row's length
+    // in the same units, so a row can be 7.5 ticks long without any accumulated drift.
+    private int _musicRow;
+    private int _musicRowClock;
+    private int _musicRowSpeed;
+    private int _musicRows;
+
+    // The instrument each channel has latched, tracker-style: a cell that names no instrument
+    // keeps the one the channel was given. Sequencer state rather than a channel register, so a
+    // note can restart the voice without losing which instrument the column last named.
+    private readonly int[] _channelInstrument = new int[ChannelCount];
+
+    // True while PreviewPattern is playing one pattern for the editor: the order is not walked
+    // and the song stops when the pattern ends.
+    private bool _musicPreview;
+
+    // The music fade (ADR-037): a linear ramp of the music channels' gain over _fadeTicks
+    // ticks, evaluated as a closed formula of the tick counter — never an accumulation, the
+    // same rule the per-step effects follow. _fadeFrom is the gain the ramp started at, which
+    // matters only for a fade-out begun in the middle of a fade-in: the volume must ramp on
+    // from where it is, not jump back to full first. _musicGain is the value the mixer reads;
+    // it holds GainUnity whenever no fade is running.
+    private int _musicGain = GainUnity;
+    private int _fadeTicks;
+    private int _fadeTick;
+    private int _fadeFrom;
+    private bool _fadeOut;
+
+    // Which channels the music may claim (ADR-037): bit i = channel i. Zero — the value every
+    // call without a mask lands on — means all four, which is the pre-mask behaviour.
+    private int _musicMask;
+
     /// <summary>A silent chip with an empty bank.</summary>
     public Apu() => Reset();
 
@@ -144,6 +193,24 @@ public sealed class Apu
 
     /// <summary>The music pattern playing, or <see cref="NoPattern"/>.</summary>
     public int CurrentPattern => _musicPattern;
+
+    /// <summary>
+    /// The order entry playing: the index into the song's order table, which is also what
+    /// <see cref="PlayMusic(int)"/> takes.
+    /// </summary>
+    public int CurrentOrder => _musicOrderIndex;
+
+    /// <summary>The row of the current pattern. For the tracker's follow mode.</summary>
+    public int CurrentRow => _musicRow;
+
+    /// <summary>The song of the live bank — the model the tracker reads and writes.</summary>
+    public MusicSong Song => _bank.Song;
+
+    /// <summary>
+    /// Entries <see cref="PlayMusic(int)"/> accepts: the song's order length. Anything at or
+    /// above it is the same silent no-op every other out-of-range index on this surface is.
+    /// </summary>
+    public int MusicEntryCount => _bank.Song.OrderLength;
 
     /// <summary>The SFX slot a channel is playing, or -1 when it is idle. For tests, HUDs and diagnostics.</summary>
     public int ChannelSfx(int channel) =>
@@ -174,6 +241,9 @@ public sealed class Apu
         _musicLength = 0;
         _musicLoopStart = 0;
         _musicPlaying = false;
+        ClearSongState();
+        ClearFade();
+        _musicMask = 0;
         _block.Clear();
         Array.Clear(_mix);
     }
@@ -311,6 +381,67 @@ public sealed class Apu
     }
 
     /// <summary>
+    /// Starts a <em>segment</em> of a sound effect: steps <paramref name="offsetSteps"/> up to
+    /// but not including <paramref name="offsetSteps"/> + <paramref name="lengthSteps"/>, on
+    /// the same channel rule as <see cref="PlaySfx(int, int)"/>. This is what
+    /// <c>Sfx(id, channel, offsetSteps, lengthSteps)</c> reaches (ADR-037), and it exists for
+    /// the cartridge that packs several short sounds into one 32-step slot because its bank is
+    /// full — PICO-8's <c>sfx(n, ch, offset, length)</c>, the call Terra's <c>ssfx</c> was
+    /// written against.
+    ///
+    /// <para><b>The segment plays once and ignores the slot's loop.</b> The caller named an
+    /// exact run of steps; honouring a loop that happens to cross the window would make
+    /// <paramref name="lengthSteps"/> a lie and hold the channel forever. A cartridge that
+    /// wants the looping whole-slot behaviour has the two-argument call, which is untouched.</para>
+    ///
+    /// <para><b>Soft edges, like every call on this surface.</b> An
+    /// <paramref name="offsetSteps"/> outside the slot's played steps (0..length-1) does
+    /// nothing at all; a <paramref name="lengthSteps"/> of 0 or less does nothing (the rule
+    /// every non-positive size follows, API-8 §1); a segment overhanging the slot's end is
+    /// clipped to it, the way <c>DataToGfx</c> clips — the steps that exist still play.
+    /// <paramref name="id"/> = -1 stops exactly as it does on the two-argument call, the
+    /// segment arguments ignored: one rule for "-1 stops", not one per overload (ADR-020).
+    /// Everything else out of range — id, channel, an empty slot — is the same silent no-op
+    /// as on <see cref="PlaySfx(int, int)"/>.</para>
+    ///
+    /// <para>Within the segment nothing sounds different: effects still run their closed
+    /// formulas off the channel's tick counters, and an arpeggio still reads its aligned
+    /// group of four from the <em>slot</em>, exactly as it does mid-slot today — the segment
+    /// chooses which steps play, never what a step sounds like.</para>
+    /// </summary>
+    public void PlaySfx(int id, int channel, int offsetSteps, int lengthSteps)
+    {
+        if (channel < -1 || channel >= ChannelCount)
+        {
+            return;
+        }
+        if (id == StopSfx)
+        {
+            StopChannel(channel);
+            return;
+        }
+        if ((uint)id >= AudioBank.SfxCount)
+        {
+            return;
+        }
+        SfxSlot slot = _bank.GetSfx(id);
+        if ((uint)offsetSteps >= (uint)slot.Length || lengthSteps <= 0)
+        {
+            // Covers the empty slot too: with Length 0 no offset is inside it.
+            return;
+        }
+        int end = lengthSteps >= slot.Length - offsetSteps
+            ? slot.Length                       // clipped to the slot, overflow-proof
+            : offsetSteps + lengthSteps;
+        int target = channel >= 0 ? channel : Allocate();
+        if (target < 0)
+        {
+            return;
+        }
+        _channels[target].StartSegment(id, NoteTable.ToPitch(slot[offsetSteps].Note), offsetSteps, end);
+    }
+
+    /// <summary>
     /// Silences one channel (0-3), or all four when <paramref name="channel"/> is -1. This is
     /// what <c>Sfx(-1, channel)</c> reaches (API-8 §5), and it changes simulation state exactly
     /// as <see cref="PlaySfx"/> does — a rewind reproduces it because the call comes from
@@ -352,20 +483,114 @@ public sealed class Apu
     /// out-of-range index on this surface. The pattern starts on this very tick, so a sound
     /// asked for in <c>Update</c> is audible in the block that same <c>Update</c> produces.</para>
     /// </summary>
-    public void PlayMusic(int pattern = -1)
+    public void PlayMusic(int pattern = -1) => PlayMusic(pattern, 0);
+
+    /// <summary>
+    /// Starts a music pattern with a fade-in, stops the music with a fade-out, and optionally
+    /// reserves channels for the music — what <c>Music(pattern, fadeTicks, channelMask)</c>
+    /// reaches (ADR-037). With <paramref name="fadeTicks"/> 0 and <paramref name="channelMask"/>
+    /// 0 this is <see cref="PlayMusic(int)"/> to the bit, which is what the one-argument call
+    /// forwards through.
+    ///
+    /// <para><b>The fade is a linear gain ramp on the music's channels</b>, measured in ticks
+    /// like everything else the chip does (SPEC-8 §7): starting a pattern with
+    /// <paramref name="fadeTicks"/> &gt; 0 ramps their gain from silence to full over that many
+    /// ticks; a negative <paramref name="pattern"/> with <paramref name="fadeTicks"/> &gt; 0
+    /// ramps from the current gain to silence and then stops the music — patterns keep turning
+    /// over underneath the ramp until it lands. The ramp mirrors the per-step fade effects'
+    /// arithmetic ((t+1)/F up, (F-1-t)/F down), is evaluated as a closed formula of the tick
+    /// counter, and scales amplitudes before the mix, so it is in the PCM and therefore in the
+    /// audio hash — deterministic, replayable, cross-architecture. Channels the cartridge's own
+    /// <see cref="PlaySfx(int, int)"/> started are never scaled. A fade-out requested while no
+    /// music plays just stops (nothing to ramp); a new pattern started mid-fade replaces the
+    /// fade with its own (or with none).</para>
+    ///
+    /// <para><b>A non-zero <paramref name="channelMask"/> (bit i = channel i, masked to the
+    /// four that exist) reserves only those channels for the music.</b> Pattern voices on
+    /// channels outside the mask are never started — the cartridge keeps those channels for
+    /// its own sounds, and the music does not take them back at the next pattern either. The
+    /// skipped voices still count toward the pattern's length, exactly like a voice skipped
+    /// because an effect holds its channel: song timing must not depend on what else is
+    /// playing, masked or not. Zero means all four channels, which is the behaviour every call
+    /// without a mask always had. The mask lives until the music stops or the next
+    /// <c>Music(pattern, ...)</c> replaces it.</para>
+    /// </summary>
+    public void PlayMusic(int pattern, int fadeTicks, int channelMask = 0)
     {
         if (pattern < 0)
         {
+            if (fadeTicks > 0 && _musicPlaying)
+            {
+                BeginFadeOut(fadeTicks);
+                return;
+            }
             StopMusic();
             return;
         }
-        if (pattern >= AudioBank.PatternCount)
+        if (pattern >= MusicEntryCount)
         {
             return;
         }
+        _musicMask = channelMask & ChannelMaskAll;
+        ReleaseMaskedVoices();
+        _musicPreview = false;
+        if (fadeTicks > 0)
+        {
+            _fadeOut = false;
+            _fadeFrom = 0;
+            _fadeTicks = fadeTicks;
+            _fadeTick = 0;
+            _musicGain = FadeGain();
+        }
+        else
+        {
+            ClearFade();
+        }
         _musicPlaying = true;
         _musicLoopStart = pattern;
-        StartPattern(pattern);
+        Array.Clear(_channelInstrument);
+        StartOrder(pattern);
+    }
+
+    /// <summary>
+    /// Plays one pattern of the song once and stops — the tracker's "play frame"
+    /// (REFERENCES-EDITORS §6.1). The order is not walked, no loop or stop flag is consulted, and
+    /// the transposition is zero: the editor hears the pattern as written, not as the song
+    /// arranges it.
+    ///
+    /// <para>Simulation state like every other call on this surface, which is why the editor may
+    /// use it and a cartridge may not: there is no <c>Preview</c> in API-8.</para>
+    /// </summary>
+    public void PreviewPattern(int pattern)
+    {
+        if ((uint)pattern >= AudioBank.PatternCount)
+        {
+            return;
+        }
+        StopMusic();
+        _musicPreview = true;
+        _musicPlaying = true;
+        _musicOrderIndex = 0;
+        _musicLoopStart = 0;
+        _musicTranspose = 0;
+        Array.Clear(_channelInstrument);
+        StartSongPattern(pattern);
+    }
+
+    /// <summary>
+    /// Puts one row of the song on the channels and leaves them ringing — the tracker's
+    /// "audition the row under the cursor". No sequencer runs afterwards, so each voice plays its
+    /// instrument to its own end; a second call replaces what the first one started.
+    /// </summary>
+    public void PreviewRow(int pattern, int row)
+    {
+        if ((uint)pattern >= AudioBank.PatternCount || (uint)row >= MusicSong.RowCount)
+        {
+            return;
+        }
+        StopMusic();
+        _musicTranspose = 0;
+        ApplyRow(pattern, row);
     }
 
     /// <summary>Stops the music and silences the channels it was driving. Channels the cartridge started keep playing.</summary>
@@ -375,6 +600,9 @@ public sealed class Apu
         _musicPattern = NoPattern;
         _musicTick = 0;
         _musicLength = 0;
+        ClearSongState();
+        ClearFade();
+        _musicMask = 0;
         for (int i = 0; i < _channels.Length; i++)
         {
             if (_channels[i].FromMusic)
@@ -382,6 +610,91 @@ public sealed class Apu
                 _channels[i].Stop();
             }
         }
+    }
+
+    /// <summary>
+    /// Lets go of the music's voices on channels the new mask does not name (ADR-037: "the mask
+    /// keeps this channel out of the music's hands, and a voice a previous song left here is let
+    /// go"). Channels the cartridge's own <see cref="PlaySfx(int, int)"/> started are never
+    /// touched — the mask is about what the <em>music</em> may hold.
+    ///
+    /// <para>It is a call of its own, made when the mask is set, because a row of a pattern
+    /// <em>skips</em> a masked channel rather than writing to it: with nothing reading those
+    /// cells there is nowhere else the release could happen. A mask of zero means all four
+    /// channels and releases nothing.</para>
+    /// </summary>
+    private void ReleaseMaskedVoices()
+    {
+        if (_musicMask == 0)
+        {
+            return;
+        }
+        for (int i = 0; i < _channels.Length; i++)
+        {
+            if ((_musicMask & (1 << i)) == 0 && _channels[i].FromMusic)
+            {
+                _channels[i].Stop();
+            }
+        }
+    }
+
+    /// <summary>The order walk and the row clock back at rest. The state every non-playing chip sits in.</summary>
+    private void ClearSongState()
+    {
+        _musicOrderIndex = 0;
+        _musicTranspose = 0;
+        _musicRow = 0;
+        _musicRowClock = 0;
+        _musicRowSpeed = 0;
+        _musicRows = 0;
+        _musicPreview = false;
+        Array.Clear(_channelInstrument);
+    }
+
+    /// <summary>No fade running, music at full gain. The state every non-fading run sits in.</summary>
+    private void ClearFade()
+    {
+        _fadeTicks = 0;
+        _fadeTick = 0;
+        _fadeFrom = 0;
+        _fadeOut = false;
+        _musicGain = GainUnity;
+    }
+
+    /// <summary>
+    /// Arms a fade-out over <paramref name="fadeTicks"/> ticks, ramping from the gain the music
+    /// has <em>right now</em> — so a stop requested in the middle of a fade-in goes on down
+    /// smoothly instead of jumping back to full volume first.
+    /// </summary>
+    private void BeginFadeOut(int fadeTicks)
+    {
+        _fadeFrom = _musicGain;
+        _fadeOut = true;
+        _fadeTicks = fadeTicks;
+        _fadeTick = 0;
+        _musicGain = FadeGain();
+    }
+
+    /// <summary>
+    /// The gain for the current fade tick, 0..<see cref="GainUnity"/> — a closed formula of
+    /// (<c>_fadeTick</c>, <c>_fadeTicks</c>, <c>_fadeFrom</c>), never an accumulation, so no
+    /// drift can build up and two runs cannot end a long fade a fraction apart. Long
+    /// arithmetic because <c>fadeTicks</c> is cartridge input and may be enormous; enormous is
+    /// a very slow fade, not an overflow.
+    /// </summary>
+    private int FadeGain()
+    {
+        if (_fadeTicks <= 0)
+        {
+            return GainUnity;
+        }
+        if (_fadeOut)
+        {
+            int remaining = _fadeTicks - 1 - _fadeTick;
+            return remaining <= 0 ? 0 : (int)((long)_fadeFrom * remaining / _fadeTicks);
+        }
+        int t = _fadeTick + 1;
+        return t >= _fadeTicks ? GainUnity : (int)((long)GainUnity * t / _fadeTicks);
     }
 
     /// <summary>
@@ -448,7 +761,22 @@ public sealed class Apu
         SfxSlot slot = _bank.GetSfx(channel.SfxId);
         SfxStep step = slot[channel.Step];
         int amplitude = Amplitude(slot, in channel, step);
-        uint increment = NoteTable.Increment(Pitch(slot, in channel, step));
+        if (channel.Gain != GainUnity)
+        {
+            // The volume column of a version 2 cell (ADR-040), in the same 0..256 fixed point the
+            // music fade uses. Guarded exactly as the fade is: at GainUnity the multiply is the
+            // identity, and the guard makes that a provable no-op rather than a claim about
+            // rounding — which is what keeps every version 1 audio hash where it is.
+            amplitude = amplitude * channel.Gain / GainUnity;
+        }
+        if (channel.FromMusic && _musicGain != GainUnity)
+        {
+            // The music fade (ADR-037). Only music-driven voices are scaled, and only while a
+            // fade is actually off unity — at GainUnity the multiply would be the identity, and
+            // the guard makes that a provable no-op instead of a claim about rounding.
+            amplitude = amplitude * _musicGain / GainUnity;
+        }
+        uint increment = NoteTable.Increment(Pitch(slot, in channel, step) + CellPitchOffset(in channel));
 
         // A silent step still runs the loop with amplitude 0 instead of taking a shortcut. The
         // phase and the noise register move exactly as they would under a sounding step, so a
@@ -562,7 +890,7 @@ public sealed class Apu
     private static int Pitch(SfxSlot slot, in AudioChannel channel, SfxStep step)
     {
         int pitch = NoteTable.ToPitch(step.Note);
-        int speed = slot.Speed;
+        int speed = StepTicks(slot, in channel);
         int t = channel.StepTick;
         switch (step.Effect)
         {
@@ -630,11 +958,62 @@ public sealed class Apu
     /// <summary>True when a step of a slot is played and is not a rest — the two ways a step can have no note.</summary>
     private static bool StepSounds(SfxSlot slot, int step) => step < slot.Length && slot[step].Volume != 0;
 
+    /// <summary>
+    /// Ticks one step of the slot lasts on this channel: the slot's own speed, unless a version 2
+    /// instrument overrode it (<see cref="MusicInstrument.Speed"/>). The override is 0 for every
+    /// voice a version 1 bank or a cartridge <c>Sfx</c> call starts, so that path reads
+    /// <c>slot.Speed</c> and nothing else — the same number, through the same expression, as
+    /// before ADR-040.
+    /// </summary>
+    private static int StepTicks(SfxSlot slot, in AudioChannel channel) =>
+        channel.SpeedOverride > 0 ? channel.SpeedOverride : slot.Speed;
+
+    /// <summary>
+    /// What the effect column of a version 2 cell adds to the pitch, in 1/256 semitones — a
+    /// closed formula of (cell, ticks since the cell), never an accumulation, the same rule every
+    /// per-step effect follows.
+    ///
+    /// <para>Zero for every voice that no cell has touched, which is every voice in a version 1
+    /// run: <see cref="AudioChannel.PitchOffset"/> and <see cref="AudioChannel.CellEffect"/> both
+    /// start at 0 and only <see cref="ApplyCell"/> writes them. Adding zero is exact, so the v1
+    /// render path is arithmetically the one it was.</para>
+    /// </summary>
+    private static int CellPitchOffset(in AudioChannel channel)
+    {
+        switch ((MusicEffect)channel.CellEffect)
+        {
+            case MusicEffect.Slide:
+                // Portamento: the glide is linear in ticks between the two offsets, and the
+                // divisor is the parameter, which validation and MusicCell both guarantee is
+                // at least 1.
+                return channel.GlideFrom
+                    + (((channel.GlideTo - channel.GlideFrom) * channel.EffectTick) / channel.CellParam);
+            case MusicEffect.Arpeggio:
+            {
+                // note, note + high nibble, note + low nibble, one every ArpeggioTicksPerNote
+                // ticks — the chord on one channel, spelled the way trackers have spelled it
+                // since Soundtracker. Three positions, not four: a tracker arpeggio is a triad.
+                // The parentheses around the whole modulo are load-bearing: a switch expression
+                // binds tighter than `%`, so `a % 3 switch {...}` would mean `a % (3 switch
+                // {...})` and divide by the arm that 3 selects.
+                int semitones = ((channel.EffectTick / ArpeggioTicksPerNote) % 3) switch
+                {
+                    1 => (channel.CellParam >> 4) & 0x0F,
+                    2 => channel.CellParam & 0x0F,
+                    _ => 0,
+                };
+                return channel.PitchOffset + (semitones * NoteTable.PitchesPerSemitone);
+            }
+            default:
+                return channel.PitchOffset;
+        }
+    }
+
     /// <summary>The amplitude a step sounds at on this tick, 0..<see cref="PeakAmplitude"/>.</summary>
     private static int Amplitude(SfxSlot slot, in AudioChannel channel, SfxStep step)
     {
         int amplitude = step.Volume * VolumeStep;
-        int speed = slot.Speed;
+        int speed = StepTicks(slot, in channel);
         int t = channel.StepTick;
         return step.Effect switch
         {
@@ -662,19 +1041,68 @@ public sealed class Apu
         {
             return;
         }
-        _musicTick++;
-        if (_musicTick >= _musicLength)
+        if (_fadeTicks > 0)
         {
-            NextPattern();
+            _fadeTick++;
+            if (_fadeTick >= _fadeTicks)
+            {
+                if (_fadeOut)
+                {
+                    // The ramp has landed on silence; the song is over. No pattern turnover on
+                    // the way out — StopMusic is the same stop a Music(-1) without a fade does.
+                    StopMusic();
+                    return;
+                }
+                ClearFade();
+            }
+            else
+            {
+                _musicGain = FadeGain();
+            }
         }
+        AdvanceSong();
+    }
+
+    /// <summary>
+    /// The row clock of a pattern. The accumulator gains one whole tick
+    /// (<see cref="MusicSong.SpeedUnitsPerTick"/>) per tick and spends one row's worth whenever
+    /// it can, so a row of 7.5 ticks alternates 7 and 8 ticks and the average is exact for as
+    /// long as the pattern runs — that is the whole point of measuring rows in 1/32 of a tick.
+    ///
+    /// <para>At most one row can fall in a tick, because a row is at least one tick long: the
+    /// file format refuses a shorter one and <see cref="MusicSong.SetPatternSpeed"/> clamps one
+    /// that arrived from a data bank. So this is an <c>if</c> and not a loop, and no song can
+    /// make the sequencer spin.</para>
+    /// </summary>
+    private void AdvanceSong()
+    {
+        _musicTick++;
+        _musicRowClock += MusicSong.SpeedUnitsPerTick;
+        if (_musicRowClock < _musicRowSpeed)
+        {
+            return;
+        }
+        _musicRowClock -= _musicRowSpeed;
+        int next = _musicRow + 1;
+        if (next >= _musicRows)
+        {
+            NextOrderEntry();
+            return;
+        }
+        _musicRow = next;
+        ApplyRow(_musicPattern, next);
     }
 
     private void AdvanceChannel(ref AudioChannel channel)
     {
         SfxSlot slot = _bank.GetSfx(channel.SfxId);
         channel.Age = (channel.Age + 1) & AgeMask;
+        if (channel.CellEffect != 0 && AdvanceCellEffect(ref channel))
+        {
+            return;
+        }
         channel.StepTick++;
-        if (channel.StepTick < slot.Speed)
+        if (channel.StepTick < StepTicks(slot, in channel))
         {
             return;
         }
@@ -682,16 +1110,63 @@ public sealed class Apu
         channel.StepTick = 0;
         channel.PreviousPitch = NoteTable.ToPitch(slot[channel.Step].Note);
         int next = channel.Step + 1;
-        if (slot.Loops && next >= slot.LoopEnd)
+        if (channel.SegmentEnd > 0)
         {
-            next = slot.LoopStart;
+            // A segment (ADR-037) plays its named steps once: no loop, and the bound was
+            // clipped to the slot when the segment started, so this is the only exit.
+            if (next >= channel.SegmentEnd)
+            {
+                channel.Stop();
+                return;
+            }
         }
-        if (next >= slot.Length)
+        else
         {
-            channel.Stop();
-            return;
+            if (slot.Loops && next >= slot.LoopEnd)
+            {
+                next = slot.LoopStart;
+            }
+            if (next >= slot.Length)
+            {
+                channel.Stop();
+                return;
+            }
         }
         channel.Step = next;
+    }
+
+    /// <summary>
+    /// Moves a version 2 cell effect on by one tick and answers whether it silenced the voice.
+    /// Only <see cref="MusicEffect.Cut"/> ever does, and only once: it stops the channel the tick
+    /// its parameter names, which is why the caller returns immediately afterwards instead of
+    /// stepping a slot that is no longer playing.
+    /// </summary>
+    private static bool AdvanceCellEffect(ref AudioChannel channel)
+    {
+        channel.EffectTick = (channel.EffectTick + 1) & AgeMask;
+        switch ((MusicEffect)channel.CellEffect)
+        {
+            case MusicEffect.Cut:
+                if (channel.EffectTick >= channel.CellParam)
+                {
+                    channel.Stop();
+                    return true;
+                }
+                break;
+            case MusicEffect.Slide:
+                if (channel.EffectTick >= channel.CellParam)
+                {
+                    // The glide has landed. Latching the target and disarming the effect is what
+                    // makes the pitch a constant afterwards instead of a formula that keeps
+                    // dividing — and what lets the next cell's glide start from a known place.
+                    channel.PitchOffset = channel.GlideTo;
+                    channel.CellEffect = 0;
+                    channel.CellParam = 0;
+                    channel.EffectTick = 0;
+                }
+                break;
+        }
+        return false;
     }
 
     private void StartSfx(ref AudioChannel channel, int id, bool fromMusic)
@@ -720,88 +1195,226 @@ public sealed class Apu
     }
 
     /// <summary>
-    /// Puts a pattern on the channels. A channel the cartridge is using is left alone — the
-    /// music misses that voice for this pattern and picks it up at the next one, which is how
-    /// a theme ducks under a sound effect without either of them being scheduled against the
-    /// other.
-    ///
-    /// <para><b>How long the pattern lasts: the longest of its active slots, and never less
-    /// than <see cref="MinPatternTicks"/>.</b> The longest rather than the shortest, so a voice
-    /// is never cut off mid-phrase by a shorter one beside it; short slots simply fall silent
-    /// and wait, which is what a tracker does when one channel's instrument ends early. The
-    /// length counts every active slot of the pattern, <em>including</em> a voice this call
-    /// skipped because the cartridge holds that channel — song timing must not depend on what
-    /// sound effects the game happened to be playing, or a rewound run could turn its patterns
-    /// over at different ticks. A pattern with nothing active is a rest of exactly
-    /// <see cref="MinPatternTicks"/> ticks and then the song goes on: silence is a section, not
-    /// the end of the piece, which is what the <see cref="MusicFlags.Stop"/> flag is for.</para>
+    /// Puts an <em>order entry</em> on the channels: which pattern plays, in which key, and what
+    /// the entry remembers about looping (ADR-040).
     /// </summary>
-    private void StartPattern(int index)
+    private void StartOrder(int entry)
     {
-        _musicPattern = index;
-        _musicTick = 0;
-        MusicPattern pattern = _bank.GetPattern(index);
-        if ((pattern.Flags & MusicFlags.LoopStart) != 0)
+        _musicOrderIndex = entry;
+        MusicOrderEntry order = _bank.Song.Order(entry);
+        if ((order.Flags & MusicFlags.LoopStart) != 0)
         {
-            _musicLoopStart = index;
+            _musicLoopStart = entry;
         }
-
-        int length = 0;
-        for (int i = 0; i < ChannelCount; i++)
-        {
-            int sfx = pattern[i];
-            ref AudioChannel channel = ref _channels[i];
-            if (sfx < 0 || _bank.GetSfx(sfx).IsEmpty)
-            {
-                // Nothing to play on this voice — including a slot the author left empty, which
-                // has to behave the same way Sfx() on it does, or "silent" and "silent" would
-                // be two different states.
-                if (channel.FromMusic)
-                {
-                    channel.Stop();
-                }
-                continue;
-            }
-            SfxSlot slot = _bank.GetSfx(sfx);
-            if (slot.LengthTicks > length)
-            {
-                length = slot.LengthTicks;
-            }
-            if (channel.IsIdle || channel.FromMusic)
-            {
-                StartSfx(ref channel, sfx, fromMusic: true);
-            }
-        }
-
-        _musicLength = Math.Max(length, MinPatternTicks);
+        _musicTranspose = order.Transpose;
+        StartSongPattern(order.Pattern);
     }
 
     /// <summary>
-    /// What happens when a pattern ends: stop, loop back, or fall through to the next index.
-    /// Stop is checked first so a pattern carrying both flags ends the song rather than looping
-    /// forever — the reading a composer who wrote both almost certainly meant. Running past
-    /// pattern 63 stops too, so a song that forgot its flags ends instead of wrapping to its
-    /// own start.
+    /// Starts a pattern: the row clock goes back to zero and row 0 is put on the
+    /// channels this very tick, so a song asked for in <c>Update</c> is audible in the block that
+    /// same <c>Update</c> produces — the promise <see cref="PlayMusic(int)"/> already made.
+    ///
+    /// <para><b>The row clock restarts at every pattern rather than carrying its remainder
+    /// across.</b> The cost is at most 31/32 of a tick per pattern; what it buys is that a
+    /// pattern's length is a pure function of the pattern, which is what the tracker's ruler and
+    /// <see cref="MusicSong.PatternTicks"/> need it to be.</para>
+    ///
+    /// <para>An unused pattern (no rows) is a bar of rest of exactly
+    /// <see cref="MinPatternTicks"/>: silence is a section, not the end of the piece, which is
+    /// what the <see cref="MusicFlags.Stop"/> flag is for.</para>
     /// </summary>
-    private void NextPattern()
+    private void StartSongPattern(int index)
     {
-        MusicFlags flags = _bank.GetPattern(_musicPattern).Flags;
+        _musicPattern = index;
+        _musicTick = 0;
+        _musicRow = 0;
+        _musicRowClock = 0;
+        MusicSong song = _bank.Song;
+        int rows = song.PatternRows(index);
+        if (rows == 0)
+        {
+            _musicRows = 1;
+            _musicRowSpeed = MinPatternTicks * MusicSong.SpeedUnitsPerTick;
+            _musicLength = MinPatternTicks;
+            return;
+        }
+        _musicRows = rows;
+        _musicRowSpeed = Math.Max(song.PatternSpeed(index), MusicSong.MinRowSpeed);
+        _musicLength = song.PatternTicks(index);
+        ApplyRow(index, 0);
+    }
+
+    /// <summary>
+    /// Puts one row of a pattern on the channels.
+    ///
+    /// <para>Three reasons a cell is skipped: an empty cell says nothing; a channel outside the
+    /// music's mask is not the music's to take (ADR-037); and a channel the cartridge is using is
+    /// left alone, so a theme ducks under a sound effect and picks the voice back up when the
+    /// effect ends. What is <em>not</em> a reason is the length of the pattern: a pattern lasts
+    /// rows x speed whatever the channels do, which is one fewer way for song timing to depend on
+    /// what else is playing.</para>
+    /// </summary>
+    private void ApplyRow(int pattern, int row)
+    {
+        MusicSong song = _bank.Song;
+        for (int i = 0; i < ChannelCount; i++)
+        {
+            MusicCell cell = song.Cell(pattern, row, i);
+            if (cell.IsEmpty)
+            {
+                continue;
+            }
+            if (_musicMask != 0 && (_musicMask & (1 << i)) == 0)
+            {
+                continue;
+            }
+            ref AudioChannel channel = ref _channels[i];
+            if (!channel.IsIdle && !channel.FromMusic)
+            {
+                continue;
+            }
+            ApplyCell(ref channel, i, cell, song);
+        }
+    }
+
+    /// <summary>
+    /// What one cell does to one voice, column by column, in the order a tracker applies them:
+    /// the instrument latches first (it decides what a note in the same cell will sound like),
+    /// then the note, then the level, then the effect.
+    ///
+    /// <para><b>A note-on restarts the instrument; a slide does not.</b> That is the whole
+    /// difference between the two, and it is why <see cref="MusicEffect.Slide"/> is checked
+    /// before the note is started rather than after. A slide on an idle voice has nothing to
+    /// glide from, so it starts the note instead and the effect is dropped — the soft-edge rule
+    /// the whole audio surface follows.</para>
+    ///
+    /// <para><b>A note-on without a volume column goes back to full level.</b> The alternative —
+    /// keeping the level of the note before it — makes one quiet cell poison every note after it
+    /// with nothing on screen to explain why.</para>
+    /// </summary>
+    private void ApplyCell(ref AudioChannel channel, int index, MusicCell cell, MusicSong song)
+    {
+        if (cell.HasInstrument)
+        {
+            _channelInstrument[index] = cell.Instrument;
+        }
+        if (cell.Kind == MusicNoteKind.Off)
+        {
+            channel.Stop();
+            return;
+        }
+
+        MusicInstrument instrument = song.Instrument(_channelInstrument[index]);
+        bool glide = cell.Effect == MusicEffect.Slide && !channel.IsIdle && channel.FromMusic;
+        if (cell.Kind == MusicNoteKind.On && !glide && !StartCellNote(ref channel, cell.Note, instrument))
+        {
+            // The instrument names an empty slot: this note is silence, exactly as Sfx() on an
+            // empty slot is, and the voice was stopped rather than left ringing the note before.
+            return;
+        }
+        if (channel.IsIdle)
+        {
+            // Nothing sounding to put a level or an effect on.
+            return;
+        }
+        if (cell.HasVolume)
+        {
+            channel.Gain = (cell.Volume * GainUnity) / MaxVolume;
+        }
+
+        channel.CellEffect = 0;
+        channel.CellParam = 0;
+        channel.EffectTick = 0;
+        switch (cell.Effect)
+        {
+            case MusicEffect.Arpeggio:
+            case MusicEffect.Cut:
+                channel.CellEffect = (int)cell.Effect;
+                channel.CellParam = cell.Param;
+                break;
+            case MusicEffect.Slide when glide:
+                channel.CellEffect = (int)MusicEffect.Slide;
+                channel.CellParam = cell.Param;
+                channel.GlideFrom = channel.PitchOffset;
+                channel.GlideTo = NoteOffset(cell.Note, instrument);
+                break;
+        }
+    }
+
+    /// <summary>
+    /// Starts an instrument's slot on a voice at the cell's note. False when the instrument names
+    /// an empty slot, in which case the voice is stopped: "the slot is empty" has to mean the
+    /// same thing here as it means to <see cref="PlaySfx(int, int)"/>, or silence would have two
+    /// states.
+    /// </summary>
+    private bool StartCellNote(ref AudioChannel channel, int note, MusicInstrument instrument)
+    {
+        SfxSlot slot = _bank.GetSfx(instrument.Slot);
+        if (slot.IsEmpty)
+        {
+            channel.Stop();
+            return false;
+        }
+        channel.Start(instrument.Slot, NoteTable.ToPitch(slot[0].Note), fromMusic: true);
+        channel.PitchOffset = NoteOffset(note, instrument);
+        channel.SpeedOverride = instrument.Speed;
+        if (instrument.Once)
+        {
+            // "Play the slot once, loop and all ignored" is exactly a segment over the whole slot
+            // (ADR-037), so it is spelled as one instead of as a second rule in AdvanceChannel.
+            channel.SegmentEnd = slot.Length;
+        }
+        return true;
+    }
+
+    /// <summary>
+    /// How far the slot's steps move, in 1/256 semitones: the cell's note minus the instrument's
+    /// root, plus the transposition the order entry asked for. Both are plain semitone counts, so
+    /// this is one multiply and no table.
+    /// </summary>
+    private int NoteOffset(int note, MusicInstrument instrument) =>
+        (note - instrument.Root + _musicTranspose) * NoteTable.PitchesPerSemitone;
+
+    /// <summary>
+    /// What happens when a pattern ends: stop, jump, loop back, or fall through to the next
+    /// order entry. Stop is checked first so an entry carrying both flags ends the song rather
+    /// than looping forever — the reading a composer who wrote both almost certainly meant — and
+    /// an explicit jump beats the remembered loop start for the same reason. Running past the
+    /// last entry stops too, so a song that forgot its flags ends instead of wrapping to its own
+    /// start.
+    /// </summary>
+    private void NextOrderEntry()
+    {
+        if (_musicPreview)
+        {
+            // PreviewPattern plays one pattern and stops: the order belongs to the song, not to
+            // the row the editor is auditioning.
+            StopMusic();
+            return;
+        }
+        MusicFlags flags = _bank.Song.Order(_musicOrderIndex).Flags;
         if ((flags & MusicFlags.Stop) != 0)
         {
             StopMusic();
             return;
         }
-        if ((flags & MusicFlags.LoopEnd) != 0)
+        if ((flags & MusicFlags.Jump) != 0)
         {
-            StartPattern(_musicLoopStart);
+            StartOrder(_bank.Song.Order(_musicOrderIndex).Target);
             return;
         }
-        int next = _musicPattern + 1;
-        if (next >= AudioBank.PatternCount)
+        if ((flags & MusicFlags.LoopEnd) != 0)
+        {
+            StartOrder(_musicLoopStart);
+            return;
+        }
+        int next = _musicOrderIndex + 1;
+        if (next >= MusicEntryCount)
         {
             StopMusic();
             return;
         }
-        StartPattern(next);
+        StartOrder(next);
     }
 }

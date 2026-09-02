@@ -441,9 +441,10 @@ public class TimeMachineIntegrationTests
         clean.ReplayForward(100);
         byte[] cleanFrame = Snapshot(clean);
 
-        // One byte of the first run record: swap Right for Left. Offset 302 is where the log
-        // starts (REPLAY-FORMAT §2), and +0 within a record is player 0's mask.
-        bytes[ReplayLog.PrologueSize] = (byte)(1 << (int)Button.Left);
+        // One byte of the first run record: swap Right for Left. The button stream starts after
+        // the header and its own stream header (REPLAY-FORMAT §2, §3), and +0 within a record is
+        // player 0's mask.
+        bytes[ReplayLog.HeaderSize + ReplayLog.StreamHeaderSize] = (byte)(1 << (int)Button.Left);
         var corrupted = new TimeMachine(
             ConsoleProfile.Profile8, reference.Cartridge, header, ReplayLog.FromBytes(bytes, out _));
         corrupted.Boot();

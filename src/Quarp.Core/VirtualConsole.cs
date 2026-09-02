@@ -201,7 +201,7 @@ public sealed class VirtualConsole : IConsoleApi
 
     /// <summary>
     /// Replaces the cartridge's sound data from the two header-stripped payloads the cartridge
-    /// pipeline produces — <c>sfx.bin</c>'s 4352 bytes and <c>music.bin</c>'s 320
+    /// pipeline produces — <c>sfx.bin</c>'s 4352 bytes and <c>music.bin</c>'s 33800
     /// (docs/AUDIO-FORMAT.md; <see cref="AudioBank.LoadSfxPayload"/> documents the layout).
     /// A null or empty payload means an empty bank, so a cartridge without sound is silent
     /// rather than broken. Anything currently playing stops.
@@ -293,7 +293,7 @@ public sealed class VirtualConsole : IConsoleApi
     /// <inheritdoc/>
     public void DataToMusic(int bank, int offset)
     {
-        if (TryPayload(bank, offset, AudioBank.MusicPayloadSize, out ReadOnlySpan<byte> payload))
+        if (TryPayload(bank, offset, AudioBank.SongPayloadSize, out ReadOnlySpan<byte> payload))
         {
             _apu.PageMusic(payload);
         }
@@ -461,13 +461,25 @@ public sealed class VirtualConsole : IConsoleApi
         _apu.RenderTick();
     }
 
-    /// <summary>Shared tick prologue: rotate input, count the tick, hand back the live cartridge.</summary>
+    /// <summary>
+    /// Shared tick prologue: rotate input, count the tick, hand back the live cartridge.
+    /// The pointer is clamped to the screen here, not at the read: what MouseX answers is a
+    /// deterministic function of the recorded state, so a replay whose log carries an
+    /// off-screen coordinate (a hand-built script, a foreign tool) still resimulates
+    /// identically — the clamp is part of the simulation (ADR-030 п.6).
+    /// </summary>
     private Cartridge BeginTick(InputState input)
     {
         Cartridge cart = _cart
             ?? throw new InvalidOperationException("No cartridge attached; call AttachCart first.");
         _previous = _input;
-        _input = input;
+        _input = input.MouseX < _width && input.MouseY < _height
+            ? input
+            : input.WithMouse(
+                Math.Min(input.MouseX, _width - 1),
+                Math.Min(input.MouseY, _height - 1),
+                input.MouseButtons,
+                input.MouseWheel);
         _ticks++;
         return cart;
     }
@@ -933,13 +945,22 @@ public sealed class VirtualConsole : IConsoleApi
     /// <summary>
     /// Draws text with the named system font and returns the x after the last glyph.
     /// '\n' starts a new line at the original x <em>by the chosen font's line height</em>; other
-    /// control characters are skipped; characters outside ASCII 32-126 draw a hollow box.
+    /// control characters are skipped; characters outside ASCII 32-126 and the PICO-8 symbol
+    /// block (ADR-038) draw a hollow box.
     /// <para>The cursor rule — advance per character, newline, what is skipped — lives here
     /// once and reads the metrics out of whichever font was asked for, so the two fonts cannot
     /// drift into two different text layouts. What is per-font is only the glyph blit, because
     /// only the bit packing differs (15 bits of 3x5 against 24 bits of 4x6), and the small
     /// font's blit is the one it always had: every pixel it has ever written must stay where it
     /// is, or every recorded frame hash moves.</para>
+    /// <para>Three codepoint rules joined the loop with ADR-038, all touching only characters
+    /// that used to draw the box: a surrogate pair spelling a mapped astral symbol (🅾, 🐱, 😐)
+    /// is one glyph and one advance, while an unmapped pair keeps drawing its two boxes; the
+    /// emoji variation selector U+FE0F, which C# string literals like "🅾️" and "⬅️" carry
+    /// invisibly, is skipped without advancing, like the control characters; and the mapped
+    /// symbols themselves draw from <see cref="SystemFont.TryGetP8Glyph"/> in the small font,
+    /// and the fallback box in the large one until its own glyph pass
+    /// (tasks/open/later-large-font-glyphs.md).</para>
     /// </summary>
     public int Print(string text, int x, int y, byte color, Font font)
     {
@@ -952,25 +973,40 @@ public sealed class VirtualConsole : IConsoleApi
         int lineHeight = large ? SystemFontLarge.CellHeight : SystemFont.CellHeight;
         int cursorX = x;
         int cursorY = y;
-        foreach (char c in text)
+        for (int i = 0; i < text.Length; i++)
         {
+            char c = text[i];
             if (c == '\n')
             {
                 cursorX = x;
                 cursorY += lineHeight;
                 continue;
             }
-            if (c < ' ')
+            if (c < ' ' || c == '\uFE0F')
             {
+                // U+FE0F is the emoji variation selector "🅾️" and "⬅️" smuggle in; it is
+                // presentation advice, not a character, and draws nothing (ADR-038).
                 continue;
+            }
+            int codepoint = c;
+            if (char.IsHighSurrogate(c) && i + 1 < text.Length && char.IsLowSurrogate(text[i + 1]))
+            {
+                // Consume the pair only when it spells a symbol the console knows: an unmapped
+                // pair keeps its historical two boxes, so nothing printed before ADR-038 moves.
+                int paired = char.ConvertToUtf32(c, text[i + 1]);
+                if (SystemFont.TryGetP8Glyph(paired, out _))
+                {
+                    codepoint = paired;
+                    i++;
+                }
             }
             if (large)
             {
-                DrawLargeGlyph(SystemFontLarge.GetGlyph(c), cursorX, cursorY, color);
+                DrawLargeGlyph(SystemFontLarge.GetGlyph(codepoint), cursorX, cursorY, color);
             }
             else
             {
-                DrawSmallGlyph(SystemFont.GetGlyph(c), cursorX, cursorY, color);
+                DrawSmallGlyph(SystemFont.GetGlyph(codepoint), cursorX, cursorY, color);
             }
             cursorX += advance;
         }
@@ -1100,6 +1136,24 @@ public sealed class VirtualConsole : IConsoleApi
     public bool Btnp(Button button, int player = 0) =>
         _input.IsDown(player, button) && !_previous.IsDown(player, button);
 
+    // --- pointer (ADR-030). Reads of the tick's snapshot, like Btn: legal in Draw. ---
+
+    /// <summary>Pointer x in screen pixels; the snapshot was clamped to 0..ScreenWidth-1 in BeginTick.</summary>
+    public int MouseX => _input.MouseX;
+
+    /// <summary>Pointer y in screen pixels; the snapshot was clamped to 0..ScreenHeight-1 in BeginTick.</summary>
+    public int MouseY => _input.MouseY;
+
+    /// <summary>True while the pointer button is held on this tick; an unknown button reads false.</summary>
+    public bool MouseBtn(MouseButton button) => _input.MouseIsDown(button);
+
+    /// <summary>True on the tick the pointer button went down: held now and not held on the previous tick — Btnp's rule.</summary>
+    public bool MouseBtnp(MouseButton button) =>
+        _input.MouseIsDown(button) && !_previous.MouseIsDown(button);
+
+    /// <summary>Wheel steps turned on this tick, signed; zero when the wheel did not move.</summary>
+    public int MouseWheel => _input.MouseWheel;
+
     // --- audio (SPEC-8 §4; the chip itself is Quarp.Core.Audio.Apu) ---
 
     /// <summary>
@@ -1114,11 +1168,37 @@ public sealed class VirtualConsole : IConsoleApi
     public void Sfx(int id, int channel = -1) => _apu.PlaySfx(id, channel);
 
     /// <summary>
+    /// Starts the segment of SFX <paramref name="id"/> covering steps
+    /// <paramref name="offsetSteps"/> up to but not including <paramref name="offsetSteps"/> +
+    /// <paramref name="lengthSteps"/> (ADR-037; PICO-8's <c>sfx(n, ch, o, l)</c>). Channel
+    /// rules are those of the two-argument call, -1 auto-pick included; an offset outside the
+    /// slot's steps and a non-positive length do nothing; a segment overhanging the slot's end
+    /// is clipped to it; the slot's loop is ignored — the segment plays its steps once.
+    /// <paramref name="id"/> = -1 stops exactly as it does on the two-argument call.
+    /// Simulation state, so never from Draw (QRP1004).
+    /// </summary>
+    public void Sfx(int id, int channel, int offsetSteps, int lengthSteps) =>
+        _apu.PlaySfx(id, channel, offsetSteps, lengthSteps);
+
+    /// <summary>
     /// Starts music pattern <paramref name="pattern"/> (0-63); a negative pattern — including
     /// the default — stops the music, and 64 or more is a no-op. Simulation state, so never
     /// from Draw (QRP1004).
     /// </summary>
     public void Music(int pattern = -1) => _apu.PlayMusic(pattern);
+
+    /// <summary>
+    /// <see cref="Music(int)"/> with a fade and an optional channel reservation (ADR-037).
+    /// A positive <paramref name="fadeTicks"/> ramps the music's channels linearly from
+    /// silence to full gain over that many ticks on a start, and from the current gain to
+    /// silence — then stops — on <c>Music(-1, fadeTicks)</c>. A non-zero
+    /// <paramref name="channelMask"/> (bit i = channel i) reserves only those channels for the
+    /// music; the rest stay the cartridge's, and the skipped voices still count toward pattern
+    /// length. Zero fade and zero mask are exactly <see cref="Music(int)"/>.
+    /// Simulation state, so never from Draw (QRP1004).
+    /// </summary>
+    public void Music(int pattern, int fadeTicks, int channelMask = 0) =>
+        _apu.PlayMusic(pattern, fadeTicks, channelMask);
 
     // --- deterministic random ---
 

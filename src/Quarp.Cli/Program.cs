@@ -357,8 +357,15 @@ switch (command)
         Console.WriteLine("  --every N on any of the three above also prints checkpoint lines");
         Console.WriteLine("  'tick <n> <frame-hash> <audio-hash>', which is what the cross-architecture");
         Console.WriteLine("  CI comparison reads; the audio column covers every block, not just this tick.");
+        Console.WriteLine("  --input entries are tick:spec on two tracks: tick:buttons (L R U D O X S,");
+        Console.WriteLine("  empty releases; a Btnp tap is \"60:D,61:\") and tick:mX.Y[LRM][wN] for the");
+        Console.WriteLine("  pointer (screen pixels, held mouse buttons, wheel steps per tick; a click is");
+        Console.WriteLine("  \"60:m80.45L,61:m80.45\"). Every recording is a .qrpr of format version 0,");
+        Console.WriteLine("  pointer or no pointer — one living version, one layout (ADR-041).");
         Console.WriteLine("  quarp audio build <cart> [--check]");
         Console.WriteLine("                               compile sfx.txt/music.txt into sfx.bin/music.bin");
+        Console.WriteLine("                               (music.txt opens with 'version 0' and is a tracker song)");
+        Console.WriteLine("  quarp audio check <cart>     report what the banks on disk hold: version, geometry, use");
         Console.WriteLine("  quarp audio silence --ticks N");
         Console.WriteLine("                               print the PCM digest of N ticks in which nothing sounds");
         Console.WriteLine("                               (what CI compares a run against to catch a mute cart)");
@@ -484,6 +491,13 @@ static int RunSim(string path, int ticks, int every, string? inputScript)
     catch (CartLoadException e)
     {
         Console.Error.WriteLine($"quarp: {e.Message}");
+        return 1;
+    }
+    catch (FormatException e)
+    {
+        // A broken --input script is an argument error, not a cartridge crash — the message
+        // already says which entry and what the grammar wanted instead.
+        Console.Error.WriteLine($"quarp sim: {e.Message}");
         return 1;
     }
     catch (Exception e) when (e is IOException or UnauthorizedAccessException)

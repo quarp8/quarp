@@ -9,15 +9,17 @@ namespace Quarp.CartKit;
 /// enforces. The full specification with a hexdump is docs/AUDIO-FORMAT.md; this type is that
 /// document in code, and the two are meant to be read together.
 ///
-/// <para><b>Shape.</b> Both files are a fixed 8-byte header followed by a fixed-size payload:
+/// <para><b>Shape.</b> Both files are a fixed 8-byte header followed by a fixed-size payload.
+/// This type owns <c>sfx.bin</c> outright and owns the shared header of both; the music payload's
+/// four tables belong to <see cref="MusicFormat"/>:
 /// <code>
-/// sfx.bin    8 + 256 + 4096 = 4360 bytes    music.bin  8 + 256 + 64 = 328 bytes
+/// sfx.bin    8 + 256 + 4096 = 4360 bytes    music.bin  8 + 33800 = 33808 bytes
 ///   0   4  magic "QSFX"                       0   4  magic "QMUS"
-///   4   2  u16 version                        4   2  u16 version
+///   4   2  u16 version (0)                    4   2  u16 version (0)
 ///   6   1  u8  slot count  (64)               6   1  u8  pattern count (64)
 ///   7   1  u8  step count  (32)               7   1  u8  channel count (4)
-///   8 256  64 slot headers, 4 bytes each      8 256  64 x 4 channel bytes
-/// 264 4096 64 x 32 step words (u16 LE)      264  64  64 pattern flag bytes
+///   8 256  64 slot headers, 4 bytes each      8 ...  the song (MusicFormat)
+/// 264 4096 64 x 32 step words (u16 LE)
 /// </code>
 /// The header is stripped at load time: what reaches <see cref="CartData"/> and, through it,
 /// the console is the <b>payload only</b>, the same way <see cref="CartData.Gfx"/> holds decoded
@@ -31,8 +33,12 @@ namespace Quarp.CartKit;
 /// </summary>
 public static class AudioFormat
 {
-    /// <summary>Format version written into both banks; see docs/AUDIO-FORMAT.md §7 for the reading rules.</summary>
-    public const int Version = 1;
+    /// <summary>
+    /// Format version written into both banks: 0, and the only one this build reads. The
+    /// prototype keeps exactly one living version of every format (ADR-041); see
+    /// docs/AUDIO-FORMAT.md §7 for the reading rules.
+    /// </summary>
+    public const int Version = 0;
 
     /// <summary>Bytes before the payload in both files: magic, version, and the two geometry bytes.</summary>
     public const int HeaderSize = 8;
@@ -61,17 +67,12 @@ public static class AudioFormat
     public const int SfxFileSize = HeaderSize + SfxPayloadSize;
 
     // --- music.bin geometry (SPEC-8 §4: 64 patterns x 4 channels) ---
+    //
+    // Only the two counts the shared file header carries live here; the payload's tables, its
+    // size and its rules belong to MusicFormat.
 
     public const int MusicPatternCount = 64;
     public const int MusicChannelCount = 4;
-    public const int MusicChannelTableSize = MusicPatternCount * MusicChannelCount;
-    public const int MusicFlagTableSize = MusicPatternCount;
-
-    /// <summary>What the console receives: 320 bytes, header stripped.</summary>
-    public const int MusicPayloadSize = MusicChannelTableSize + MusicFlagTableSize;
-
-    /// <summary>Size of <c>music.bin</c> on disk — fixed.</summary>
-    public const int MusicFileSize = HeaderSize + MusicPayloadSize;
 
     // --- field ranges ---
 
@@ -101,19 +102,6 @@ public static class AudioFormat
     public const int EffectFadeIn = 4;
     public const int EffectFadeOut = 5;
     public const int EffectArpeggio = 6;
-
-    /// <summary>Bit 6 of a music channel byte: this channel plays in this pattern.</summary>
-    public const byte MusicChannelActiveBit = 0x40;
-
-    /// <summary>Bits 0-5 of a music channel byte: which SFX slot it plays.</summary>
-    public const byte MusicChannelSlotMask = 0x3F;
-
-    public const byte PatternFlagLoopStart = 0x01;
-    public const byte PatternFlagLoopEnd = 0x02;
-    public const byte PatternFlagStop = 0x04;
-
-    /// <summary>Every flag bit that has a meaning; the rest must be zero.</summary>
-    public const byte PatternFlagMask = PatternFlagLoopStart | PatternFlagLoopEnd | PatternFlagStop;
 
     /// <summary>File magic of the SFX bank, ASCII "QSFX".</summary>
     public static ReadOnlySpan<byte> SfxMagic => "QSFX"u8;
@@ -203,50 +191,13 @@ public static class AudioFormat
     public static void WriteStep(Span<byte> sfxPayload, int slot, int step, ushort word) =>
         BinaryPrimitives.WriteUInt16LittleEndian(sfxPayload.Slice(StepOffset(slot, step), SfxStepSize), word);
 
-    /// <summary>The SFX slot a music channel plays in this pattern, or -1 when the channel is silent.</summary>
-    public static int PatternChannel(ReadOnlySpan<byte> musicPayload, int pattern, int channel)
-    {
-        byte value = musicPayload[pattern * MusicChannelCount + channel];
-        return (value & MusicChannelActiveBit) == 0 ? -1 : value & MusicChannelSlotMask;
-    }
-
-    /// <summary>Section flags of a pattern: loop start, loop end, stop.</summary>
-    public static byte PatternFlags(ReadOnlySpan<byte> musicPayload, int pattern) =>
-        musicPayload[MusicChannelTableSize + pattern];
-
-    /// <summary>
-    /// True when no channel plays in this pattern. That is a bar of rest, not the end of the
-    /// song: the sequencer holds it for <c>Apu.MinPatternTicks</c> and moves on, and what ends a
-    /// song is <see cref="PatternFlagStop"/> or running off the end of the 64 patterns.
-    /// </summary>
-    public static bool PatternIsEmpty(ReadOnlySpan<byte> musicPayload, int pattern)
-    {
-        for (int channel = 0; channel < MusicChannelCount; channel++)
-        {
-            if (PatternChannel(musicPayload, pattern, channel) >= 0)
-            {
-                return false;
-            }
-        }
-        return true;
-    }
-
-    /// <summary>Sets a music channel; <paramref name="slot"/> below zero makes the channel silent.</summary>
-    public static void WritePatternChannel(Span<byte> musicPayload, int pattern, int channel, int slot) =>
-        musicPayload[pattern * MusicChannelCount + channel] =
-            slot < 0 ? (byte)0 : (byte)(MusicChannelActiveBit | (slot & MusicChannelSlotMask));
-
-    /// <summary>Sets a pattern's section flags.</summary>
-    public static void WritePatternFlags(Span<byte> musicPayload, int pattern, byte flags) =>
-        musicPayload[MusicChannelTableSize + pattern] = flags;
-
     // --- files ---
 
     /// <summary>An all-zero SFX payload: 64 empty slots, which is exactly what silence is.</summary>
     public static byte[] EmptySfxPayload() => new byte[SfxPayloadSize];
 
-    /// <summary>An all-zero music payload: 64 patterns with no active channel.</summary>
-    public static byte[] EmptyMusicPayload() => new byte[MusicPayloadSize];
+    /// <summary>The empty song — see <see cref="MusicFormat.EmptyPayload"/>, which owns its shape.</summary>
+    public static byte[] EmptyMusicPayload() => MusicFormat.EmptyPayload();
 
     /// <summary>
     /// Validates <c>sfx.bin</c> and returns its payload. <paramref name="sourceName"/> prefixes
@@ -254,19 +205,26 @@ public static class AudioFormat
     /// </summary>
     public static byte[] ParseSfxFile(ReadOnlySpan<byte> file, string sourceName)
     {
-        ReadHeader(file, SfxMagic, sourceName, SfxFileSize, SfxSlotCount, SfxStepCount, "slots", "steps");
+        int version = ReadHeader(file, SfxMagic, sourceName, SfxSlotCount, SfxStepCount, "slots", "steps");
+        RequireFileSize(file, sourceName, SfxFileSize, version);
         byte[] payload = file[HeaderSize..].ToArray();
         ValidateSfxPayload(payload, sourceName);
         return payload;
     }
 
-    /// <summary>Validates <c>music.bin</c> and returns its payload.</summary>
+    /// <summary>
+    /// Validates <c>music.bin</c> and returns its payload. The 8-byte header is this type's
+    /// (magic, version 0, 64 patterns x 4 channels); everything after it belongs to
+    /// <see cref="MusicFormat"/>. There is one layout and one size, so a file of any other length
+    /// is refused by name rather than read as something else (ADR-041).
+    /// </summary>
     public static byte[] ParseMusicFile(ReadOnlySpan<byte> file, string sourceName)
     {
-        ReadHeader(file, MusicMagic, sourceName, MusicFileSize, MusicPatternCount, MusicChannelCount,
+        int version = ReadHeader(file, MusicMagic, sourceName, MusicPatternCount, MusicChannelCount,
             "patterns", "channels");
+        RequireFileSize(file, sourceName, MusicFormat.FileSize, version);
         byte[] payload = file[HeaderSize..].ToArray();
-        ValidateMusicPayload(payload, sourceName);
+        MusicFormat.ValidatePayload(payload, sourceName);
         return payload;
     }
 
@@ -277,10 +235,13 @@ public static class AudioFormat
         return WriteFile(SfxMagic, SfxSlotCount, SfxStepCount, payload);
     }
 
-    /// <summary>Wraps a validated payload into the bytes of <c>music.bin</c>.</summary>
+    /// <summary>
+    /// Wraps a validated payload into the bytes of <c>music.bin</c>. The payload is validated
+    /// before the header goes on, so this type cannot write a bank it would refuse to read.
+    /// </summary>
     public static byte[] WriteMusicFile(ReadOnlySpan<byte> payload)
     {
-        ValidateMusicPayload(payload, "music.bin");
+        MusicFormat.ValidatePayload(payload, "music.bin");
         return WriteFile(MusicMagic, MusicPatternCount, MusicChannelCount, payload);
     }
 
@@ -403,44 +364,8 @@ public static class AudioFormat
         }
     }
 
-    /// <summary>Every rule a channel table and a flag table have to obey.</summary>
-    public static void ValidateMusicPayload(ReadOnlySpan<byte> payload, string sourceName)
-    {
-        if (payload.Length != MusicPayloadSize)
-        {
-            throw new CartLoadException(
-                $"{sourceName}: music payload is {payload.Length} bytes, must be exactly {MusicPayloadSize}.");
-        }
-
-        for (int pattern = 0; pattern < MusicPatternCount; pattern++)
-        {
-            for (int channel = 0; channel < MusicChannelCount; channel++)
-            {
-                byte value = payload[pattern * MusicChannelCount + channel];
-                if ((value & 0x80) != 0)
-                {
-                    throw new CartLoadException(
-                        $"{sourceName}: pattern {pattern} channel {channel}: bit 7 is reserved and must be 0 "
-                        + $"(byte 0x{value:x2}).");
-                }
-                if ((value & MusicChannelActiveBit) == 0 && (value & MusicChannelSlotMask) != 0)
-                {
-                    throw new CartLoadException(
-                        $"{sourceName}: pattern {pattern} channel {channel}: the channel is off (bit 6 clear) but "
-                        + $"still names slot {value & MusicChannelSlotMask}; a silent channel stores 0x00.");
-                }
-            }
-
-            byte flags = PatternFlags(payload, pattern);
-            if ((flags & ~PatternFlagMask) != 0)
-            {
-                throw new CartLoadException(
-                    $"{sourceName}: pattern {pattern}: flag bits 3-7 are reserved and must be 0 (byte 0x{flags:x2}).");
-            }
-        }
-    }
-
-    private static byte[] WriteFile(ReadOnlySpan<byte> magic, int countA, int countB, ReadOnlySpan<byte> payload)
+    private static byte[] WriteFile(
+        ReadOnlySpan<byte> magic, int countA, int countB, ReadOnlySpan<byte> payload)
     {
         byte[] file = new byte[HeaderSize + payload.Length];
         magic.CopyTo(file);
@@ -453,14 +378,15 @@ public static class AudioFormat
 
     /// <summary>
     /// The header checks, in the order that produces the most useful message: too short, wrong
-    /// magic, unreadable version, wrong geometry, wrong length. Checking the size first would
-    /// answer "4360 bytes expected" to someone who handed us a PNG.
+    /// magic, wrong version, wrong geometry. Checking the size first would answer "4360 bytes
+    /// expected" to someone who handed us a PNG, so the length check lives in
+    /// <see cref="RequireFileSize"/> and happens after the header has been read.
     /// </summary>
-    private static void ReadHeader(
+    /// <returns>The format version the header declares — always <see cref="Version"/>, or it threw.</returns>
+    private static int ReadHeader(
         ReadOnlySpan<byte> file,
         ReadOnlySpan<byte> magic,
         string sourceName,
-        int expectedFileSize,
         int expectedCountA,
         int expectedCountB,
         string nameA,
@@ -479,15 +405,11 @@ public static class AudioFormat
                 + "— this is not a Quarp audio bank.");
         }
         int version = BinaryPrimitives.ReadUInt16LittleEndian(file.Slice(4, 2));
-        if (version == 0)
-        {
-            throw new CartLoadException($"{sourceName}: format version 0 does not exist.");
-        }
-        if (version > Version)
+        if (version != Version)
         {
             throw new CartLoadException(
-                $"{sourceName}: written by a newer Quarp (audio format {version}), this build understands up to "
-                + $"{Version}.");
+                $"{sourceName}: audio format version {version}; this build reads version {Version} and no other "
+                + "(ADR-041 — the prototype keeps one living version of every format).");
         }
         int countA = file[6];
         int countB = file[7];
@@ -497,10 +419,21 @@ public static class AudioFormat
                 $"{sourceName}: header says {countA} {nameA} x {countB} {nameB}, profile 8 is "
                 + $"{expectedCountA} x {expectedCountB} (SPEC-8 §4).");
         }
-        if (file.Length != expectedFileSize)
+        return version;
+    }
+
+    /// <summary>
+    /// The length check, run once the header has been read: both banks are fixed-size, so any
+    /// other length is an error, and the message names the version so "this is 328 bytes" and
+    /// "a bank is 33808" arrive together instead of as a riddle.
+    /// </summary>
+    private static void RequireFileSize(ReadOnlySpan<byte> file, string sourceName, int expected, int version)
+    {
+        if (file.Length != expected)
         {
             throw new CartLoadException(
-                $"{sourceName}: {file.Length} bytes, must be exactly {expectedFileSize} — the banks are fixed-size.");
+                $"{sourceName}: {file.Length} bytes, a version {version} bank is exactly {expected} — the banks are "
+                + "fixed-size.");
         }
     }
 

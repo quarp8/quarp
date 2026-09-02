@@ -52,9 +52,13 @@ public class AudioAssetLoadingTests : IDisposable
 
     private static byte[] SongPayload()
     {
-        byte[] payload = AudioFormat.EmptyMusicPayload();
-        AudioFormat.WritePatternChannel(payload, 0, 0, 0);
-        AudioFormat.WritePatternFlags(payload, 0, AudioFormat.PatternFlagLoopStart);
+        byte[] payload = MusicFormat.EmptyPayload();
+        MusicFormat.WriteInstrument(payload, 0, slot: 0, root: 48, flags: 0, speed: 0);
+        MusicFormat.WriteOrder(payload, 0, pattern: 0, flags: MusicFormat.OrderLoopStart, target: 0, transpose: 0);
+        MusicFormat.WritePattern(payload, 0, speed: MusicFormat.DefaultRowSpeed, rows: 2);
+        MusicFormat.WriteCell(payload, 0, 0, 0, MusicFormat.PackCell(
+            48, MusicFormat.NoteOn, 0, true, 6, true, MusicFormat.EffectNone, 0));
+        MusicFormat.WritePreamble(payload, 1);
         return payload;
     }
 
@@ -65,9 +69,10 @@ public class AudioAssetLoadingTests : IDisposable
     {
         CartData data = CartSource.Load(MakeCartFolder());
         Assert.Equal(AudioFormat.SfxPayloadSize, data.Sfx.Length);
-        Assert.Equal(AudioFormat.MusicPayloadSize, data.Music.Length);
+        Assert.Equal(MusicFormat.PayloadSize, data.Music.Length);
         Assert.All(data.Sfx, b => Assert.Equal(0, b));
-        Assert.All(data.Music, b => Assert.Equal(0, b));
+        Assert.Equal(0, MusicFormat.OrderLength(data.Music));
+        Assert.Equal(0, MusicFormat.PatternRows(data.Music, 0));
     }
 
     [Fact]
@@ -84,7 +89,8 @@ public class AudioAssetLoadingTests : IDisposable
         Assert.Equal(BlipPayload(), data.Sfx);
         Assert.Equal(2, AudioFormat.SlotLength(data.Sfx, 0));
         Assert.Equal(3, AudioFormat.SlotSpeed(data.Sfx, 0));
-        Assert.Equal(0, AudioFormat.PatternChannel(data.Music, 0, 0));
+        Assert.Equal(1, MusicFormat.OrderLength(data.Music));
+        Assert.Equal(2, MusicFormat.PatternRows(data.Music, 0));
     }
 
     [Fact]
@@ -162,7 +168,8 @@ public class AudioAssetLoadingTests : IDisposable
 
         CartData data = CartSource.Load(package);
         Assert.All(data.Sfx, b => Assert.Equal(0, b));
-        Assert.All(data.Music, b => Assert.Equal(0, b));
+        Assert.Equal(0, MusicFormat.OrderLength(data.Music));
+        Assert.Equal(0, MusicFormat.PatternRows(data.Music, 0));
     }
 
     // --- identity ---
@@ -191,7 +198,8 @@ public class AudioAssetLoadingTests : IDisposable
         byte[] before = CartIdentity.Compute(CartSource.Load(folder));
 
         byte[] altered = SongPayload();
-        AudioFormat.WritePatternChannel(altered, 0, 1, 7);
+        MusicFormat.WriteCell(altered, 0, 1, 0, MusicFormat.PackCell(
+            50, MusicFormat.NoteOn, 0, true, 6, true, MusicFormat.EffectNone, 0));
         File.WriteAllBytes(Path.Combine(folder, "music.bin"), AudioFormat.WriteMusicFile(altered));
         Assert.NotEqual(before, CartIdentity.Compute(CartSource.Load(folder)));
     }

@@ -390,6 +390,6 @@ public class SpriteEditorScreenGoldenTests : IDisposable
     [Fact]
     public void NoTabInTheStripIsPaintedAsADeadButtonAnyMore()
     {
-        Assert.Empty(Enum.GetValues<EditorButton>().Where(EditorIcons.IsStub));
+        Assert.DoesNotContain(Enum.GetValues<EditorButton>(), EditorIcons.IsStub);
     }
 }

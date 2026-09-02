@@ -445,6 +445,22 @@ public sealed class DrawPurityTests
         """));
 
     /// <summary>
+    /// ADR-030: the five pointer members are reads of the tick's input snapshot, classified
+    /// exactly as Btn/Btnp — legal in Draw. This is a cartridge's most natural line of code
+    /// (the cursor sprite is the cartridge's to draw, at MouseX/MouseY, from Draw), so the
+    /// rule staying quiet here is as load-bearing as it firing on Sfx.
+    /// </summary>
+    [Fact]
+    public Task MouseReadsInDrawAreFine() => VerifyAsync(CartVerifier.Cart("""
+            public override void Draw()
+            {
+                bool held = MouseBtn(MouseButton.Left);
+                bool pressed = MouseBtnp(MouseButton.Right);
+                Pset(MouseX + MouseWheel, MouseY, held || pressed ? (byte)7 : (byte)8);
+            }
+        """));
+
+    /// <summary>
     /// Inverted in M3. This asserted the opposite for two milestones, while Sfx and Music were
     /// no-ops. They now write channel and sequencer state inside the APU, and Draw runs once
     /// per frame on a clock that has nothing to do with ticks — at 30 fps it runs half as
@@ -473,6 +489,34 @@ public sealed class DrawPurityTests
                 Sfx(3);
                 Sfx(4, 2);
                 Music();
+            }
+        """));
+
+    /// <summary>
+    /// ADR-037 added overloads, not names: the segment Sfx and the fade/mask Music are the
+    /// same simulation writes through wider doors, and the analyzer takes every overload of a
+    /// listed name (<c>MutatingConsoleApi.Collect</c> walks <c>GetMembers(name)</c>), so they
+    /// must be caught with no analyzer change at all. This test is the proof that promise
+    /// held — written the day the overloads were added, not the day one slipped through.
+    /// </summary>
+    [Fact]
+    public Task Adr037AudioOverloadsInDrawAreRejected() => VerifyAsync(CartVerifier.Cart("""
+            public override void Draw()
+            {
+                {|QRP1004:Sfx|}(0, -1, 8, 8);
+                {|QRP1004:Music|}(1, 30, 7);
+                {|QRP1004:Music|}(-1, 60);
+            }
+        """));
+
+    /// <summary>And on the tick path the new overloads are as legal as the old ones.</summary>
+    [Fact]
+    public Task Adr037AudioOverloadsInUpdateAreFine() => VerifyAsync(CartVerifier.Cart("""
+            public override void Update()
+            {
+                Sfx(0, -1, 8, 8);
+                Music(1, 30, 7);
+                Music(-1, 60);
             }
         """));
 

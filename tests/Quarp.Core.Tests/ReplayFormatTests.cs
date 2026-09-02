@@ -24,9 +24,21 @@ public class ReplayFormatTests
     // test that reused the decoder's own offsets would follow the layout wherever it drifted,
     // and these numbers are a published promise (REPLAY-FORMAT §2, §7 — any change is v2).
     private const int PrologueSize = 302;
+    private const int ExtendedHeaderSize = 8;      // engine version + stream mask
+    private const int StreamHeaderSize = 5;        // u8 stream id + u32 run count
     private const int RunSize = 4;
     private const int VersionOffset = 4;
     private const int TickCountOffset = 298;
+
+    /// <summary>Where the first button run starts: 302 + 8 of extended header + 5 of stream header.</summary>
+    private const int ButtonRunsOffset = PrologueSize + ExtendedHeaderSize + StreamHeaderSize;
+
+    /// <summary>Bytes a whole file of <paramref name="runs"/> button runs and <paramref name="pointerRuns"/> pointer runs takes.</summary>
+    private static int FileSize(int runs, int pointerRuns = 1) =>
+        ButtonRunsOffset + (runs * RunSize) + StreamHeaderSize + (pointerRuns * PointerRunSize);
+
+    /// <summary>Bytes per pointer run: dx, dy, flags, wheel, u16 repeat.</summary>
+    private const int PointerRunSize = 6;
 
     /// <summary>Bit 7: reserved for an eighth button, and the reason files that set it are refused.</summary>
     private const byte ReservedBit = 0x80;
@@ -75,10 +87,10 @@ public class ReplayFormatTests
         return ReplayLog.FromBytes(bytes, out header);
     }
 
-    private static int MaskOffset(int run, int player) => PrologueSize + (run * RunSize) + player;
+    private static int MaskOffset(int run, int player) => ButtonRunsOffset + (run * RunSize) + player;
 
     private static int RepeatOf(byte[] file, int run) =>
-        BinaryPrimitives.ReadUInt16LittleEndian(file.AsSpan(PrologueSize + (run * RunSize) + 2));
+        BinaryPrimitives.ReadUInt16LittleEndian(file.AsSpan(ButtonRunsOffset + (run * RunSize) + 2));
 
     // --- the control every negative test below leans on ---
 
@@ -99,11 +111,15 @@ public class ReplayFormatTests
     [Fact]
     public void TheLayoutIsTheOneTheDocumentDescribes()
     {
-        // §2 and §8: a 302-byte header plus four bytes per run, and nothing else.
+        // §2 and §8: a 302-byte fixed head, eight bytes of engine version and stream mask, then
+        // the two streams, each behind a five-byte header. One version, one layout (ADR-041).
         Assert.Equal(PrologueSize, ReplayLog.PrologueSize);
+        Assert.Equal(PrologueSize + ExtendedHeaderSize, ReplayLog.HeaderSize);
+        Assert.Equal(StreamHeaderSize, ReplayLog.StreamHeaderSize);
         Assert.Equal(RunSize, ReplayLog.RunSize);
+        Assert.Equal(PointerRunSize, ReplayLog.PointerRunSize);
         Assert.Equal(65535, ReplayLog.MaxRepeat);
-        Assert.Equal(PrologueSize + (2 * RunSize), ValidFile().Length);
+        Assert.Equal(FileSize(2), ValidFile().Length);
     }
 
     // --- the reserved bit (REPLAY-FORMAT §3, §4 row "бит 7") ---
@@ -163,7 +179,7 @@ public class ReplayFormatTests
         }
 
         // Deliberately brittle. An eighth button takes bit 7, and on that day a file that sets
-        // it stops being corrupt and starts being a version 2 file (§7) — whoever adds the
+        // it stops being corrupt and starts being a change to the one living version (§7) — whoever adds the
         // button has to come here and decide that, rather than find out from a user's replay.
         Assert.Equal(0, ReplayLog.KnownButtons & ReservedBit);
         Assert.Equal(0x7f, ReplayLog.KnownButtons);
@@ -190,7 +206,9 @@ public class ReplayFormatTests
         ReplayHeader header = Header();
         byte[] file = log.ToBytes(header);
 
-        Assert.Equal(PrologueSize + (2 * RunSize), file.Length);
+        // The still pointer splits at the same u16 ceiling the buttons do, so both streams hold
+        // two runs — the canonicity rule is per stream (ADR-030 п.5).
+        Assert.Equal(FileSize(2, pointerRuns: 2), file.Length);
         Assert.Equal(RightMask, file[MaskOffset(0, 0)]);
         Assert.Equal(RightMask, file[MaskOffset(1, 0)]);
         Assert.Equal(ReplayLog.MaxRepeat, RepeatOf(file, 0));
@@ -239,11 +257,17 @@ public class ReplayFormatTests
         Assert.Contains("QRPR", e.Message);
     }
 
+    // Since ADR-041 the prototype reads version 0 and nothing else: the numbers below are the
+    // versions this project itself once wrote (1 and 2) and one that does not exist yet (3).
+    // All four are refused the same way, because "an old file" and "a file from the future" are
+    // the same answer when there is one living version.
     [Theory]
-    [InlineData(false, 0)]
+    [InlineData(false, 1)]
     [InlineData(false, 2)]
-    [InlineData(true, 0)]
+    [InlineData(false, 3)]
+    [InlineData(true, 1)]
     [InlineData(true, 2)]
+    [InlineData(true, 3)]
     public void AVersionThisBuildDoesNotUnderstandIsRefused(bool fromStream, int version)
     {
         byte[] file = ValidFile();
@@ -254,32 +278,19 @@ public class ReplayFormatTests
     }
 
     [Fact]
-    public void ABodyThatIsNotAWholeNumberOfRunsIsRefused()
+    public void TrailingBytesAfterTheLastStreamAreRefused()
     {
         byte[] valid = ValidFile();
-        var file = new byte[valid.Length + 2];   // two bytes of a third run
+        var file = new byte[valid.Length + RunSize];   // bytes the stream headers never promised
         valid.CopyTo(file, 0);
-
-        var e = Assert.Throws<ReplayFormatException>(() => { ReplayLog.FromBytes(file, out _); });
-        Assert.Contains($"{RunSize}-byte runs", e.Message);
-
-        // The stream reader is different here by design, not by omission: a .qrpr may sit
-        // inside a larger container, so bytes past the last run belong to the container.
-        using var stream = new MemoryStream(file, writable: false);
-        Assert.Equal(ValidTicks, ReplayLog.ReadFrom(stream, out _).TickCount);
-    }
-
-    [Fact]
-    public void TrailingBytesAfterTheLastRunAreRefused()
-    {
-        byte[] valid = ValidFile();
-        var file = new byte[valid.Length + RunSize];   // a whole extra run the header never promised
-        valid.CopyTo(file, 0);
-        file[MaskOffset(2, 0)] = RightMask;
-        BinaryPrimitives.WriteUInt16LittleEndian(file.AsSpan(PrologueSize + (2 * RunSize) + 2), 5);
 
         var e = Assert.Throws<ReplayFormatException>(() => { ReplayLog.FromBytes(file, out _); });
         Assert.Contains("trailing", e.Message);
+
+        // The stream reader is different here by design, not by omission: a .qrpr may sit
+        // inside a larger container, so bytes past the last stream belong to the container.
+        using var stream = new MemoryStream(file, writable: false);
+        Assert.Equal(ValidTicks, ReplayLog.ReadFrom(stream, out _).TickCount);
     }
 
     [Theory]
@@ -288,7 +299,7 @@ public class ReplayFormatTests
     public void ARepeatCountOfZeroIsRefused(bool fromStream)
     {
         byte[] file = ValidFile();
-        BinaryPrimitives.WriteUInt16LittleEndian(file.AsSpan(PrologueSize + 2), 0);
+        BinaryPrimitives.WriteUInt16LittleEndian(file.AsSpan(ButtonRunsOffset + 2), 0);
 
         var e = Assert.Throws<ReplayFormatException>(() => { Read(file, fromStream, out _); });
         Assert.Contains("run 0", e.Message);
@@ -303,8 +314,8 @@ public class ReplayFormatTests
         BinaryPrimitives.WriteUInt32LittleEndian(file.AsSpan(TickCountOffset), (uint)(ValidTicks + 1));
 
         var e = Assert.Throws<ReplayFormatException>(() => { Read(file, fromStream, out _); });
-        Assert.Contains($"{ValidTicks + 1} ticks", e.Message);
-        Assert.Contains($"{ValidTicks}", e.Message);
+        Assert.Contains($"{ValidTicks} ticks", e.Message);
+        Assert.Contains($"{ValidTicks + 1}", e.Message);
     }
 
     [Theory]

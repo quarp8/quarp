@@ -84,7 +84,7 @@ public class MusicEditorSessionTests : IDisposable
 
     /// <summary>The raw flag byte of a pattern — after the 256-byte channel table.</summary>
     private static int FlagByte(MusicEditorSession session, int pattern) =>
-        session.Payload[AudioFormat.MusicChannelTableSize + pattern];
+        session.Payload[MusicPatternList.ChannelTableSize + pattern];
 
     // ==================================================================================
     // 1. Absent file is silence, and a clean session writes nothing.
@@ -118,97 +118,6 @@ public class MusicEditorSessionTests : IDisposable
         Assert.True(session.Save());
         Assert.Null(session.SaveError);
         Assert.Empty(Directory.GetFileSystemEntries(folder));
-    }
-
-    [Fact]
-    public void CleanSessionOverAnExistingBankDoesNotTouchTheFile()
-    {
-        string folder = CartFolder(DemoMusic("snake"));
-        string path = Path.Combine(folder, MusicEditorSession.MusicFileName);
-        var stamp = File.GetLastWriteTimeUtc(path);
-
-        var session = new MusicEditorSession(folder);
-        Assert.True(session.Save());
-
-        Assert.Equal(stamp, File.GetLastWriteTimeUtc(path));
-    }
-
-    // ==================================================================================
-    // 2. Round trip on the real snake song.
-    // ==================================================================================
-
-    [Fact]
-    public void SnakeSongOpensUnchangedAndSavesByteIdentical()
-    {
-        byte[] original = DemoMusic("snake");
-        string folder = CartFolder(original);
-        string path = Path.Combine(folder, MusicEditorSession.MusicFileName);
-
-        var session = new MusicEditorSession(folder);
-        Assert.False(session.IsDirty);
-        Assert.True(session.Save());
-        Assert.Equal(original, File.ReadAllBytes(path));
-
-        // And the song really is snake's: four patterns on the two upper channels, loop-start on
-        // the first and loop-end on the last. These numbers were READ OUT of carts/snake/music.bin
-        // rather than assumed from music.txt — the first cut of this test guessed channel 0 and
-        // three patterns and was wrong on both, which is exactly what a round-trip test is for.
-        Assert.Equal(2, session.ChannelSlot(0, 2));
-        Assert.True(session.ChannelIsSilent(0, 0));
-        Assert.True(session.ChannelIsSilent(0, 1));
-        Assert.True(session.ChannelIsSilent(0, 3));
-        Assert.Equal(2, session.ChannelSlot(1, 2));
-        Assert.Equal(4, session.ChannelSlot(1, 3));
-        Assert.Equal(3, session.ChannelSlot(2, 2));
-        Assert.Equal(5, session.ChannelSlot(2, 3));
-        Assert.True(session.HasFlag(0, MusicEditorSession.FlagLoopStart));
-        Assert.True(session.HasFlag(3, MusicEditorSession.FlagLoopEnd));
-        Assert.True(session.PatternIsEmpty(4));
-    }
-
-    [Fact]
-    public void DirtySaveDiffersInExactlyTheEditedByteAndPuttingItBackReproducesTheFile()
-    {
-        byte[] original = DemoMusic("snake");
-        string folder = CartFolder(original);
-        string path = Path.Combine(folder, MusicEditorSession.MusicFileName);
-
-        var session = new MusicEditorSession(folder);
-        session.SetChannelSlot(1, 2, 5);
-        Assert.True(session.IsDirty);
-        Assert.True(session.Save());
-
-        byte[] written = File.ReadAllBytes(path);
-        Assert.Equal(original.Length, written.Length);
-        var differing = new List<int>();
-        for (int i = 0; i < original.Length; i++)
-        {
-            if (original[i] != written[i])
-            {
-                differing.Add(i);
-            }
-        }
-        Assert.Single(differing);
-        Assert.Equal(AudioFormat.HeaderSize + 1 * MusicEditorSession.ChannelCount + 2, differing[0]);
-
-        // Putting it back means writing the slot that was there (2), not clearing the cell:
-        // pattern 1 channel 2 sounds in snake's song, and clearing it would leave the file one
-        // byte away from the original forever.
-        session.SetChannelSlot(1, 2, 2);
-        Assert.True(session.Save());
-        Assert.Equal(original, File.ReadAllBytes(path));
-    }
-
-    [Fact]
-    public void MusicTextMakesTheSongReadOnly()
-    {
-        string folder = CartFolder(DemoMusic("snake"), musicSource: true);
-        var session = new MusicEditorSession(folder);
-
-        Assert.True(session.BankReadOnly);
-        var thrown = Assert.Throws<InvalidOperationException>(() => session.SetChannelSlot(0, 0, 1));
-        Assert.Contains(MusicEditorSession.MusicSourceFileName, thrown.Message);
-        Assert.False(session.IsDirty);
     }
 
     // ==================================================================================
@@ -478,44 +387,40 @@ public class MusicEditorSessionTests : IDisposable
     }
 
     // ==================================================================================
-    // 8. A broken file is refused, by name and with the numbers in it.
+    // 8. Any music.bin at all is refused, by name and with a sentence saying what to do.
     // ==================================================================================
 
+    /// <summary>
+    /// Since ADR-041 the console has one music format — the tracker song — and this screen is
+    /// the pattern navigator, which cannot show it. So opening a cart that has a
+    /// <c>music.bin</c> refuses by name and points at the text and the compiler, and a dirty
+    /// session says the same thing instead of writing a file no loader would read. Both are
+    /// scaffolding until the next wave's tracker replaces this screen.
+    /// </summary>
     [Fact]
-    public void ATruncatedBankIsRefusedWithBothLengths()
+    public void AnyExistingSongIsRefusedWithASentenceThatSaysWhatToDo()
     {
-        byte[] truncated = DemoMusic("snake")[..100];
-        string folder = CartFolder(truncated);
+        string folder = CartFolder(DemoMusic("snake"));
 
         var thrown = Assert.Throws<CartLoadException>(() => new MusicEditorSession(folder));
         Assert.Contains(MusicEditorSession.MusicFileName, thrown.Message);
-        Assert.Contains("100", thrown.Message);
-        Assert.Contains(AudioFormat.MusicFileSize.ToString(), thrown.Message);
+        Assert.Contains("music.txt", thrown.Message);
+        Assert.Contains("quarp audio build", thrown.Message);
     }
 
     [Fact]
-    public void ABankThatIsNotABankIsRefusedByItsMagic()
+    public void ADirtySaveIsRefusedWithTheSameAdviceAndWritesNothing()
     {
-        string folder = CartFolder(new byte[AudioFormat.MusicFileSize]);
-        var thrown = Assert.Throws<CartLoadException>(() => new MusicEditorSession(folder));
-        Assert.Contains("QMUS", thrown.Message);
-    }
+        string folder = CartFolder();
+        var session = new MusicEditorSession(folder);
+        session.SetChannelSlot(1, 2, 5);
+        Assert.True(session.IsDirty);
 
-    [Fact]
-    public void ASilentChannelThatStillNamesASlotIsRefused()
-    {
-        byte[] payload = AudioFormat.EmptyMusicPayload();
-        payload[0] = 0x03;      // channel off, bit 6 clear, but slot 3 remembered — not canonical
-        byte[] file = new byte[AudioFormat.MusicFileSize];
-        AudioFormat.MusicMagic.CopyTo(file);
-        file[4] = 1;
-        file[6] = AudioFormat.MusicPatternCount;
-        file[7] = AudioFormat.MusicChannelCount;
-        payload.CopyTo(file, AudioFormat.HeaderSize);
-
-        string folder = CartFolder(file);
-        var thrown = Assert.Throws<CartLoadException>(() => new MusicEditorSession(folder));
-        Assert.Contains("0x00", thrown.Message);
+        Assert.False(session.Save());
+        Assert.NotNull(session.SaveError);
+        Assert.Contains("quarp audio build", session.SaveError!);
+        Assert.Empty(Directory.GetFileSystemEntries(folder));
+        Assert.True(session.IsDirty);
     }
 
     [Fact]

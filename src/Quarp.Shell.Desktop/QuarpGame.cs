@@ -281,7 +281,9 @@ public sealed class QuarpGame : Game
     {
         KeyboardState keyboard = Keyboard.GetState();
         ShellCommands commands = _commands.Read(keyboard);
-        // Read every frame in every mode (see the type comment), consumed by the editor only.
+        // Read every frame in every mode (see the type comment): the editors and the library
+        // consume it as host UI, and since ADR-030 the game mode folds it into the cartridge's
+        // input snapshot.
         EditorMouse mouse = _mouse.Read(Mouse.GetState());
 
         // Which screen this frame's pointer is being measured against. Remembered BEFORE the
@@ -294,7 +296,11 @@ public sealed class QuarpGame : Game
         switch (_modes.Mode)
         {
             case ShellMode.Game:
-                UpdateGame(commands, keyboard, gameTime);
+                // The pointer finally crosses the cartridge boundary here (ADR-030): the same
+                // frame of mouse the editors get, folded into the input snapshot inside
+                // UpdateGame — through FramePlacement, the same single owner of
+                // window-to-console coordinates the tool screens convert through.
+                UpdateGame(commands, keyboard, mouse, gameTime);
                 break;
             case ShellMode.Library:
                 UpdateLibrary(commands, mouse);
@@ -398,6 +404,13 @@ public sealed class QuarpGame : Game
         }
         _typedChars.Clear();
         _droppedFile = null;
+        if (_modes.Mode != ShellMode.Game)
+        {
+            // Sub-notch wheel movement belongs to the frame's screen. Whatever fraction of a
+            // notch was left over when the player last scrolled in a game must not surface as
+            // a phantom scroll step minutes later in a different cartridge.
+            _wheelDetentRemainder = 0;
+        }
 
         if (_modes.ExitRequested)
         {
@@ -407,8 +420,8 @@ public sealed class QuarpGame : Game
         base.Update(gameTime);
     }
 
-    /// <summary>One frame of a running cart: time control, ticks, audio — unchanged from M2-M4 except for where Esc goes.</summary>
-    private void UpdateGame(in ShellCommands commands, KeyboardState keyboard, GameTime gameTime)
+    /// <summary>One frame of a running cart: time control, ticks, audio — and, since ADR-030, the cartridge's pointer.</summary>
+    private void UpdateGame(in ShellCommands commands, KeyboardState keyboard, in EditorMouse mouse, GameTime gameTime)
     {
         if (commands.Quit)
         {
@@ -449,13 +462,48 @@ public sealed class QuarpGame : Game
             ? 0
             : _accumulator.Advance(gameTime.ElapsedGameTime.Ticks, speed);
 
-        session.Update(ticks, InputMapper.Read(keyboard), rewinding);
+        // The full ADR-030 snapshot: the keyboard-and-gamepad button masks exactly as before,
+        // plus the pointer in console pixels. The window-to-console translation goes through
+        // the same FramePlacement the game's frame is presented with (ConsolePresenter computes
+        // the identical placement from the identical inputs), so the pixel under the cursor is
+        // the pixel the cartridge reads. The console draws no cursor over a running cart —
+        // ADR-030 hands the cartridge numbers, and the cursor sprite is the cartridge's to
+        // draw, exactly as it is in the originals the library ports.
+        InputState input = InputMapper.Read(
+            keyboard,
+            mouse,
+            _shellScreen.Placement(
+                GraphicsDevice.PresentationParameters.BackBufferWidth,
+                GraphicsDevice.PresentationParameters.BackBufferHeight),
+            ConsumeWheelSteps(mouse.WheelDelta));
+        session.Update(ticks, input, rewinding);
 
         // Once a frame, whatever the simulation did: tops the device queue up with silence so
         // a pause, a rewind or a stalled machine is quiet instead of a source running dry.
         // Only in game mode — the library's silence comes from Drain having stopped the
         // source, and topping it up would just count Padded blocks nobody can hear.
         _audio?.EndFrame();
+    }
+
+    /// <summary>
+    /// MonoGame wheel detents accumulated toward whole notches between game frames. Editors
+    /// read the raw detents themselves; the cartridge's <c>MouseWheel</c> is whole steps
+    /// (API-8 §4), and a trackpad delivers fractions of a notch per frame that must add up
+    /// rather than truncate to an eternal zero. Cleared whenever the shell is not on the game
+    /// screen — see the end of <see cref="Update"/>.
+    /// </summary>
+    private int _wheelDetentRemainder;
+
+    /// <summary>One MonoGame wheel notch, the unit <c>ScrollWheelValue</c> counts in.</summary>
+    private const int WheelDetentsPerStep = 120;
+
+    /// <summary>Whole wheel steps this frame's detents add up to; the sub-notch remainder is banked.</summary>
+    private int ConsumeWheelSteps(int detents)
+    {
+        int total = _wheelDetentRemainder + detents;
+        int steps = total / WheelDetentsPerStep;    // Truncation toward zero: a direction change spends the bank first.
+        _wheelDetentRemainder = total - (steps * WheelDetentsPerStep);
+        return steps;
     }
 
     /// <summary>

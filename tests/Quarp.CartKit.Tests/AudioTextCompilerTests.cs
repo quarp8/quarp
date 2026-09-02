@@ -47,16 +47,6 @@ public class AudioTextCompilerTests
           03 ---
         """;
 
-    /// <summary>Verbatim from docs/AUDIO-FORMAT.md §6.</summary>
-    private const string DocumentedMusicText = """
-        # Порядок паттернов: бас один такт, потом бас с лидом, и обратно.
-        #  P  ch0 ch1 ch2 ch3   флаги
-
-           0   02  --  --  --   loop-start
-           1   02  03  --  --
-           2   02  03  --  --   loop-end
-        """;
-
     private static byte[] CompileSfx(string text) => AudioTextCompiler.CompileSfx(text, "sfx.txt");
 
     private static byte[] CompileMusic(string text) => AudioTextCompiler.CompileMusic(text, "music.txt");
@@ -101,18 +91,20 @@ public class AudioTextCompilerTests
         }
     }
 
-    [Fact]
-    public void TheDocumentedMusicExampleCompilesToWhatItSays()
+    /// <summary>
+    /// The pattern-list grammar went with its format (ADR-041): a <c>music.txt</c> that does not
+    /// open with <c>version 0</c> is refused by name, and so is one that names any other version.
+    /// The old rows are still recognisable text, which is exactly why they must not compile to
+    /// something silently different.
+    /// </summary>
+    [Theory]
+    [InlineData("   0   02  --  --  --   loop-start\n")]
+    [InlineData("version 1\n0 02 -- -- --\n")]
+    [InlineData("version 2\ninst 00 sfx 02 root C-3\n")]
+    public void ATextThatDoesNotSayVersionZeroIsRefused(string text)
     {
-        byte[] payload = CompileMusic(DocumentedMusicText);
-
-        Assert.Equal(2, AudioFormat.PatternChannel(payload, 0, 0));
-        Assert.Equal(-1, AudioFormat.PatternChannel(payload, 0, 1));
-        Assert.Equal(AudioFormat.PatternFlagLoopStart, AudioFormat.PatternFlags(payload, 0));
-        Assert.Equal(3, AudioFormat.PatternChannel(payload, 1, 1));
-        Assert.Equal(0, AudioFormat.PatternFlags(payload, 1));
-        Assert.Equal(AudioFormat.PatternFlagLoopEnd, AudioFormat.PatternFlags(payload, 2));
-        Assert.True(AudioFormat.PatternIsEmpty(payload, 3));
+        CartLoadException e = MusicFails(text);
+        Assert.Contains("version", e.Message, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -144,18 +136,6 @@ public class AudioTextCompilerTests
         byte[] altered = CompileSfx(DocumentedSfxText.Replace("01 E-6 sqr 5 -", "01 F-6 sqr 5 -"));
         Assert.NotEqual(first, altered);
         Assert.Equal(altered, CompileSfx(WriteSfxText(altered)));
-    }
-
-    [Fact]
-    public void MusicSurvivesTextToBinaryToTextToBinary()
-    {
-        byte[] first = CompileMusic(DocumentedMusicText);
-        byte[] second = CompileMusic(WriteMusicText(first));
-        Assert.Equal(first, second);
-
-        byte[] altered = CompileMusic(DocumentedMusicText.Replace("1   02  03  --  --", "1   02  01  --  --"));
-        Assert.NotEqual(first, altered);
-        Assert.Equal(altered, CompileMusic(WriteMusicText(altered)));
     }
 
     [Fact]
@@ -213,7 +193,7 @@ public class AudioTextCompilerTests
     public void CommentsAndBlankLinesCompileToTheEmptyBank()
     {
         Assert.Equal(AudioFormat.EmptySfxPayload(), CompileSfx("# nothing here\n\n   \n"));
-        Assert.Equal(AudioFormat.EmptyMusicPayload(), CompileMusic("# nothing here\n\n"));
+        Assert.Equal(AudioFormat.EmptyMusicPayload(), CompileMusic("# nothing here\n\nversion 0\n"));
     }
 
     [Fact]
@@ -375,43 +355,6 @@ public class AudioTextCompilerTests
         Assert.StartsWith("sfx.txt:2:", e.Message);
     }
 
-    [Fact]
-    public void MusicDiagnosticsNameTheLine()
-    {
-        var flag = MusicFails("0 01 -- -- -- loopstart\n");
-        Assert.StartsWith("music.txt:1:", flag.Message);
-        Assert.Contains("loop-start", flag.Message);
-
-        var missing = MusicFails("# header\n0 01 --\n");
-        Assert.StartsWith("music.txt:2:", missing.Message);
-        Assert.Contains("channel columns", missing.Message);
-
-        var directive = MusicFails("pattern 0 01 -- -- --\n");
-        Assert.StartsWith("music.txt:1:", directive.Message);
-        Assert.Contains("no directives", directive.Message);
-
-        var order = MusicFails("2 01 -- -- --\n1 01 -- -- --\n");
-        Assert.StartsWith("music.txt:2:", order.Message);
-        Assert.Contains("ascending", order.Message);
-
-        var duplicate = MusicFails("1 01 -- -- --\n1 02 -- -- --\n");
-        Assert.StartsWith("music.txt:2:", duplicate.Message);
-        Assert.Contains("line 1", duplicate.Message);
-
-        var channel = MusicFails("0 01 -x -- --\n");
-        Assert.StartsWith("music.txt:1:", channel.Message);
-        Assert.Contains("'--'", channel.Message);
-
-        var slot = MusicFails("0 64 -- -- --\n");
-        Assert.StartsWith("music.txt:1:", slot.Message);
-
-        var repeated = MusicFails("0 01 -- -- -- stop stop\n");
-        Assert.StartsWith("music.txt:1:", repeated.Message);
-
-        // Control: the shape all of these deviate from does compile.
-        CompileMusic("0 01 -- -- -- stop\n");
-    }
-
     // --- helpers: the "back to text" half of the round trip ---
 
     private static string WriteSfxText(byte[] payload)
@@ -447,39 +390,6 @@ public class AudioTextCompilerTests
                     .Append(AudioFormat.Volume(word)).Append(' ')
                     .Append(AudioTextCompiler.EffectName(AudioFormat.Effect(word))).Append('\n');
             }
-        }
-        return text.ToString();
-    }
-
-    private static string WriteMusicText(byte[] payload)
-    {
-        var text = new StringBuilder();
-        for (int pattern = 0; pattern < AudioFormat.MusicPatternCount; pattern++)
-        {
-            byte flags = AudioFormat.PatternFlags(payload, pattern);
-            if (AudioFormat.PatternIsEmpty(payload, pattern) && flags == 0)
-            {
-                continue;
-            }
-            text.Append(pattern);
-            for (int channel = 0; channel < AudioFormat.MusicChannelCount; channel++)
-            {
-                int slot = AudioFormat.PatternChannel(payload, pattern, channel);
-                text.Append(' ').Append(slot < 0 ? "--" : slot.ToString());
-            }
-            if ((flags & AudioFormat.PatternFlagLoopStart) != 0)
-            {
-                text.Append(" loop-start");
-            }
-            if ((flags & AudioFormat.PatternFlagLoopEnd) != 0)
-            {
-                text.Append(" loop-end");
-            }
-            if ((flags & AudioFormat.PatternFlagStop) != 0)
-            {
-                text.Append(" stop");
-            }
-            text.Append('\n');
         }
         return text.ToString();
     }

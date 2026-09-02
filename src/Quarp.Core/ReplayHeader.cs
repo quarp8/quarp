@@ -3,7 +3,8 @@ namespace Quarp.Core;
 /// <summary>
 /// The identity half of a replay: which cartridge it was recorded against, what the RNG was
 /// seeded with, and the 64 persistent slots as they stood the moment recording started.
-/// Together with the button log these are the complete inputs of the simulation (SPEC-8 §7):
+/// Together with the input log — buttons and, since ADR-030, the pointer — these are the
+/// complete inputs of the simulation (SPEC-8 §7):
 /// drop any one of them and the replay stops reproducing.
 /// Immutable and pure data. The core carries and compares the cartridge identity but never
 /// computes it — the 32 bytes are a SHA-256 of the cartridge's normalized sources and assets,
@@ -11,8 +12,20 @@ namespace Quarp.Core;
 /// </summary>
 public sealed class ReplayHeader
 {
-    /// <summary>The .qrpr format version this build writes. Readers reject anything else.</summary>
-    public const ushort CurrentVersion = 1;
+    /// <summary>
+    /// The one .qrpr format version this build reads and writes: 0. The prototype has a single
+    /// living version of every format and reads no other (ADR-041, REPLAY-FORMAT §7) — a reader
+    /// that meets any other number refuses the file by name instead of guessing a layout.
+    /// </summary>
+    public const ushort CurrentVersion = 0;
+
+    /// <summary>
+    /// The engine version a header names — the "which simulation produced this" answer. Zero
+    /// while the prototype has one engine; bumped by the ADR that changes simulation behaviour,
+    /// never automatically, because it must mean the same number on every machine that builds
+    /// this source.
+    /// </summary>
+    public const uint CurrentEngineVersion = 0;
 
     /// <summary>Length of a cartridge identity in bytes — SHA-256 is 32.</summary>
     public const int IdentitySize = 32;
@@ -33,11 +46,12 @@ public sealed class ReplayHeader
     /// exactly like <see cref="VirtualConsole.LoadPersistent"/>.
     /// </summary>
     public ReplayHeader(ReadOnlySpan<byte> cartIdentity, int seed, ReadOnlySpan<int> persistent)
-        : this(CurrentVersion, cartIdentity, seed, persistent)
+        : this(CurrentVersion, CurrentEngineVersion, cartIdentity, seed, persistent)
     {
     }
 
-    private ReplayHeader(ushort version, ReadOnlySpan<byte> cartIdentity, int seed, ReadOnlySpan<int> persistent)
+    private ReplayHeader(
+        ushort version, uint engineVersion, ReadOnlySpan<byte> cartIdentity, int seed, ReadOnlySpan<int> persistent)
     {
         if (cartIdentity.Length != IdentitySize)
         {
@@ -52,22 +66,30 @@ public sealed class ReplayHeader
                 nameof(persistent));
         }
         Version = version;
+        EngineVersion = engineVersion;
         Seed = seed;
         _identity = cartIdentity.ToArray();
         _persistent = new int[PersistentSlots];
         persistent.CopyTo(_persistent);
     }
 
-    /// <summary>Used by the reader to carry the version it actually found in the file.</summary>
+    /// <summary>Used by the reader to carry the version and engine version it actually found in the file.</summary>
     internal static ReplayHeader ForVersion(
-        ushort version, ReadOnlySpan<byte> cartIdentity, int seed, ReadOnlySpan<int> persistent) =>
-        new(version, cartIdentity, seed, persistent);
+        ushort version, uint engineVersion, ReadOnlySpan<byte> cartIdentity, int seed, ReadOnlySpan<int> persistent) =>
+        new(version, engineVersion, cartIdentity, seed, persistent);
 
     /// <summary>All-zero identity: "recorded without a cartridge hash". Never matches a real SHA-256.</summary>
     public static ReadOnlySpan<byte> UnknownIdentity => ZeroIdentity;
 
-    /// <summary>The .qrpr version this header came from; headers built for recording carry <see cref="CurrentVersion"/>.</summary>
+    /// <summary>The .qrpr version this header came from — always <see cref="CurrentVersion"/>, there being only one.</summary>
     public ushort Version { get; }
+
+    /// <summary>
+    /// The engine version recorded in the file. Headers built for recording carry
+    /// <see cref="CurrentEngineVersion"/>. Carried into a rewrite verbatim: a rewritten replay
+    /// still names the engine that recorded it, not the one holding the pen.
+    /// </summary>
+    public uint EngineVersion { get; }
 
     /// <summary>The RNG seed the console booted with — <see cref="VirtualConsole.AttachCart"/> takes it.</summary>
     public int Seed { get; }
@@ -98,5 +120,5 @@ public sealed class ReplayHeader
     /// the replay it eventually saves names the build that is actually running.
     /// </summary>
     public ReplayHeader WithIdentity(ReadOnlySpan<byte> cartIdentity) =>
-        new(Version, cartIdentity, Seed, _persistent);
+        new(Version, EngineVersion, cartIdentity, Seed, _persistent);
 }

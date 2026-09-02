@@ -50,8 +50,12 @@ public sealed class DisplayPalette
     /// <summary>Mask applied to a master colour index (0-31).</summary>
     private const int ColorMask = Palette.MasterCount - 1;
 
-    /// <summary>Layout version stamped into the first hashed byte; see <see cref="WriteHashBytes"/>.</summary>
-    public const byte HashVersion = 1;
+    /// <summary>
+    /// Layout version stamped into the first hashed byte; see <see cref="WriteHashBytes"/>.
+    /// Zero, like every other format number in this prototype (ADR-041): there is one layout,
+    /// and a change to it moves this byte instead of adding a second reading rule.
+    /// </summary>
+    public const byte HashVersion = 0;
 
     /// <summary>Bytes of shape/version header the hashed record starts with.</summary>
     public const int HashHeaderLength = 5;

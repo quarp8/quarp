@@ -25,10 +25,13 @@ namespace Quarp.Shell.Desktop;
 /// pin, is that the trip is idempotent from there on and that console → window → console is
 /// the identity.</para>
 ///
-/// <para><b>Outside is not clamped.</b> A click in the letterbox is not a click on the edge
-/// pixel: <see cref="TryToCanvas"/> answers false and the caller drops the event. Clamping
-/// would turn a miss into a hit on the border row, which on a list screen means launching the
-/// wrong cartridge.</para>
+/// <para><b>Outside is not clamped — for the shell's own screens.</b> A click in the letterbox
+/// is not a click on the edge pixel: <see cref="TryToCanvas"/> answers false and the caller
+/// drops the event. Clamping would turn a miss into a hit on the border row, which on a list
+/// screen means launching the wrong cartridge. The <em>cartridge's</em> pointer is the one
+/// deliberate exception: ADR-030 п.6 defines its coordinate as clamped to the screen with no
+/// "off screen" answer in v1, so the game input path uses <see cref="ToCanvasClamped"/> —
+/// still this type's arithmetic, because nobody else may do window-to-console math.</para>
 /// </summary>
 public readonly struct FramePlacement
 {
@@ -102,5 +105,21 @@ public readonly struct FramePlacement
         canvasX = dx / Scale;
         canvasY = dy / Scale;
         return true;
+    }
+
+    /// <summary>
+    /// Window point to console pixel with ADR-030's clamp: a point in the letterbox, past a
+    /// cropped edge or outside the window answers as the nearest screen pixel, never a miss.
+    /// This is the cartridge pointer's conversion and nobody else's — a hit-testing screen
+    /// wants <see cref="TryToCanvas"/>'s refusal, for the reasons the type comment gives.
+    /// The clamp happens in window space, before the division, for the same
+    /// truncation-toward-zero reason <see cref="TryToCanvas"/> subtracts before dividing.
+    /// </summary>
+    public void ToCanvasClamped(int windowX, int windowY, out int canvasX, out int canvasY)
+    {
+        int dx = Math.Clamp(windowX - OriginX, 0, DestWidth - 1);
+        int dy = Math.Clamp(windowY - OriginY, 0, DestHeight - 1);
+        canvasX = dx / Scale;
+        canvasY = dy / Scale;
     }
 }

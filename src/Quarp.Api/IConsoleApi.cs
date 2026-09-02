@@ -24,7 +24,7 @@ public interface IConsoleApi
     /// <para>Constant across a whole run — the framebuffer is allocated once, at construction —
     /// so it is safe to cache in a field during <c>Init</c>, though there is no reason to.</para>
     /// <para>A read, not a write: it changes nothing a resimulation has to reproduce, so it is
-    /// legal in <c>Draw</c> and, unlike <see cref="Sfx"/> or <see cref="Rnd"/>, invisible to
+    /// legal in <c>Draw</c> and, unlike <see cref="Sfx(int, int)"/> or <see cref="Rnd"/>, invisible to
     /// the determinism analyzer.</para>
     /// </summary>
     int ScreenWidth { get; }
@@ -134,10 +134,53 @@ public interface IConsoleApi
     void DataToMap(int bank, int offset, int cell, int count);
 
     /// <summary>
+    /// Replaces the cartridge's whole SFX table — all 64 slots — with the 4352-byte payload
+    /// lying at <paramref name="offset"/> in data bank <paramref name="bank"/>: the sound
+    /// counterpart of <see cref="DataToGfx"/>, and what a game too big for one set of banks
+    /// pages an episode's sound in with (ADR-036). The bytes are <c>sfx.bin</c>'s payload,
+    /// header already stripped — 64 four-byte slot headers followed by 64 x 32 little-endian
+    /// step words (docs/AUDIO-FORMAT.md §2, §3).
+    ///
+    /// <para><b>The whole table, not a range.</b> There is no slot argument and no count: a
+    /// payload is one record of a defined length, and a partial copy would let a cartridge
+    /// leave a slot torn in half — a four-byte header describing steps that belong to
+    /// something else, which is a sound nobody wrote.</para>
+    ///
+    /// <para><b>It silences the chip first.</b> All four channels stop and the music stops,
+    /// as if <c>Sfx(-1)</c> and <c>Music(-1)</c> had been called just before. A channel that
+    /// kept going would be stepping through a slot that no longer exists, at a step index the
+    /// new slot's length says nothing about.</para>
+    ///
+    /// <para><b>All or nothing.</b> If the bank does not hold 4352 whole bytes from
+    /// <paramref name="offset"/> — a bank number outside 0-63, a negative offset, an empty or
+    /// short bank — the call does nothing at all: the table keeps the sound it had, and
+    /// nothing is silenced either. Check with <see cref="DataLength"/> when the bank might be
+    /// missing. This is the one place the data-bank calls part company with
+    /// <see cref="DataToGfx"/>, which copies the intersection and drops the rest: half a
+    /// sprite sheet is still a picture, half a sound table is not.</para>
+    ///
+    /// <para>This changes simulation state — sound is what a resimulation has to reproduce —
+    /// so like <see cref="DataToGfx"/> it is a build error inside <c>Draw</c> (analyzer rule
+    /// QRP1004). Paging lives in <c>Init</c> and <c>Update</c>.</para>
+    /// </summary>
+    void DataToSfx(int bank, int offset);
+
+    /// <summary>
+    /// Replaces the cartridge's whole music table — all 64 patterns — with the 320-byte
+    /// payload at <paramref name="offset"/> in data bank <paramref name="bank"/>: 64 x 4
+    /// channel bytes followed by 64 pattern-flag bytes, <c>music.bin</c> without its header
+    /// (docs/AUDIO-FORMAT.md §4). The three rules of <see cref="DataToSfx"/> hold word for
+    /// word — the whole table, silence first, all or nothing — and so does the ban inside
+    /// <c>Draw</c> (ADR-036).
+    /// </summary>
+    void DataToMusic(int bank, int offset);
+
+    /// <summary>
     /// Draws text with the small system font (3x5 ink in a 4x6 cell) and returns the x
     /// coordinate after the last glyph (decided: yes, API-8 §reviewed) — that is, x + 4 per
     /// printed character, which is what a caller chains or centers with. '\n' starts a new line
-    /// at the original x; characters outside ASCII 32-126 draw a hollow box.
+    /// at the original x; characters outside ASCII 32-126 and the PICO-8 symbol block
+    /// (arrows, buttons, hearts and friends — ADR-038) draw a hollow box.
     /// <para>This is the call that existed before there was a second font, and it keeps drawing
     /// exactly the pixels it drew. Which font "no font named" means is decided in one place
     /// only — <c>VirtualConsole</c>'s implementation of this overload.</para>
@@ -218,6 +261,34 @@ public interface IConsoleApi
     /// <summary>True only on the tick the button went down (held now, not held on the previous tick).</summary>
     bool Btnp(Button button, int player = 0);
 
+    // --- pointer (SPEC-8 §5, ADR-030: mouse and touch are the same pointer) ---
+
+    /// <summary>
+    /// Pointer x in console screen pixels, clamped to 0..<see cref="ScreenWidth"/>-1. The shell
+    /// does the window-to-console translation; the cartridge never sees the window's scale or
+    /// letterbox. A pointer off the picture reads as the nearest edge pixel (ADR-030 п.6) —
+    /// there is no "off screen" answer in v1.
+    /// Like <see cref="Btn"/>, this reads the tick's input snapshot: two reads in one tick give
+    /// one number, and Draw sees the last completed tick's value.
+    /// </summary>
+    int MouseX { get; }
+
+    /// <summary>Pointer y in console screen pixels, clamped to 0..<see cref="ScreenHeight"/>-1; see <see cref="MouseX"/>.</summary>
+    int MouseY { get; }
+
+    /// <summary>True while the pointer button is held on this tick; an unknown button reads false.</summary>
+    bool MouseBtn(MouseButton button);
+
+    /// <summary>True only on the tick the pointer button went down (held now, not held on the previous tick) — <see cref="Btnp"/>'s rule, no auto-repeat.</summary>
+    bool MouseBtnp(MouseButton button);
+
+    /// <summary>
+    /// Wheel steps turned on this tick, signed: positive is away from the user ("up"), zero
+    /// means the wheel did not move. A delta, not an accumulator — a cartridge that wants a
+    /// position sums it itself.
+    /// </summary>
+    int MouseWheel { get; }
+
     // --- audio (SPEC-8 §4: 4 channels, 64 SFX slots, 64 music patterns) ---
 
     /// <summary>
@@ -234,15 +305,49 @@ public interface IConsoleApi
     void Sfx(int id, int channel = -1);
 
     /// <summary>
+    /// Plays a <em>segment</em> of sound effect <paramref name="id"/>: steps
+    /// <paramref name="offsetSteps"/> up to but not including <paramref name="offsetSteps"/> +
+    /// <paramref name="lengthSteps"/>, once, ignoring the slot's loop (ADR-037) — PICO-8's
+    /// <c>sfx(n, ch, o, l)</c>, for the cartridge that packs several short sounds into one
+    /// 32-step slot because all 64 are spoken for. <paramref name="channel"/> follows the
+    /// two-argument call exactly, -1 auto-pick included, and so does <paramref name="id"/> = -1:
+    /// it stops, the segment arguments ignored — one rule, not one per overload.
+    /// <para>Soft edges like everything here: an offset outside the slot's played steps plays
+    /// nothing at all, a non-positive length plays nothing, and a segment overhanging the
+    /// slot's end is clipped to it. Within the segment nothing sounds different — effects and
+    /// arpeggio groups read the slot exactly as they do mid-slot today.</para>
+    /// <para><b>Changes simulation state</b>, exactly as the two-argument call does, and for
+    /// the same reason must not be called from Draw (QRP1004).</para>
+    /// </summary>
+    void Sfx(int id, int channel, int offsetSteps, int lengthSteps);
+
+    /// <summary>
     /// Starts music pattern <paramref name="pattern"/> (0-63); a negative value — including the
     /// default — stops the music, and 64 or more does nothing. Each of the pattern's four
     /// channels plays on the chip channel of the same number, except one the cartridge's own
-    /// <see cref="Sfx"/> is holding, which the music picks up at its next pattern. Patterns run
+    /// <see cref="Sfx(int, int)"/> is holding, which the music picks up at its next pattern. Patterns run
     /// in index order until one carries a stop or loop flag, or index 63 ends.
-    /// <para><b>Changes simulation state</b>, exactly as <see cref="Sfx"/> does, and for the
+    /// <para><b>Changes simulation state</b>, exactly as <see cref="Sfx(int, int)"/> does, and for the
     /// same reason must not be called from Draw.</para>
     /// </summary>
     void Music(int pattern = -1);
+
+    /// <summary>
+    /// <see cref="Music(int)"/> with a fade and an optional channel reservation (ADR-037) —
+    /// PICO-8's <c>music(n, fade_ms, channel_mask)</c>, measured in ticks because everything
+    /// on this console is. A positive <paramref name="fadeTicks"/> ramps the music's channels
+    /// linearly from silence to full volume over that many ticks on a start, and from the
+    /// current volume to silence — then stops — on <c>Music(-1, fadeTicks)</c>; the ramp is
+    /// part of the PCM, so it is deterministic, replayable and in the audio hash. A non-zero
+    /// <paramref name="channelMask"/> (bit i = channel i) reserves only those channels for the
+    /// music: voices on the other channels are never started and stay the cartridge's for its
+    /// own <see cref="Sfx(int, int)"/>, while still counting toward the pattern's length so song timing
+    /// cannot depend on what else is playing. Zero fade and zero mask are
+    /// <see cref="Music(int)"/> to the bit.
+    /// <para><b>Changes simulation state</b>, exactly as <see cref="Music(int)"/> does, and
+    /// for the same reason must not be called from Draw (QRP1004).</para>
+    /// </summary>
+    void Music(int pattern, int fadeTicks, int channelMask = 0);
 
     // --- deterministic random (xoshiro128**, seeded via splitmix64 — SPEC-8 §7) ---
 

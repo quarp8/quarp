@@ -1,6 +1,25 @@
-# Pattern order for carts/breakout: bass alone, then bass with lead, then back to the top.
-#  P  ch0 ch1 ch2 ch3   flags
+# music.txt — Quarp audio format version 0 (docs/AUDIO-FORMAT.md §6).
+version 0
 
-   0   03  --  --  --   loop-start
-   1   03  04  --  --
-   2   03  04  --  --   loop-end
+# instruments — an SFX slot used as a timbre, plus the note it is written at
+inst 03 sfx 03 root C-3
+inst 04 sfx 04 root E-5
+
+# order — which pattern plays, in which key, and what happens when it ends
+order
+#  ##  pat  flags
+   00  00   loop-start
+   01  01
+   02  02   loop-back
+
+pattern 00 rows 1 speed 32
+#  row   ch0              ch1              ch2              ch3
+   00   C-3 03 - ---    |  ===             |  ===             |  ===
+
+pattern 01 rows 1 speed 32
+#  row   ch0              ch1              ch2              ch3
+   00   C-3 03 - ---    |  E-5 04 - ---    |  ===             |  ===
+
+pattern 02 rows 1 speed 32
+#  row   ch0              ch1              ch2              ch3
+   00   C-3 03 - ---    |  E-5 04 - ---    |  ===             |  ===

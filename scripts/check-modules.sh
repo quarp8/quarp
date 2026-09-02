@@ -126,7 +126,13 @@ LAYERS=(
   "MapEditorSession.cs|1"      # модель карты и флагов
   "CodeEditorSession.cs|1"     # модель текста src/main.cs: курсор, выделение, undo, поиск (+CodeMove, CodePosition)
   "SfxEditorSession.cs|1"      # модель банка sfx.bin: 64 слота, шаги, петли, undo
-  "MusicEditorSession.cs|1"    # модель банка music.bin: 64 паттерна x 4 канала, флаги, undo (+IMusicClipboard, MusicMemoryClipboard)
+  "MusicEditorSession.cs|1"    # модель списка паттернов: 64 паттерна x 4 канала, флаги, undo (+IMusicClipboard, MusicMemoryClipboard)
+  # Раскладка списка паттернов — 64x4 байта каналов и 64 флага. С ADR-041 у музыки одна
+  # раскладка (трекерная песня), и эта форматом больше не является: она переехала сюда из
+  # Quarp.CartKit/AudioFormat как модель экрана-навигатора и живёт до трекера следующей
+  # бригады, который удалит и экран, и этот файл. Слой 1 по той же примете, что ShellMode:
+  # зависимостей нет вообще, тип — чистые смещения плюс шесть чистых функций на Span<byte>.
+  "MusicPatternList.cs|1"
   "CartLibrary.cs|1"           # какие картриджи есть на диске (+CartLibraryEntry)
   "ShellMode.cs|1"             # словарь режимов: четыре имени, ноль зависимостей
   # Как оболочка печатает индекс банка (hex/dec, §8 пункт 20). Слой 1 по той же примете, что

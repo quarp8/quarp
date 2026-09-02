@@ -14,7 +14,7 @@ namespace Quarp.Shell.Desktop;
 /// <para><b>A cell is an <c>int</c>, not a byte, and that is the point.</b> A map cell is a byte
 /// of <c>map.bin</c>, so the map's clipboard carries bytes. A music cell is "which SFX slot, or
 /// silence", and silence is spelled <c>-1</c> — the spelling
-/// <see cref="AudioFormat.PatternChannel"/> already hands out. Carrying the packed channel byte
+/// <see cref="MusicPatternList.PatternChannel"/> already hands out. Carrying the packed channel byte
 /// instead would put the bit layout of <c>music.bin</c> (active bit, slot mask, and the rule
 /// that a silent channel stores <c>0x00</c>) into a second file; carrying the slot and the
 /// silence keeps the format where it belongs and the clipboard readable in a debugger.</para>
@@ -97,20 +97,19 @@ public sealed class MusicMemoryClipboard : IMusicClipboard
 /// flag. The cursor is therefore a pattern and a channel and nothing else, and the constant is
 /// here so that the screen asks rather than assumes.</para>
 ///
-/// <para><b>The writer is not an encoder.</b> The bit layout of a channel byte, the flag bits,
-/// the offsets, the magic, the version and every rule the bank has to obey belong to
-/// <see cref="AudioFormat"/> in <c>Quarp.CartKit</c> (AUDIO-FORMAT §4, §5) — the one owner. This
-/// class holds 320 bytes and calls into that owner for every read of a cell, every write of a
-/// cell, the parse on load and the wrap on save. In particular it never computes a byte offset:
+/// <para><b>The writer is not an encoder.</b> The bit layout of a channel byte, the flag bits
+/// and the offsets belong to <see cref="MusicPatternList"/> — the one owner. This class holds
+/// 320 bytes and calls into that owner for every read of a cell and every write of a cell.
+/// In particular it never computes a byte offset:
 /// "the channel byte of pattern P lives at <c>4P + C</c>" is a sentence that exists once, in
-/// <see cref="AudioFormat.WritePatternChannel"/>, and the change detection below is built on the
+/// <see cref="MusicPatternList.WritePatternChannel"/>, and the change detection below is built on the
 /// accessors instead of on arithmetic so that it stays that way.</para>
 ///
 /// <para><b>What this file does NOT own, and why each one is somebody else's.</b>
 /// <list type="bullet">
-///   <item><b>Pattern length.</b> There is no length field in <c>music.bin</c>: how long a
-///     pattern lasts is derived by the APU from the longest active slot, floored at
-///     <c>Apu.MinPatternTicks</c> (AUDIO-FORMAT §10). The number lives in <c>sfx.bin</c> as
+///   <item><b>Pattern length.</b> There is no length field in the pattern list: the sequencer
+///     this screen was written against derived it from the longest active slot, floored at
+///     <c>Apu.MinPatternTicks</c>. The number lives in <c>sfx.bin</c> as
 ///     <see cref="SfxEditorSession.SlotLength"/>, and a second setter here would be a second
 ///     owner of it.</item>
 ///   <item><b>Mute and solo.</b> Every bit of both tables is spoken for and the spare ones must
@@ -146,7 +145,7 @@ public sealed class MusicMemoryClipboard : IMusicClipboard
 /// <para><b>The payload is canonical at every instant, not merely at save time</b> — the same
 /// promise the sound bank makes. AUDIO-FORMAT §4 gives a silent channel exactly one spelling,
 /// <c>0x00</c>, and forbids reserved bits; the mutators here go through
-/// <see cref="AudioFormat.WritePatternChannel"/>, which cannot spell it any other way, and
+/// <see cref="MusicPatternList.WritePatternChannel"/>, which cannot spell it any other way, and
 /// through a flag setter that masks. So these 320 bytes can be handed to a live sequencer for
 /// the preview on any frame, and a bank that was only legal at save time would be a bank the
 /// author cannot hear.</para>
@@ -160,10 +159,10 @@ public sealed class MusicEditorSession
     public const string MusicSourceFileName = "music.txt";
 
     /// <summary>Patterns in the song — 64 tracker rows, from the one owner of the format.</summary>
-    public const int PatternCount = AudioFormat.MusicPatternCount;
+    public const int PatternCount = MusicPatternList.PatternCount;
 
     /// <summary>Channels in a pattern — 4.</summary>
-    public const int ChannelCount = AudioFormat.MusicChannelCount;
+    public const int ChannelCount = MusicPatternList.ChannelCount;
 
     /// <summary>
     /// Editable columns inside one channel: <b>one</b>, the SFX slot reference. See the type note
@@ -178,22 +177,22 @@ public sealed class MusicEditorSession
     /// <summary>Highest slot number a channel can name: 63.</summary>
     public const int MaxSlot = SlotCount - 1;
 
-    /// <summary>Exactly 320 bytes (AUDIO-FORMAT §4), borrowed rather than re-derived.</summary>
-    public const int PayloadSize = AudioFormat.MusicPayloadSize;
+    /// <summary>Exactly 320 bytes — the pattern list of <see cref="MusicPatternList"/>, borrowed rather than re-derived.</summary>
+    public const int PayloadSize = MusicPatternList.PayloadSize;
 
     /// <summary>Playback returns here when it meets <see cref="FlagLoopEnd"/>.</summary>
-    public const byte FlagLoopStart = AudioFormat.PatternFlagLoopStart;
+    public const byte FlagLoopStart = MusicPatternList.FlagLoopStart;
 
     /// <summary>End of a section: jump back to the nearest <see cref="FlagLoopStart"/>.</summary>
-    public const byte FlagLoopEnd = AudioFormat.PatternFlagLoopEnd;
+    public const byte FlagLoopEnd = MusicPatternList.FlagLoopEnd;
 
     /// <summary>The song ends after this pattern.</summary>
-    public const byte FlagStop = AudioFormat.PatternFlagStop;
+    public const byte FlagStop = MusicPatternList.FlagStop;
 
     /// <summary>Every flag bit that has a meaning; bits 3-7 are reserved and must stay zero.</summary>
-    public const byte FlagMask = AudioFormat.PatternFlagMask;
+    public const byte FlagMask = MusicPatternList.FlagMask;
 
-    /// <summary>The value a cell holds when its channel is silent — the spelling <see cref="AudioFormat.PatternChannel"/> hands out.</summary>
+    /// <summary>The value a cell holds when its channel is silent — the spelling <see cref="MusicPatternList.PatternChannel"/> hands out.</summary>
     public const int SilentSlot = -1;
 
     private readonly string _musicPath;
@@ -215,10 +214,9 @@ public sealed class MusicEditorSession
     /// <summary>
     /// Opens the song of a cartridge folder (.quarp8 files never get here — the mode machine
     /// refuses them with the read-only line, exactly as for the other four screens). The file is
-    /// optional: absent means 64 patterns with no active channel and a clean session. A file that
-    /// is not a bank, is the wrong length, or breaks any rule of AUDIO-FORMAT §5 is refused here
-    /// by <see cref="AudioFormat.ParseMusicFile"/> with <see cref="CartLoadException"/> — the very
-    /// same failure and the very same wording <see cref="CartSource"/> produces for the same file.
+    /// optional: absent means 64 patterns with no active channel and a clean session. A
+    /// <c>music.bin</c> that <em>is</em> there is refused here with <see cref="CartLoadException"/>
+    /// and a sentence saying why — see <see cref="ReadPayload"/>.
     /// </summary>
     public MusicEditorSession(string cartFolder)
         : this(cartFolder, new MusicMemoryClipboard())
@@ -313,7 +311,7 @@ public sealed class MusicEditorSession
     {
         ValidatePattern(pattern);
         ValidateChannel(channel);
-        return AudioFormat.PatternChannel(_bank, pattern, channel);
+        return MusicPatternList.PatternChannel(_bank, pattern, channel);
     }
 
     /// <summary>True when the channel says nothing in this pattern — the one spelling of which is the zero byte.</summary>
@@ -327,14 +325,14 @@ public sealed class MusicEditorSession
     public bool PatternIsEmpty(int pattern)
     {
         ValidatePattern(pattern);
-        return AudioFormat.PatternIsEmpty(_bank, pattern);
+        return MusicPatternList.PatternIsEmpty(_bank, pattern);
     }
 
     /// <summary>The section flags of a pattern: loop start, loop end, stop.</summary>
     public byte PatternFlags(int pattern)
     {
         ValidatePattern(pattern);
-        return AudioFormat.PatternFlags(_bank, pattern);
+        return MusicPatternList.PatternFlags(_bank, pattern);
     }
 
     /// <summary>True when the pattern carries this flag; <paramref name="flag"/> is one of the three constants.</summary>
@@ -383,7 +381,7 @@ public sealed class MusicEditorSession
     /// Points a channel at an SFX slot, or silences it with <see cref="SilentSlot"/>. The
     /// canonicity rule of AUDIO-FORMAT §4 — "a silent channel stores <c>0x00</c>", never a
     /// remembered slot with the active bit clear — is not enforced here but <em>unspellable</em>:
-    /// <see cref="AudioFormat.WritePatternChannel"/> is the only writer and it has no way to
+    /// <see cref="MusicPatternList.WritePatternChannel"/> is the only writer and it has no way to
     /// produce the illegal byte.
     ///
     /// <para>A slot outside 0-63 throws rather than clamps. Pointing a channel at slot 64 is a
@@ -525,7 +523,7 @@ public sealed class MusicEditorSession
         bool own = OpenOwnStroke();
         for (int row = PatternCount - 1; row > pattern; row--)
         {
-            WriteChannel(row, channel, AudioFormat.PatternChannel(_bank, row - 1, channel));
+            WriteChannel(row, channel, MusicPatternList.PatternChannel(_bank, row - 1, channel));
         }
         WriteChannel(pattern, channel, SilentSlot);
         CloseOwnStroke(own);
@@ -540,7 +538,7 @@ public sealed class MusicEditorSession
         bool own = OpenOwnStroke();
         for (int row = pattern; row < PatternCount - 1; row++)
         {
-            WriteChannel(row, channel, AudioFormat.PatternChannel(_bank, row + 1, channel));
+            WriteChannel(row, channel, MusicPatternList.PatternChannel(_bank, row + 1, channel));
         }
         WriteChannel(PatternCount - 1, channel, SilentSlot);
         CloseOwnStroke(own);
@@ -650,7 +648,7 @@ public sealed class MusicEditorSession
             {
                 int pattern = SelectionPattern + row;
                 int channel = SelectionChannel + column;
-                int slot = AudioFormat.PatternChannel(_bank, pattern, channel);
+                int slot = MusicPatternList.PatternChannel(_bank, pattern, channel);
                 if (slot < 0)
                 {
                     continue;
@@ -684,7 +682,7 @@ public sealed class MusicEditorSession
             for (int column = 0; column < channels; column++)
             {
                 cells[row * channels + column] =
-                    AudioFormat.PatternChannel(_bank, SelectionPattern + row, SelectionChannel + column);
+                    MusicPatternList.PatternChannel(_bank, SelectionPattern + row, SelectionChannel + column);
             }
         }
         Clipboard.Write(patterns, channels, cells);
@@ -879,14 +877,16 @@ public sealed class MusicEditorSession
     /// banks byte-identical after the editor has opened them, and the read-only rule is the second
     /// lock on the same door.
     ///
-    /// <para>The bytes go out through <see cref="AudioFormat.WriteMusicFile"/>, which re-validates
-    /// the whole payload — length first — before it prepends a header. So the length is checked on
-    /// the way in (<see cref="AudioFormat.ParseMusicFile"/>) and again on the way out, by the one
-    /// owner, and this class cannot write a bank it could not read back.</para>
+    /// <para><b>A dirty session cannot reach the disk at all since ADR-041</b>, and says so in
+    /// <see cref="SaveError"/> rather than throwing. There is one music format and it is the
+    /// tracker song; a pattern list is not a file any more, so there is nothing this screen could
+    /// honestly write. The clean path is unchanged and still the common one — opening the MUSIC
+    /// tab of a cart that has no song and closing it again writes nothing, creates nothing and
+    /// reports success.</para>
     ///
-    /// <para>Disk failures land in <see cref="SaveError"/> instead of throwing, because a full
-    /// disk must leave the author their work and a message. A read-only bank that is somehow
-    /// dirty is a contract violation rather than an accident: that throws.</para>
+    /// <para>Disk failures would land in <see cref="SaveError"/> for the same reason: a full disk
+    /// must leave the author their work and a message. A read-only bank that is somehow dirty is
+    /// a contract violation rather than an accident: that throws.</para>
     /// </summary>
     /// <returns>True when the disk now matches the bank (including "already did"), false when a write failed.</returns>
     public bool Save()
@@ -906,31 +906,36 @@ public sealed class MusicEditorSession
                 $"{CartName}: {MusicFileName} is read-only while {MusicSourceFileName} is present — "
                 + $"the text source owns the bank. Remove {MusicSourceFileName} to edit the song inside Quarp.");
         }
-        try
-        {
-            byte[] file = AudioFormat.WriteMusicFile(_bank);
-            File.WriteAllBytes(_musicPath, file);
-            _savedBank = (byte[])_bank.Clone();
-            SaveError = null;
-            return true;
-        }
-        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
-        {
-            SaveError = e.Message;
-            return false;
-        }
+        SaveError =
+            $"{MusicFileName}: the pattern navigator has no file format to save into — since ADR-041 a song is "
+            + "rows of notes, instruments and an order (docs/AUDIO-FORMAT.md §4). Write it as music.txt and build "
+            + "it with 'quarp audio build'.";
+        return false;
     }
 
     // ---- the private half ----
 
-    /// <summary>Absent file = the zero bank (AUDIO-FORMAT §1); present file = its payload, validated by the format's owner.</summary>
+    /// <summary>
+    /// Absent file = the zero pattern list, which is what this screen navigates; present file =
+    /// the refusal below.
+    ///
+    /// <para>This screen is the pattern navigator of ADR-026: its cell is "which SFX slot plays
+    /// on this channel". Since ADR-041 there is exactly one music format and it is the tracker
+    /// song — rows of notes, instruments and an order — which this grid cannot show and cannot
+    /// edit. Opening one here read-only would put four numbers where the author wrote notes,
+    /// which is worse than a sentence saying so, so every <c>music.bin</c> is refused by name
+    /// until the next wave replaces this screen with a tracker.</para>
+    /// </summary>
     private static byte[] ReadPayload(string path)
     {
         if (!File.Exists(path))
         {
-            return AudioFormat.EmptyMusicPayload();
+            return MusicPatternList.Empty();
         }
-        return AudioFormat.ParseMusicFile(File.ReadAllBytes(path), MusicFileName);
+        throw new CartLoadException(
+            $"{MusicFileName}: this song is the tracker format — rows of notes, instruments and an order table "
+            + "(docs/AUDIO-FORMAT.md §4). This screen is the pattern navigator and cannot show it; edit the song "
+            + "as music.txt and rebuild it with 'quarp audio build'.");
     }
 
     /// <summary>A verb that arrived outside a pointer gesture gets a gesture of its own, so it costs exactly one Ctrl+Z.</summary>
@@ -959,18 +964,18 @@ public sealed class MusicEditorSession
     /// there is not a change, which is what keeps an idle click out of the undo stack.
     ///
     /// <para>Note what this method does <b>not</b> contain: an offset. The comparison reads
-    /// through <see cref="AudioFormat.PatternChannel"/> and the write goes through
-    /// <see cref="AudioFormat.WritePatternChannel"/>, so <c>4P + C</c> is spelled once in the
+    /// through <see cref="MusicPatternList.PatternChannel"/> and the write goes through
+    /// <see cref="MusicPatternList.WritePatternChannel"/>, so <c>4P + C</c> is spelled once in the
     /// tree and this file cannot drift from it.</para>
     /// </summary>
     private void WriteChannel(int pattern, int channel, int slot)
     {
         int normalized = slot < 0 ? SilentSlot : slot;
-        if (AudioFormat.PatternChannel(_bank, pattern, channel) == normalized)
+        if (MusicPatternList.PatternChannel(_bank, pattern, channel) == normalized)
         {
             return;
         }
-        AudioFormat.WritePatternChannel(_bank, pattern, channel, normalized);
+        MusicPatternList.WritePatternChannel(_bank, pattern, channel, normalized);
         _strokeChanged = true;
         Version++;
     }
@@ -978,11 +983,11 @@ public sealed class MusicEditorSession
     /// <summary>The same hand for a flag byte; the caller has already refused the reserved bits.</summary>
     private void WriteFlags(int pattern, byte flags)
     {
-        if (AudioFormat.PatternFlags(_bank, pattern) == flags)
+        if (MusicPatternList.PatternFlags(_bank, pattern) == flags)
         {
             return;
         }
-        AudioFormat.WritePatternFlags(_bank, pattern, flags);
+        MusicPatternList.WritePatternFlags(_bank, pattern, flags);
         _strokeChanged = true;
         Version++;
     }
@@ -992,9 +997,9 @@ public sealed class MusicEditorSession
     {
         for (int channel = 0; channel < ChannelCount; channel++)
         {
-            WriteChannel(to, channel, AudioFormat.PatternChannel(_bank, from, channel));
+            WriteChannel(to, channel, MusicPatternList.PatternChannel(_bank, from, channel));
         }
-        WriteFlags(to, AudioFormat.PatternFlags(_bank, from));
+        WriteFlags(to, MusicPatternList.PatternFlags(_bank, from));
     }
 
     /// <summary>An empty bar: four silent channels and no flags.</summary>

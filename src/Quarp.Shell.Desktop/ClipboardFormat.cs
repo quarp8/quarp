@@ -83,7 +83,7 @@ public sealed class ClipboardBlock
 /// (<c>sameSize=true</c>, §1); its map clipboard prepends two bytes of <c>[w][h]</c> and checks
 /// <c>data[0]*data[1] == size-2</c> (§3.1). Length is a weak witness — a 64-pixel sprite and a
 /// 32-cell map block are both 64 hex digits — and the failure it produces is silent garbage. So
-/// every block here starts with a readable word: <c>quarp1 gfx 8 8 …</c>. That is the one line
+/// every block here starts with a readable word: <c>quarp0 gfx 8 8 …</c>. That is the one line
 /// of this format that exists for the sake of the <em>refusal</em>: a map block pasted into the
 /// sprite editor is answered with a sentence, not with pixels.</para>
 ///
@@ -105,10 +105,11 @@ public static class ClipboardFormat
 {
     /// <summary>
     /// The first word of every block. Carries the format version in it rather than beside it, so
-    /// a future version 2 is a word this parser simply does not recognise — and the author is
-    /// told "not a Quarp block" instead of being handed a misread one.
+    /// the next version of the format is a word this parser simply does not recognise — and the
+    /// author is told "not a Quarp block" instead of being handed a misread one. The digit is 0,
+    /// like every other format number in this prototype (ADR-041).
     /// </summary>
-    public const string Tag = "quarp1";
+    public const string Tag = "quarp0";
 
     /// <summary>An SFX slot record: four header bytes plus 32 step words (AUDIO-FORMAT §2), 68 bytes.</summary>
     public const int SfxRecordSize =
@@ -189,7 +190,7 @@ public static class ClipboardFormat
             int cell = cells[i];
             bytes[i] = cell < 0
                 ? (byte)0
-                : (byte)(AudioFormat.MusicChannelActiveBit | (cell & AudioFormat.MusicChannelSlotMask));
+                : (byte)(MusicPatternList.ChannelActiveBit | (cell & MusicPatternList.ChannelSlotMask));
         }
         // Width is channels and height is patterns, so the header reads left-to-right the way the
         // grid does: "mus 4 8" is four channels wide and eight patterns tall.
@@ -321,11 +322,11 @@ public static class ClipboardFormat
                 destination[i] = -1;
                 continue;
             }
-            if ((cell & ~AudioFormat.MusicChannelSlotMask) != AudioFormat.MusicChannelActiveBit)
+            if ((cell & ~MusicPatternList.ChannelSlotMask) != MusicPatternList.ChannelActiveBit)
             {
                 return false;
             }
-            destination[i] = cell & AudioFormat.MusicChannelSlotMask;
+            destination[i] = cell & MusicPatternList.ChannelSlotMask;
         }
         return true;
     }
@@ -354,8 +355,8 @@ public static class ClipboardFormat
         // A slot is a slot: it has no rectangle, and the two ones are written only so that every
         // block has the same four-word header and one parser reads them all.
         ClipboardKind.Sfx => width == 1 && height == 1,
-        _ => width >= 1 && width <= AudioFormat.MusicChannelCount
-             && height >= 1 && height <= AudioFormat.MusicPatternCount,
+        _ => width >= 1 && width <= MusicPatternList.ChannelCount
+             && height >= 1 && height <= MusicPatternList.PatternCount,
     };
 
     private static bool TryKind(string word, out ClipboardKind kind)

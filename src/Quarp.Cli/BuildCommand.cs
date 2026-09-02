@@ -285,7 +285,7 @@ public static class BuildCommand
         int patterns = 0;
         for (int pattern = 0; pattern < AudioFormat.MusicPatternCount; pattern++)
         {
-            if (!AudioFormat.PatternIsEmpty(cart.Music, pattern))
+            if (MusicFormat.PatternRows(cart.Music, pattern) > 0)
             {
                 patterns++;
             }

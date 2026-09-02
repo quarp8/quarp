@@ -26,9 +26,89 @@ public static class SystemFont
     /// <summary>Hollow box shown for any character outside ASCII 32-126.</summary>
     private const uint Fallback = 0b111_101_101_101_111;
 
-    /// <summary>Packed 3x5 glyph for the character; unknown characters get a hollow box.</summary>
+    /// <summary>
+    /// Packed 3x5 glyph for the character; unknown characters get a hollow box. This is the
+    /// call the shell's own overlay text uses and it deliberately answers for ASCII only —
+    /// the PICO-8 symbol block lives behind <see cref="GetGlyph(int)"/> and
+    /// <see cref="TryGetP8Glyph"/>, which is what <c>Print</c> goes through (ADR-038).
+    /// </summary>
     public static uint GetGlyph(char c) =>
         c is >= FirstChar and <= LastChar ? _glyphs[c - FirstChar] : Fallback;
+
+    /// <summary>
+    /// Packed 3x5 glyph for a Unicode codepoint: ASCII 32-126 from the table below, the PICO-8
+    /// symbol block (ADR-038) from <see cref="TryGetP8Glyph"/>, everything else the hollow box.
+    /// The codepoint form exists because three of the PICO-8 symbols (🐱, 😐, 🅾) live outside
+    /// the BMP and cannot be spelled as a single <c>char</c>.
+    /// </summary>
+    public static uint GetGlyph(int codepoint)
+    {
+        if (codepoint is >= FirstChar and <= LastChar)
+        {
+            return _glyphs[codepoint - FirstChar];
+        }
+        return TryGetP8Glyph(codepoint, out uint p8) ? p8 : Fallback;
+    }
+
+    /// <summary>
+    /// The PICO-8 symbol block (ADR-038): the 26 glyphs PICO-8 keeps at 0x80-0x99 plus the six
+    /// low-charset shapes the ports actually print (▮ ■ □ ⁙ ⁘ ▶ — POOM's title ramp and its
+    /// button pointer), addressed by the Unicode codepoint a C# string literal naturally
+    /// carries ("♥", "❎", "⬅"). 32 glyphs, drawn from scratch for Quarp in the same original
+    /// 3x5 grid as the rest of this file — no borrowed font data.
+    ///
+    /// <para>Two deliberate bitmap collisions at this size, both harmless: █ and ▮ are each
+    /// the full 15-pixel block (a full cell is a full cell), and no others — POOM's density
+    /// ramp " ⁘⁙□■▮" stays strictly increasing in ink, which SystemFontP8Tests assert rather
+    /// than trust. Nothing here answers for ASCII, so the 95 glyphs above are untouchable
+    /// through this table by construction.</para>
+    /// </summary>
+    public static bool TryGetP8Glyph(int codepoint, out uint glyph)
+    {
+        uint found = codepoint switch
+        {
+            0x2588 => 0b111_111_111_111_111,  // █ full block (P8 0x80)
+            0x2592 => 0b101_010_101_010_101,  // ▒ medium shade (P8 0x81)
+            0x1F431 => 0b101_111_101_111_000, // 🐱 cat face (P8 0x82)
+            0x2B07 => 0b010_010_111_111_010,  // ⬇ down arrow (P8 0x83)
+            0x2591 => 0b100_001_000_100_001,  // ░ light shade (P8 0x84)
+            0x273D => 0b101_010_111_010_101,  // ✽ heavy asterisk (P8 0x85)
+            0x25CF => 0b010_111_111_111_010,  // ● filled circle (P8 0x86)
+            0x2665 => 0b101_111_111_010_000,  // ♥ heart (P8 0x87)
+            0x2609 => 0b010_101_111_101_010,  // ☉ sun/orb (P8 0x88)
+            0xC6C3 => 0b010_111_010_101_101,  // 웃 figure (P8 0x89)
+            0x2302 => 0b010_101_101_111_000,  // ⌂ house (P8 0x8A)
+            0x2B05 => 0b010_110_111_110_010,  // ⬅ left arrow (P8 0x8B)
+            0x1F610 => 0b000_101_000_111_000, // 😐 neutral face (P8 0x8C)
+            0x266A => 0b011_010_010_110_110,  // ♪ note (P8 0x8D)
+            0x1F17E => 0b010_111_101_111_010, // 🅾 O button (P8 0x8E)
+            0x25C6 => 0b000_010_111_010_000,  // ◆ diamond (P8 0x8F)
+            0x2026 => 0b000_000_000_000_101,  // … ellipsis (P8 0x90)
+            0x27A1 => 0b010_011_111_011_010,  // ➡ right arrow (P8 0x91)
+            0x2605 => 0b010_111_010_101_000,  // ★ star (P8 0x92)
+            0x29D7 => 0b111_010_010_101_111,  // ⧗ hourglass (P8 0x93)
+            0x2B06 => 0b010_111_111_010_010,  // ⬆ up arrow (P8 0x94)
+            0x02C7 => 0b101_010_000_000_000,  // ˇ caron (P8 0x95)
+            0x2227 => 0b000_010_101_101_000,  // ∧ wedge (P8 0x96)
+            0x274E => 0b111_101_010_101_111,  // ❎ X button (P8 0x97)
+            0x25A4 => 0b111_000_111_000_111,  // ▤ horizontal fill (P8 0x98)
+            0x25A5 => 0b101_101_101_101_101,  // ▥ vertical fill (P8 0x99)
+            0x25AE => 0b111_111_111_111_111,  // ▮ full bar (P8 0x10; = █ at this size)
+            0x25A0 => 0b000_111_111_111_000,  // ■ filled square (P8 0x11)
+            0x25A1 => 0b000_111_101_111_000,  // □ hollow square (P8 0x12)
+            0x2059 => 0b101_000_010_000_101,  // ⁙ five dots (P8 0x13)
+            0x2058 => 0b000_101_000_101_000,  // ⁘ four dots (P8 0x14)
+            0x25B6 => 0b100_110_111_110_100,  // ▶ pointer (POOM's \23)
+            _ => uint.MaxValue,
+        };
+        if (found == uint.MaxValue)
+        {
+            glyph = Fallback;
+            return false;
+        }
+        glyph = found;
+        return true;
+    }
 
     /// <summary>True if the glyph has an ink pixel at (col, row); col 0..2 left to right, row 0..4 top to bottom.</summary>
     public static bool IsSet(uint glyph, int col, int row) =>

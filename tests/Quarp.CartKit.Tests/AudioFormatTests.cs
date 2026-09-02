@@ -26,16 +26,17 @@ public class AudioFormatTests
         return payload;
     }
 
+    /// <summary>A small song: one instrument, two order entries, one pattern with a note in it.</summary>
     private static byte[] SampleMusicPayload()
     {
-        byte[] payload = AudioFormat.EmptyMusicPayload();
-        AudioFormat.WritePatternChannel(payload, 0, 0, 2);
-        AudioFormat.WritePatternFlags(payload, 0, AudioFormat.PatternFlagLoopStart);
-        AudioFormat.WritePatternChannel(payload, 1, 0, 2);
-        AudioFormat.WritePatternChannel(payload, 1, 1, 3);
-        AudioFormat.WritePatternChannel(payload, 2, 0, 2);
-        AudioFormat.WritePatternChannel(payload, 2, 1, 3);
-        AudioFormat.WritePatternFlags(payload, 2, AudioFormat.PatternFlagLoopEnd);
+        byte[] payload = MusicFormat.EmptyPayload();
+        MusicFormat.WriteInstrument(payload, 0, slot: 2, root: 24, flags: 0, speed: 0);
+        MusicFormat.WriteOrder(payload, 0, pattern: 0, flags: MusicFormat.OrderLoopStart, target: 0, transpose: 0);
+        MusicFormat.WriteOrder(payload, 1, pattern: 0, flags: MusicFormat.OrderLoopBack, target: 0, transpose: 5);
+        MusicFormat.WritePattern(payload, 0, speed: MusicFormat.DefaultRowSpeed, rows: 4);
+        MusicFormat.WriteCell(payload, 0, 0, 0, MusicFormat.PackCell(
+            24, MusicFormat.NoteOn, 0, true, 7, true, MusicFormat.EffectNone, 0));
+        MusicFormat.WritePreamble(payload, 2);
         return payload;
     }
 
@@ -46,8 +47,8 @@ public class AudioFormatTests
     {
         Assert.Equal(4352, AudioFormat.SfxPayloadSize);
         Assert.Equal(4360, AudioFormat.SfxFileSize);
-        Assert.Equal(320, AudioFormat.MusicPayloadSize);
-        Assert.Equal(328, AudioFormat.MusicFileSize);
+        Assert.Equal(33800, MusicFormat.PayloadSize);
+        Assert.Equal(33808, MusicFormat.FileSize);
     }
 
     [Fact]
@@ -57,7 +58,7 @@ public class AudioFormatTests
 
         Assert.Equal(4360, file.Length);
         Assert.Equal("QSFX", Encoding.ASCII.GetString(file, 0, 4));
-        Assert.Equal(new byte[] { 0x01, 0x00 }, file[4..6]);
+        Assert.Equal(new byte[] { 0x00, 0x00 }, file[4..6]);
         Assert.Equal(64, file[6]);
         Assert.Equal(32, file[7]);
         Assert.Equal(new byte[] { 0x03, 0x03, 0x00, 0x00 }, file[8..12]);
@@ -69,19 +70,18 @@ public class AudioFormatTests
     }
 
     [Fact]
-    public void MusicFileMatchesTheWorkedExampleByteForByte()
+    public void MusicFileCarriesTheSharedHeaderAndThenTheSong()
     {
         byte[] file = AudioFormat.WriteMusicFile(SampleMusicPayload());
 
-        Assert.Equal(328, file.Length);
+        Assert.Equal(33808, file.Length);
         Assert.Equal("QMUS", Encoding.ASCII.GetString(file, 0, 4));
-        Assert.Equal(new byte[] { 0x01, 0x00 }, file[4..6]);
+        Assert.Equal(new byte[] { 0x00, 0x00 }, file[4..6]);
         Assert.Equal(64, file[6]);
         Assert.Equal(4, file[7]);
-        Assert.Equal(new byte[] { 0x42, 0x00, 0x00, 0x00 }, file[8..12]);
-        Assert.Equal(new byte[] { 0x42, 0x43, 0x00, 0x00 }, file[12..16]);
-        Assert.Equal(new byte[] { 0x42, 0x43, 0x00, 0x00 }, file[16..20]);
-        Assert.Equal(new byte[] { 0x01, 0x00, 0x02 }, file[0x108..0x10b]);
+
+        // The payload's own preamble: layout 0, 32 rows, 64 instruments, order length 2.
+        Assert.Equal(new byte[] { 0x00, 0x00, 0x20, 0x40, 0x02, 0x00, 0x00, 0x00 }, file[8..16]);
     }
 
     [Fact]
@@ -130,9 +130,9 @@ public class AudioFormatTests
         Assert.Equal(0, AudioFormat.SlotLength(sfx, 63));
 
         byte[] music = AudioFormat.EmptyMusicPayload();
-        AudioFormat.ValidateMusicPayload(music, "music.bin");
-        Assert.True(AudioFormat.PatternIsEmpty(music, 0));
-        Assert.Equal(-1, AudioFormat.PatternChannel(music, 0, 0));
+        MusicFormat.ValidatePayload(music, "music.bin");
+        Assert.Equal(0, MusicFormat.OrderLength(music));
+        Assert.Equal(0, MusicFormat.PatternRows(music, 0));
     }
 
     [Fact]
@@ -158,25 +158,23 @@ public class AudioFormatTests
         Assert.Contains("QSFX", e.Message);
     }
 
-    [Fact]
-    public void RejectsANewerFormatVersion()
+    /// <summary>
+    /// One living version and no other (ADR-041): the numbers this project itself once wrote (1
+    /// for the SFX bank and the pattern list, 2 for the song) are refused exactly like a number
+    /// from the future.
+    /// </summary>
+    [Theory]
+    [InlineData(1)]
+    [InlineData(2)]
+    [InlineData(9)]
+    public void RejectsEveryVersionButZero(byte version)
     {
         byte[] file = AudioFormat.WriteSfxFile(SamplePayload());
-        AudioFormat.ParseSfxFile(file, "sfx.bin");
+        AudioFormat.ParseSfxFile(file, "sfx.bin");           // control: this file is fine
 
-        file[4] = 2;
+        file[4] = version;
         var e = Assert.Throws<CartLoadException>(() => AudioFormat.ParseSfxFile(file, "sfx.bin"));
-        Assert.Contains("newer Quarp", e.Message);
-    }
-
-    [Fact]
-    public void RejectsVersionZero()
-    {
-        byte[] file = AudioFormat.WriteSfxFile(SamplePayload());
-        AudioFormat.ParseSfxFile(file, "sfx.bin");
-
-        file[4] = 0;
-        Assert.Throws<CartLoadException>(() => AudioFormat.ParseSfxFile(file, "sfx.bin"));
+        Assert.Contains($"version {version}", e.Message);
     }
 
     [Fact]
@@ -368,51 +366,5 @@ public class AudioFormatTests
         payload[AudioFormat.SlotHeaderOffset(0) + 2] = 1;
         var e = Assert.Throws<CartLoadException>(() => AudioFormat.ValidateSfxPayload(payload, "sfx.bin"));
         Assert.Contains("loop start 1", e.Message);
-    }
-
-    [Fact]
-    public void RejectsASilentChannelThatStillNamesASlot()
-    {
-        byte[] payload = SampleMusicPayload();
-        AudioFormat.ValidateMusicPayload(payload, "music.bin");
-
-        payload[1 * AudioFormat.MusicChannelCount + 2] = 0x05;   // bit 6 clear, slot 5 remembered
-        var e = Assert.Throws<CartLoadException>(() => AudioFormat.ValidateMusicPayload(payload, "music.bin"));
-        Assert.Contains("pattern 1 channel 2", e.Message);
-    }
-
-    [Fact]
-    public void RejectsTheReservedChannelBit()
-    {
-        byte[] payload = SampleMusicPayload();
-        AudioFormat.ValidateMusicPayload(payload, "music.bin");
-
-        payload[0] |= 0x80;
-        var e = Assert.Throws<CartLoadException>(() => AudioFormat.ValidateMusicPayload(payload, "music.bin"));
-        Assert.Contains("bit 7", e.Message);
-    }
-
-    [Fact]
-    public void RejectsReservedPatternFlagBits()
-    {
-        byte[] payload = SampleMusicPayload();
-        AudioFormat.ValidateMusicPayload(payload, "music.bin");
-
-        payload[AudioFormat.MusicChannelTableSize + 3] = 0x08;
-        var e = Assert.Throws<CartLoadException>(() => AudioFormat.ValidateMusicPayload(payload, "music.bin"));
-        Assert.Contains("pattern 3", e.Message);
-    }
-
-    [Fact]
-    public void ChannelAccessorsReadWhatTheWritersWrote()
-    {
-        byte[] payload = SampleMusicPayload();
-        Assert.Equal(2, AudioFormat.PatternChannel(payload, 0, 0));
-        Assert.Equal(-1, AudioFormat.PatternChannel(payload, 0, 1));
-        Assert.Equal(3, AudioFormat.PatternChannel(payload, 1, 1));
-        Assert.Equal(AudioFormat.PatternFlagLoopStart, AudioFormat.PatternFlags(payload, 0));
-        Assert.Equal(AudioFormat.PatternFlagLoopEnd, AudioFormat.PatternFlags(payload, 2));
-        Assert.False(AudioFormat.PatternIsEmpty(payload, 1));
-        Assert.True(AudioFormat.PatternIsEmpty(payload, 3));
     }
 }

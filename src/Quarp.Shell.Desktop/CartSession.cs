@@ -145,6 +145,16 @@ public sealed class CartSession : IDisposable
     public string Name { get; private set; } = "";
 
     /// <summary>
+    /// The folder (or <c>.quarp8</c> file) this session was started from, absolute. Published
+    /// since M9 stage 5, when leaving a running game for an editor tab stopped destroying the
+    /// session: the mode machine has to open the editor banks of <b>the cart that is running</b>,
+    /// and until then nobody outside this class ever had to name it — the library's entry did.
+    /// A read-only path (a sealed <c>.quarp8</c>) is still not editable, which is why the machine
+    /// asks <see cref="Directory.Exists(string)"/> about this before opening anything.
+    /// </summary>
+    public string CartPath => _cartPath;
+
+    /// <summary>
     /// Weak reference to the current host's collectible AssemblyLoadContext (hot reload swaps
     /// hosts, so read it fresh). This is the observable half of the M9 lifecycle claim: after
     /// <see cref="Dispose"/> and the drop of the last session reference, the target must die —
@@ -178,6 +188,13 @@ public sealed class CartSession : IDisposable
 
     /// <summary>True when the simulation is not advancing on its own: paused, crashed, or rewinding.</summary>
     public bool IsPaused => _paused || _crashed;
+
+    /// <summary>
+    /// True while a saved <c>.qrpr</c> is on screen instead of the live session (F8). Published
+    /// in M9 stage 5 so a headless test can tell "the replay was refused" from "the replay
+    /// played" without reading a status string — the two look the same from every other angle.
+    /// </summary>
+    public bool IsPlayingReplay => _playback is not null;
 
     /// <summary>
     /// <c>quarp run &lt;cart&gt; --break-at N</c>: the tick whose <c>Update</c> the session must
@@ -371,21 +388,7 @@ public sealed class CartSession : IDisposable
     /// </summary>
     public void Update(int ticks, InputState input, bool rewinding)
     {
-        if (_watcher is not null && (_watcher.ConsumeReloadRequest() || ReloadRetryDue()))
-        {
-            try
-            {
-                TryReload();
-            }
-            catch (Exception e)
-            {
-                // A failed rebuild must never take the console down (M1: a bad reload keeps
-                // the previous cartridge running). Report and wait for the next edit.
-                Console.Error.WriteLine("[quarp] reload failed unexpectedly:");
-                Console.Error.WriteLine(e.ToString());
-                ReportKeepingOldCart();
-            }
-        }
+        PollReload();
 
         if (rewinding)
         {
@@ -405,6 +408,121 @@ public sealed class CartSession : IDisposable
         FireBreakIfArrived();
 
         SaveIfDirty(force: false);
+        RefreshStatus();
+    }
+
+    /// <summary>
+    /// One poll of the cartridge folder for a settled edit, and the rebuild it asks for. Lifted
+    /// out of <see cref="Update(int, InputState, bool)"/> in M9 stage 5 because it grew a
+    /// <b>second</b> caller, and that second caller is the whole of the stage's save rule (Р2):
+    /// while the shell stands on an editor tab the session runs no ticks at all, so nothing was
+    /// polling this and a <c>Ctrl+S</c> in the code, sprite, map, sound or music screen reached
+    /// the running cartridge never.
+    ///
+    /// <para><b>Why the watcher stays the one trigger and no editor calls a rebuild directly.</b>
+    /// Every save in this shell ends in a file inside the cart folder, and
+    /// <see cref="CartWatcher"/> is already the one owner of "the cart on disk changed". Wiring
+    /// five routers to a sixth entry point would have made two answers to that question — and
+    /// would still have missed the author's other editor, the one running outside this window,
+    /// which is the case this poll has always covered. So the rule is stated once: the disk is
+    /// the truth, and the rebuild happens when the disk settles.</para>
+    ///
+    /// <para>Costs nothing on a quiet frame: the watcher's flag is a lock and a comparison.</para>
+    /// </summary>
+    public void PollReload()
+    {
+        if (_watcher is null || (!_watcher.ConsumeReloadRequest() && !ReloadRetryDue()))
+        {
+            return;
+        }
+        try
+        {
+            TryReload();
+        }
+        catch (Exception e)
+        {
+            // A failed rebuild must never take the console down (M1: a bad reload keeps
+            // the previous cartridge running). Report and wait for the next edit.
+            Console.Error.WriteLine("[quarp] reload failed unexpectedly:");
+            Console.Error.WriteLine(e.ToString());
+            ReportKeepingOldCart();
+        }
+    }
+
+    /// <summary>
+    /// Stops the simulation without toggling it — the verb the shell needs when the author walks
+    /// off the game tab (M9 stage 5, Р1: "иначе автор правит движущуюся мишень"). Distinct from
+    /// <c>ShellCommands.TogglePause</c> on purpose: a toggle called on the way into an editor
+    /// would <em>start</em> a paused game running the moment the author opened the sprite sheet.
+    /// </summary>
+    public void PauseForEditing()
+    {
+        _paused = true;
+        RefreshStatus();
+    }
+
+    /// <summary>
+    /// Lets the simulation run again — the pause menu's RESUME, and nothing else. A crashed
+    /// session stays stopped whatever this says: <see cref="IsPaused"/> is the or of the two.
+    /// </summary>
+    public void Resume()
+    {
+        _paused = false;
+        RefreshStatus();
+    }
+
+    /// <summary>
+    /// Travels <paramref name="ticks"/> ticks (negative back, positive forward) and stands
+    /// still there — the pause menu's REWIND 60 / AHEAD 60, whose whole reason to exist is that
+    /// the distance is <b>exact</b>: going back a named number and coming forward the same
+    /// number must land on the frame that was on screen, which is the stage's own acceptance
+    /// check and something no real-time key hold can promise.
+    ///
+    /// <para>Forward travel is two different things and both are here: as far as the recorded
+    /// log reaches it is a replay of what the player already did (so a jump forward after a
+    /// jump back is exactly reversible), and past the log's tip it is fresh simulation with no
+    /// buttons held, which is what <c>.</c> does at the tip too.</para>
+    /// </summary>
+    public void JumpTicks(int ticks)
+    {
+        _paused = true;
+        if (ticks == 0)
+        {
+            RefreshStatus();
+            return;
+        }
+        TimeMachine machine = Active;
+        if (ticks < 0)
+        {
+            SeekTo(Math.Max(0, machine.Tick + ticks));
+            RefreshStatus();
+            return;
+        }
+        if (_crashed && machine.Tick >= machine.Log.TickCount)
+        {
+            Flash("REWIND TO RECOVER");    // same rule as StepForward's — see its comment
+            RefreshStatus();
+            return;
+        }
+        int recorded = Math.Min(ticks, machine.Log.TickCount - machine.Tick);
+        if (recorded > 0)
+        {
+            SeekTo(machine.Tick + recorded, "SEEK");
+        }
+        int fresh = ticks - Math.Max(0, recorded);
+        if (fresh > 0 && _playback is null)
+        {
+            try
+            {
+                machine.Advance(fresh, default);
+                _crashed = false;
+                PublishAudio(machine);
+            }
+            catch (Exception e)
+            {
+                Crash(e);
+            }
+        }
         RefreshStatus();
     }
 
@@ -594,10 +712,16 @@ public sealed class CartSession : IDisposable
     /// callback; a cartridge that crashes on the way is caught here, because a rewind through
     /// a crashing tick must land the player somewhere, not take the window down.
     /// </summary>
-    private void SeekTo(int tick)
+    /// <param name="label">
+    /// What a long seek calls itself on the progress line. It is "REWIND" for every caller that
+    /// goes backwards — which was all of them until the pause menu's forward jump — because a
+    /// forward seek inside the recorded log announcing "rewind" would be a lie on the one line
+    /// the author can see.
+    /// </param>
+    private void SeekTo(int tick, string label = "REWIND")
     {
         TimeMachine machine = Active;
-        BeginOperation("REWIND", timeoutMs: 0);
+        BeginOperation(label, timeoutMs: 0);
         try
         {
             machine.SeekTo(Math.Clamp(tick, 0, machine.Log.TickCount));
@@ -678,7 +802,16 @@ public sealed class CartSession : IDisposable
         // the live session — drop back to it so the player sees the result of their edit.
         // Rebuild below boots and resimulates the live log itself, so restoring here first
         // would do that work twice.
+        //
+        // The pause is the SHELL's to hold, not the reload's (M9 stage 5, Р1). An edit arriving
+        // while the game stands still under the pause menu — a save from an external editor, which
+        // is the ordinary way an author works — must not start it running: the author would be
+        // reading a menu over a moving game. Two lines past here clear the flag for their own
+        // reasons (StopPlayback, on its way out of a replay), so it is taken now and put back
+        // straight after; the fall-back-to-restart branch below no longer clears it at all.
+        bool paused = _paused;
         StopPlayback(restore: false, quiet: true);
+        _paused = paused;
         SaveIfDirty(force: true);
 
         CartHost oldHost = _host;
@@ -727,10 +860,11 @@ public sealed class CartSession : IDisposable
         try
         {
             // Restart mode: a clean session on the new code, timeline dropped. The old input
-            // log described a game the new code cannot play.
+            // log described a game the new code cannot play. The pause is left exactly as the
+            // shell had it — a restart is the reload's answer to bad code, not the author's
+            // answer to a menu (see the note above the StopPlayback call).
             _machine.Restart();
             _crashed = false;
-            _paused = false;
             Flash(timedOut ? "RESTART (SLOW)" : "RESTART (CRASH)");
             Console.Error.WriteLine("[quarp] restarted on the new code.");
         }
@@ -896,11 +1030,32 @@ public sealed class CartSession : IDisposable
             }
             if (header.HasIdentity && !header.IdentityMatches(_identity))
             {
-                // A warning, never a refusal (REPLAY-FORMAT §5): playing a replay against
-                // edited code is a feature, not an accident.
+                // M9 stage 5 (work order Р8) turned this from a warning into a refusal, and it
+                // is a deliberate divergence worth reading twice.
+                //
+                // REPLAY-FORMAT §5 says a mismatch is "предупреждение, а не отказ", and the
+                // reason it gives is the continuation mode: an input log applied to NEW code is
+                // the whole point of ADR-007, and refusing there would kill the feature. That
+                // argument is about TimeMachine.Rebuild, which is untouched — it still applies
+                // the live log to the new build without a word. It is also about the CLI's
+                // `quarp replay play`, which is untouched too: that command has a terminal to
+                // print both hashes into and a human who typed the file's name on purpose.
+                //
+                // What this branch is, is F8 in a WINDOW. There is no terminal in front of the
+                // author, so the old warning went to a stderr nobody was reading, and after
+                // this stage editing a cart mid-session is the ordinary thing to do — which
+                // means the newest .qrpr beside the cart is routinely a recording of a
+                // cartridge that no longer exists. Playing it "roughly" produces a run that
+                // diverges silently and looks like a bug in the game. So: refuse, say so on
+                // the one line the window has, and leave the live session exactly as it was.
                 Console.Error.WriteLine(
-                    $"[quarp] replay was recorded against cart {CartIdentity.ToShortHex(header.CartIdentity)}, "
-                    + $"this build is {CartIdentity.ToShortHex(_identity)} — playing anyway.");
+                    $"[quarp] {Path.GetFileName(file)} was recorded against cart "
+                    + $"{CartIdentity.ToShortHex(header.CartIdentity)}, this build is "
+                    + $"{CartIdentity.ToShortHex(_identity)} — refusing to play it. "
+                    + "Play it with `quarp replay play` if you want it anyway.");
+                Flash("STALE REPLAY");
+                RefreshStatus();
+                return;
             }
 
             // The playback machine gets its own console but shares the one Cartridge instance

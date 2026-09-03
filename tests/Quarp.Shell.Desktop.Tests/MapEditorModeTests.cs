@@ -182,10 +182,10 @@ public class MapEditorModeTests : IDisposable
     /// <summary>
     /// The trap this design exists to avoid: leaving from the SPRITES tab while the map on the
     /// other tab is dirty must not drop the map. The editor stays open, the map tab comes to
-    /// the front and asks. Break recipe: restore the old one-line body of
-    /// <c>HandleEscape</c>'s editor case (<c>if (Editor.RequestClose()) CloseEditor();</c>) —
-    /// the mode goes straight to Library and every assertion here goes red, which is the shape
-    /// of the data loss.
+    /// the front and asks. Break recipe: make <c>CloseAfterSheetResolved</c> leave without asking
+    /// (<c>CloseUnlessAnotherBankIsDirty</c> calling <c>FinishLeavingCartridge</c> straight away,
+    /// skipping <c>RaiseDirtyBankPrompt</c>) — the mode goes to Library and every assertion here
+    /// goes red, which is the shape of the data loss.
     /// </summary>
     [Fact]
     public void LeavingFromTheSheetDoesNotDropADirtyMapOnTheOtherTab()
@@ -374,6 +374,17 @@ public class MapEditorModeTests : IDisposable
         Assert.Equal(ShellMode.Editor, machine.Mode);
         Assert.Null(machine.MapEditor);
         Assert.NotNull(machine.Editor);
+        Assert.NotNull(machine.LibraryMessage);
+
+        // And the report survives the walk to the only screen that prints it. The library
+        // screen is that screen (LibraryRenderer); no editor screen shows this line. Stage 5
+        // merged the two ways out of a cartridge into ReturnToLibrary, and the merged method
+        // briefly cleared the message on both — which meant a refused tab reported itself into
+        // a value nobody would ever read again.
+        // Break recipe: put `LibraryMessage = null;` back into ShellModeMachine.ReturnToLibrary.
+        machine.HandleEscape();
+
+        Assert.Equal(ShellMode.Library, machine.Mode);
         Assert.NotNull(machine.LibraryMessage);
     }
 }

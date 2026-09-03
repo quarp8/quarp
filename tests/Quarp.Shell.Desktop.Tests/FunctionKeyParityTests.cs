@@ -9,8 +9,9 @@ using Xunit;
 namespace Quarp.Shell.Desktop.Tests;
 
 /// <summary>
-/// F1..F5 on <b>every</b> editor screen, not just the one they were written on
-/// (REFERENCES-EDITORS §8 item 16, TIC-80's own five keys).
+/// F1..F6 on <b>every</b> screen of the strip, not just the one they were written on
+/// (REFERENCES-EDITORS §8 item 16, TIC-80's own five keys, plus the GAME tab M9 stage 5 put at
+/// the head of them).
 ///
 /// <para><b>Why this file exists as its own instrument.</b> This shell routes travel one line
 /// per screen: Alt+Left/Right is handled separately inside each of the five routers, and so is
@@ -23,10 +24,11 @@ namespace Quarp.Shell.Desktop.Tests;
 /// everywhere. So the claim here is stated over the whole ring at once, and it fails the moment
 /// any single router loses its block.</para>
 ///
-/// <para><b>Headless.</b> The five routers are static and take an <see cref="EditorShell"/>;
-/// none of them needs a graphics device. The real <see cref="ShellCommandReader"/> does the
-/// edge detection, so what is asserted is the shell's own key handling and not a second copy
-/// of it.</para>
+/// <para><b>Headless.</b> The six routers are static and take an <see cref="EditorShell"/>;
+/// none of them needs a graphics device — <see cref="GameScreenInput"/>, the sixth and newest,
+/// was built to that same shape for exactly this reason. The real
+/// <see cref="ShellCommandReader"/> does the edge detection, so what is asserted is the shell's
+/// own key handling and not a second copy of it.</para>
 /// </summary>
 public class FunctionKeyParityTests : IDisposable
 {
@@ -92,6 +94,9 @@ public class FunctionKeyParityTests : IDisposable
             ConsoleWidth, ConsoleHeight);
         switch (modes.Mode)
         {
+            case ShellMode.Game:
+                GameScreenInput.Update(shell, commands, mouse);
+                break;
             case ShellMode.Editor:
                 SpriteEditorInput.Update(shell, commands, mouse, FrameSeconds);
                 break;
@@ -117,13 +122,19 @@ public class FunctionKeyParityTests : IDisposable
     }
 
     /// <summary>
-    /// Every screen answers every function key: five starting points times five destinations,
-    /// twenty-five presses, and the destination must be the one
+    /// Every screen answers every function key: six starting points times six destinations,
+    /// thirty-six presses, and the destination must be the one
     /// <see cref="EditorIcons.EditorTabForNumber"/> names — including the press that asks for the
     /// screen already on, which is the honest no-op the tab strip promises.
     ///
-    /// <para>Break recipe: delete the <c>EditorTabJump</c> block from any ONE of the five
-    /// routers — say <c>MusicEditorInput</c> — and five of these twenty-five presses go red while
+    /// <para><b>The GAME screen is one of the six now</b> (M9 stage 5). It answers the tab keys
+    /// through <see cref="GameScreenInput"/> while the pause menu is up, which it always is when
+    /// the strip put the author there — so a press that leaves the game and a press that arrives
+    /// at it are both covered by the same sweep, and a router that lost its block is red however
+    /// it lost it.</para>
+    ///
+    /// <para>Break recipe: delete the <c>EditorTabJump</c> block from any ONE of the six
+    /// routers — say <c>MusicEditorInput</c> — and six of these thirty-six presses go red while
     /// every other test in the suite stays green. That is the whole reason the claim is written
     /// over the ring instead of per screen.</para>
     /// </summary>
@@ -131,7 +142,7 @@ public class FunctionKeyParityTests : IDisposable
     public void EveryEditorScreenAnswersEveryFunctionKey()
     {
         int tabs = EditorIcons.LiveEditorTabs.Count;
-        Assert.Equal(5, tabs);
+        Assert.Equal(6, tabs);
 
         for (int from = 0; from < tabs; from++)
         {
@@ -153,15 +164,15 @@ public class FunctionKeyParityTests : IDisposable
 
     /// <summary>
     /// The negative control the sweep above cannot give itself: a key that is NOT one of the
-    /// five must move nothing, from any screen. Without this, a router that answered every
-    /// function key with "go to tab 1" would pass the sweep for five of its twenty-five cells and
+    /// six must move nothing, from any screen. Without this, a router that answered every
+    /// function key with "go to tab 1" would pass the sweep for six of its thirty-six cells and
     /// look like a wiring problem rather than the lie it is.
     ///
     /// <para>Break recipe: make <see cref="EditorIcons.EditorTabForNumber"/> clamp instead of
     /// answering null and every row here goes red.</para>
     /// </summary>
     [Fact]
-    public void NoScreenTreatsASixthFunctionKeyAsASixthEditor()
+    public void NoScreenTreatsASeventhFunctionKeyAsASeventhTab()
     {
         foreach (ShellMode start in EditorIcons.LiveEditorTabs)
         {
@@ -170,7 +181,7 @@ public class FunctionKeyParityTests : IDisposable
             var pointer = new EditorMouseReader();
 
             modes.SwitchEditorTab(start);
-            Tap(modes, keys, pointer, Keys.F6);
+            Tap(modes, keys, pointer, Keys.F7);
             Assert.Equal(start, modes.Mode);
 
             Tap(modes, keys, pointer, Keys.F9);

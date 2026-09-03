@@ -1,5 +1,7 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using Microsoft.Xna.Framework;
 using Microsoft.Xna.Framework.Input;
 using Quarp.Shell.Desktop;
@@ -80,15 +82,25 @@ public class UndoRedoParityTests : IDisposable
         machine.Menu.SkipIntro();
         machine.OpenLibrary();
         machine.OpenEditor();
-        // Every tab is visited once so that every bank exists: the four lazy sessions are born on
-        // arrival, and a bank that is not open cannot prove anything about the key that edits it.
-        foreach (ShellMode tab in EditorIcons.LiveEditorTabs)
+        // Every EDITOR tab is visited once so that every bank exists: the four lazy sessions are
+        // born on arrival, and a bank that is not open cannot prove anything about the key that
+        // edits it.
+        foreach (ShellMode tab in EditorScreens)
         {
             machine.SwitchEditorTab(tab);
             Assert.Equal(tab, machine.Mode);
         }
         return machine;
     }
+
+    /// <summary>
+    /// The strip's five <b>editor</b> stops — <see cref="EditorIcons.LiveEditorTabs"/> minus the
+    /// GAME tab of M9 stage 5. Derived from that one list, so a seventh tab joins these sweeps by
+    /// existing; the game is subtracted because it edits no bank and has no undo stack to prove
+    /// anything about, which is a fact about that screen and not an exception to this file's rule.
+    /// </summary>
+    private static IReadOnlyList<ShellMode> EditorScreens { get; } =
+        EditorIcons.LiveEditorTabs.Where(tab => tab != ShellMode.Game).ToArray();
 
     /// <summary>One frame of the router that belongs to whichever screen the machine is on — <see cref="FunctionKeyParityTests"/>'s dispatch, which mirrors <c>QuarpGame.Update</c>'s switch.</summary>
     private static void Frame(ShellModeMachine modes, ShellCommandReader keys, EditorMouseReader pointer, Keys[] down)
@@ -128,16 +140,16 @@ public class UndoRedoParityTests : IDisposable
     }
 
     /// <summary>
-    /// The five banks as five strings, in <see cref="EditorIcons.LiveEditorTabs"/>'s own order —
+    /// The five banks as five strings, in <see cref="EditorScreens"/>'s own order —
     /// the bytes each session would save, not its <c>Version</c> or its <c>CanUndo</c>. A counter
     /// can be bumped by an undo that restored the wrong thing; the payload cannot.
     /// </summary>
     private static string[] Payloads(ShellModeMachine modes)
     {
-        var payloads = new string[EditorIcons.LiveEditorTabs.Count];
+        var payloads = new string[EditorScreens.Count];
         for (int i = 0; i < payloads.Length; i++)
         {
-            payloads[i] = PayloadOf(modes, EditorIcons.LiveEditorTabs[i]);
+            payloads[i] = PayloadOf(modes, EditorScreens[i]);
         }
         return payloads;
     }
@@ -209,8 +221,8 @@ public class UndoRedoParityTests : IDisposable
     [Fact]
     public void EveryEditorScreenUndoesAndRedoesInItsOwnSession()
     {
-        int tabs = EditorIcons.LiveEditorTabs.Count;
-        Assert.Equal(5, tabs);
+        int tabs = EditorScreens.Count;
+        Assert.Equal(5, tabs);      // six stops on the strip, five of them banks with an undo stack
 
         for (int screen = 0; screen < tabs; screen++)
         {
@@ -226,8 +238,8 @@ public class UndoRedoParityTests : IDisposable
                 Assert.NotEqual(clean[i], dirty[i]);     // the edit itself must be real, on all five
             }
 
-            modes.SwitchEditorTab(EditorIcons.LiveEditorTabs[screen]);
-            Assert.Equal(EditorIcons.LiveEditorTabs[screen], modes.Mode);
+            modes.SwitchEditorTab(EditorScreens[screen]);
+            Assert.Equal(EditorScreens[screen], modes.Mode);
 
             Chord(modes, keys, pointer, Keys.LeftControl, Keys.Z);
 
@@ -266,7 +278,7 @@ public class UndoRedoParityTests : IDisposable
     [Fact]
     public void NoScreenUndoesOnAChordTheShellDoesNotBind()
     {
-        foreach (ShellMode start in EditorIcons.LiveEditorTabs)
+        foreach (ShellMode start in EditorScreens)
         {
             ShellModeMachine modes = OpenCart();
             var keys = new ShellCommandReader();

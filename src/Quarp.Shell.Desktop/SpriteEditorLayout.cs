@@ -47,7 +47,7 @@ namespace Quarp.Shell.Desktop;
 /// need 39 px and this column is 20. PICO-8's sprite editor palette is 4x4 for the same
 /// reason. (3) The flag row is 4x2 for that same reason, where all three references use one row
 /// of eight. (4) The tooltip is printed in the top band instead of popping under the pointer,
-/// and is cut to 25 characters — see <see cref="ConsoleChrome.TooltipChars"/>. (5) The message
+/// and is cut to 22 characters — see <see cref="ConsoleChrome.TooltipChars"/>. (5) The message
 /// band is one line, so a standing notice yields to the exit prompt — see
 /// <see cref="ConsoleChromeRenderer.DrawMessageLine"/>. Nothing was dropped: all
 /// twenty-two buttons of the host layout are placed, and every hit test it had is here.</para>
@@ -241,7 +241,7 @@ public readonly struct SpriteEditorLayout
     /// </summary>
     public static SpriteEditorLayout Compute(int screenWidth, int screenHeight, int regionCells)
     {
-        var buttons = new EditorButtonPlace[23];
+        var buttons = new EditorButtonPlace[24];
         int placed = 0;
         ConsoleChrome chrome = ConsoleChrome.Compute(screenWidth, screenHeight, buttons, ref placed);
 

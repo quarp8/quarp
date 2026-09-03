@@ -53,6 +53,22 @@ namespace Quarp.Shell.Desktop.Tests;
 /// last pixel and a long line is cut at the same place, the scrollbar's thumb shrinks when the
 /// file outgrows the page — so a failure tells whoever reads it whether the screen is broken or
 /// merely redrawn.</para>
+///
+/// <para><b>Re-pinned 2026-09-02, M9 stage 5 (the tab strip grew a sixth stop).</b> Cause named
+/// before the numbers were read, and confirmed by the fact that <b>every <c>Pget</c> probe in
+/// this file passed the change untouched</b> — which is what says these screens were redrawn and
+/// not broken. Two edits moved pixels, both of them inside the ten rows of the top band and
+/// neither of them in this file's subject:
+/// <list type="number">
+///   <item>the running GAME became the strip's first tab (work order Р6), so
+///     <see cref="ConsoleChrome.RightTabs"/> places six ten-pixel buttons off the right corner
+///     instead of five, and a gamepad glyph appears where the tooltip field used to end;</item>
+///   <item>the tooltip field is therefore ten pixels narrower — 22 characters instead of 25 —
+///     so a hover label that was cut at 25 is cut at 22 and the fallback screen name starts in
+///     the same place but has less room.</item>
+/// </list>
+/// Nothing below <see cref="ConsoleChrome.ContentTop"/> changed, which is why not one structural
+/// probe in this file had to move. Was / became: <c>a4aefe53c86b3dc9</c> / <c>6078c306f3beca7f</c>, <c>c6c93941482fc395</c> / <c>2ed5a74c2d37d8c3</c>, <c>a5976d3b12f27343</c> / <c>eadd361e69f01ff5</c>.</para>
 /// </summary>
 public class CodeEditorScreenGoldenTests : IDisposable
 {
@@ -203,7 +219,7 @@ public class CodeEditorScreenGoldenTests : IDisposable
             Assert.InRange(pixel, (byte)0, (byte)15);
         }
 
-        Assert.Equal("a4aefe53c86b3dc9", FrameHash.Of(screen.Framebuffer));
+        Assert.Equal("6078c306f3beca7f", FrameHash.Of(screen.Framebuffer));
     }
 
     /// <summary>
@@ -269,7 +285,7 @@ public class CodeEditorScreenGoldenTests : IDisposable
         // ...and the message line is empty, because nothing has anything to say yet.
         Assert.Equal((byte)0, console.Pget(1, 79));
 
-        Assert.Equal("c6c93941482fc395", FrameHash.Of(screen.Framebuffer));
+        Assert.Equal("2ed5a74c2d37d8c3", FrameHash.Of(screen.Framebuffer));
     }
 
     /// <summary>
@@ -308,7 +324,7 @@ public class CodeEditorScreenGoldenTests : IDisposable
         Assert.Equal((byte)3, console.Pget(12, 11));
         Assert.Equal((byte)3, console.Pget(12, 16));
 
-        Assert.Equal("a5976d3b12f27343", FrameHash.Of(screen.Framebuffer));
+        Assert.Equal("eadd361e69f01ff5", FrameHash.Of(screen.Framebuffer));
     }
 
     /// <summary>
@@ -421,9 +437,9 @@ public class CodeEditorScreenGoldenTests : IDisposable
         CodeEditorLayout layout = CodeEditorRenderer.Draw(
             screen, session, view, HoverTarget.OfButton(EditorButton.ToolFind), true, 0.0);
 
-        Assert.Equal(25, layout.Chrome.TooltipChars);
+        Assert.Equal(22, layout.Chrome.TooltipChars);
         Assert.Equal(
-            EditorIcons.CodeTooltip(EditorButton.ToolFind)[..25],
+            EditorIcons.CodeTooltip(EditorButton.ToolFind)[..22],
             layout.Chrome.FitTooltip(EditorIcons.CodeTooltip(EditorButton.ToolFind)));
         bool inkInField = false;
         for (int x = layout.Chrome.TooltipField.X; x < layout.Chrome.TooltipField.Right; x++)

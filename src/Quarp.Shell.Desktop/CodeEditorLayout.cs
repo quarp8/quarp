@@ -202,7 +202,7 @@ public readonly struct CodeEditorLayout
     public static CodeEditorLayout Compute(
         int screenWidth, int screenHeight, bool fullscreen = false, bool statusBand = false)
     {
-        var buttons = new EditorButtonPlace[11];
+        var buttons = new EditorButtonPlace[12];
         int placed = 0;
         ConsoleChrome chrome = ConsoleChrome.Compute(screenWidth, screenHeight, buttons, ref placed);
 

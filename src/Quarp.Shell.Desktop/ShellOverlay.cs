@@ -50,6 +50,15 @@ public sealed class ShellOverlay : IDisposable
     private int _shownPercent = -1;
     private bool _empty = true;
 
+    // The pause menu's block, its box and where its first glyph goes — all three computed by
+    // PauseMenu and stored verbatim, because the hit test the pointer uses is that same
+    // arithmetic. Nothing here measures the text: a painter that measured would be a second
+    // owner of where the rows are, and the row under the cursor would eventually stop being the
+    // row under the pointer.
+    private string? _shownMenu;
+    private Rectangle _menuBox;
+    private Point _menuOrigin;
+
     public ShellOverlay(GraphicsDevice device, int width, int height)
     {
         ArgumentNullException.ThrowIfNull(device);
@@ -68,6 +77,32 @@ public sealed class ShellOverlay : IDisposable
 
     /// <summary>True when there is nothing to blend this frame.</summary>
     public bool IsEmpty => _empty;
+
+    /// <summary>
+    /// Raises or lowers the pause menu (M9 stage 5). <paramref name="text"/> null takes it down.
+    /// The box and the origin come from <see cref="PauseMenu"/> and are used exactly as given —
+    /// see the field comment above for why this layer measures nothing.
+    ///
+    /// <para>It rides here, over the presented frame, rather than being printed into the
+    /// cartridge's framebuffer, for the reason this whole class exists: that framebuffer is what
+    /// <c>quarp sim</c> hashes and what the CI compares across architectures, so a menu drawn
+    /// into it would put a paused player's frame outside everyone else's.</para>
+    /// </summary>
+    public void ShowMenu(string? text, Rectangle box, Point origin)
+    {
+        if (string.IsNullOrEmpty(text))
+        {
+            text = null;
+        }
+        if (text == _shownMenu && box == _menuBox && origin == _menuOrigin)
+        {
+            return;
+        }
+        _shownMenu = text;
+        _menuBox = box;
+        _menuOrigin = origin;
+        Rasterize();
+    }
 
     /// <summary>
     /// Sets what the indicator says. <paramref name="text"/> null or empty hides it.
@@ -90,6 +125,9 @@ public sealed class ShellOverlay : IDisposable
         Rasterize();
     }
 
+    /// <summary>Lowers the pause menu without disturbing the status indicator.</summary>
+    public void HideMenu() => ShowMenu(null, Rectangle.Empty, Point.Zero);
+
     /// <summary>
     /// Blends the layer over the frame. <paramref name="destination"/> must be the rectangle
     /// the console texture was drawn into, so overlay pixels line up with console pixels.
@@ -110,9 +148,32 @@ public sealed class ShellOverlay : IDisposable
     {
         Array.Clear(_pixels);
         _empty = true;
+        DrawStatusBox();
+        DrawMenuBox();
+        _texture.SetData(_pixels);
+    }
+
+    /// <summary>The pause menu's plate and rows, drawn where <see cref="PauseMenu"/> put them.</summary>
+    private void DrawMenuBox()
+    {
+        if (_shownMenu is null)
+        {
+            return;
+        }
+        FillRect(_menuBox.X, _menuBox.Y, _menuBox.Width, _menuBox.Height, _ink);
+        // A one-pixel edge, because the plate stands on the cartridge's own picture and a box
+        // with no border reads as a hole in the game rather than as something on top of it. The
+        // same argument the sprite and map panels' frames were given in wave S2.
+        FrameRect(_menuBox.X, _menuBox.Y, _menuBox.Width, _menuBox.Height, _text);
+        Print(_shownMenu, _menuOrigin.X, _menuOrigin.Y, _text);
+        _empty = false;
+    }
+
+    /// <summary>The bottom-left indicator — PAUSE, the speed, REC, a rebuild's progress.</summary>
+    private void DrawStatusBox()
+    {
         if (_shownText is null)
         {
-            _texture.SetData(_pixels);
             return;
         }
 
@@ -135,7 +196,15 @@ public sealed class ShellOverlay : IDisposable
         }
 
         _empty = false;
-        _texture.SetData(_pixels);
+    }
+
+    /// <summary>A one-pixel border on the rectangle's own edge — four fills, no diagonal maths.</summary>
+    private void FrameRect(int x, int y, int width, int height, Color color)
+    {
+        FillRect(x, y, width, 1, color);
+        FillRect(x, y + height - 1, width, 1, color);
+        FillRect(x, y, 1, height, color);
+        FillRect(x + width - 1, y, 1, height, color);
     }
 
     private static int MeasureWidth(string text)

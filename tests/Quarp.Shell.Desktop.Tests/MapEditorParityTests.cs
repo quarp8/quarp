@@ -393,6 +393,9 @@ public class MapEditorParityTests : IDisposable
         var expectedHotkeyToken = new Dictionary<EditorButton, string>
         {
             [EditorButton.ExitTab] = "ESC",
+            // The strip's first stop since M9 stage 5 — the running game. F1 is its named key,
+            // and the tooltip has to say so or the tab is a mouse-only feature.
+            [EditorButton.GameTab] = "F1",
             [EditorButton.SpritesTab] = "HOME",
             // Live since the code-editor screen wave; Alt+Left/Right walk the strip (see the
             // sprite screen's twin of this table for why it is not Home).

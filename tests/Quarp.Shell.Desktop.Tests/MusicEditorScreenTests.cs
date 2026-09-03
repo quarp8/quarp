@@ -192,7 +192,10 @@ public class MusicEditorScreenTests : IDisposable
             "LATER PORTION", EditorIcons.Tooltip(EditorButton.MusicTab), StringComparison.Ordinal);
         Assert.Contains("ALT+", EditorIcons.Tooltip(EditorButton.MusicTab), StringComparison.Ordinal);
         Assert.Contains(ShellMode.MusicEditor, EditorIcons.LiveEditorTabs);
-        Assert.Equal(5, EditorIcons.LiveEditorTabs.Count);
+        // Six since M9 stage 5 put the running GAME at the head of the strip; music is still
+        // its last stop, which is what F6 means.
+        Assert.Equal(6, EditorIcons.LiveEditorTabs.Count);
+        Assert.Equal(ShellMode.MusicEditor, EditorIcons.LiveEditorTabs[^1]);
         // The list is empty now, and that is the sentence this wave exists to be able to write.
         foreach (EditorButton button in AllButtons)
         {
@@ -375,7 +378,7 @@ public class MusicEditorScreenTests : IDisposable
         {
             Assert.Equal(EditorIcons.BelongsToMusicEditor(button), placed.Contains(button));
         }
-        Assert.Equal(10, placed.Count);
+        Assert.Equal(11, placed.Count);      // ten, plus the GAME tab of M9 stage 5
     }
 
     // ==================================================================================

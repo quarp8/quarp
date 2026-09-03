@@ -13,7 +13,25 @@ public enum EditorButton
     ExitTab,
 
     // The right-edge tab group, in the owner's dictated order: from the right corner leftwards
-    // music, sounds, tilemaps, sprites, code. Only sprites is alive in this portion (ADR-026).
+    // music, sounds, tilemaps, sprites, code — and, since M9 stage 5, the GAME in front of them
+    // all. Only sprites was alive in the arts portion (ADR-026); the strip is complete now.
+
+    /// <summary>
+    /// The strip's first stop and the reason stage 5 exists: the cartridge <b>running</b>, as a
+    /// tab beside the five that edit it. Before this stage the running game was not a tab at
+    /// all — it was the only thing on screen, and the single way out of it destroyed the
+    /// session with its input log and its time machine, which put "pause, edit, continue at the
+    /// same tick" — the whole promise of ADR-006/ADR-007 — behind no key at all.
+    ///
+    /// <para>It is placed like the other five (left end of the right-edge group, so the strip
+    /// reads GAME CODE SPRITES MAPS SOUNDS MUSIC left to right and F1..F6 count in that same
+    /// order) rather than as the separate left-hand element the work order allows as a
+    /// fallback: six ten-pixel buttons plus the exit button leave 90 px of top bar for the
+    /// tooltip field, which is 22 characters — narrower than the 25 the five-tab strip had, and
+    /// still the widest label field this console has ever had.</para>
+    /// </summary>
+    GameTab,
+
     CodeTab,
     SpritesTab,
     TilemapTab,
@@ -169,6 +187,15 @@ public enum EditorIcon
     // TIC-80's drawSheetButton and drawWorldButton).
     Tiles,
     World,
+
+    /// <summary>
+    /// M9 stage 5: the GAME tab's face — a gamepad. Deliberately not a transport triangle:
+    /// <see cref="Play"/> already is one and the sound and music screens place it in the same
+    /// top-to-bottom eyeline as the tabs, so two triangles ten pixels apart would mean "play
+    /// this slot" and "go to the game" at once. Appended at the end like every glyph before it,
+    /// because the mask table below is indexed by this enum's values.
+    /// </summary>
+    Game,
 }
 
 /// <summary>
@@ -533,6 +560,17 @@ public static class EditorIcons
             0b10000001,
             0b11111111,
         },
+        new byte[] // Game: a gamepad — solid body, the d-pad's cross and two buttons cut out of it
+        {
+            0b00000000,
+            0b01111110,
+            0b11011011,
+            0b10001101,
+            0b11011111,
+            0b01111110,
+            0b00000000,
+            0b00000000,
+        },
     };
 
     /// <summary>How many glyphs exist — the atlas sizes its strip from this.</summary>
@@ -571,38 +609,74 @@ public static class EditorIcons
     /// are two live tabs to travel between (M9 stage 3). Clicking the tab of the screen you
     /// are already on is the honest no-op the machine turns it into.
     /// </summary>
-    public static ShellMode? TabTarget(EditorButton button) => button switch
+    public static ShellMode? TabTarget(EditorButton button)
     {
-        EditorButton.SpritesTab => ShellMode.Editor,
-        EditorButton.TilemapTab => ShellMode.MapEditor,
-        EditorButton.CodeTab => ShellMode.CodeEditor,
-        EditorButton.SoundTab => ShellMode.SfxEditor,
-        EditorButton.MusicTab => ShellMode.MusicEditor,
-        _ => null,
-    };
+        foreach ((EditorButton Button, ShellMode Mode) tab in _liveTabs)
+        {
+            if (tab.Button == button)
+            {
+                return tab.Mode;
+            }
+        }
+        return null;
+    }
 
     /// <summary>
-    /// The live editor tabs in strip order, left to right — the one list
-    /// <see cref="ShellModeMachine.CycleEditorTab"/> walks for Alt+Left/Right. It is derived
-    /// from nothing: a tab joins here the same day it stops being a stub, and the parity sweeps
-    /// notice if it does not.
+    /// <b>The tab strip itself, left to right: the button the eye sees and the screen it opens.</b>
+    /// One array, so the key that jumps to a tab, the ring Alt+Left/Right walks and the icon drawn
+    /// in the top band cannot disagree about the order — which they could until this wave, when the
+    /// F-key order lived here and the pixel order lived in <c>ConsoleChrome</c>: swapping two
+    /// entries in one list moved F2 without moving the icon it points at, and no test went red.
+    ///
+    /// <para><b>The game is the first stop since M9 stage 5</b> (the owner's dictated layout:
+    /// F1 game, F2 code, F3 sprites, F4 maps, F5 sounds, F6 music). The verb behind the game's tab
+    /// is the same one every other tab's is — <c>ShellModeMachine.SwitchEditorTab</c> — which is
+    /// why the game could join the strip without a second kind of travel: what differs (pause the
+    /// simulation on the way out, raise the pause menu on the way in) is the machine's business,
+    /// not this table's.</para>
     /// </summary>
-    public static IReadOnlyList<ShellMode> LiveEditorTabs { get; } = new[]
+    private static readonly (EditorButton Button, ShellMode Mode)[] _liveTabs =
     {
-        ShellMode.CodeEditor, ShellMode.Editor, ShellMode.MapEditor, ShellMode.SfxEditor,
-        ShellMode.MusicEditor,
+        (EditorButton.GameTab, ShellMode.Game),
+        (EditorButton.CodeTab, ShellMode.CodeEditor),
+        (EditorButton.SpritesTab, ShellMode.Editor),
+        (EditorButton.TilemapTab, ShellMode.MapEditor),
+        (EditorButton.SoundTab, ShellMode.SfxEditor),
+        (EditorButton.MusicTab, ShellMode.MusicEditor),
     };
 
     /// <summary>
-    /// Which screen a numbered tab key means: 1 is the leftmost tab, 5 the rightmost — TIC-80's
-    /// <c>F1..F5</c> (REFERENCES-EDITORS §8 item 16), and the whole of what
+    /// The live tabs in strip order, left to right — the list
+    /// <see cref="ShellModeMachine.CycleEditorTab"/> walks for Alt+Left/Right, read off
+    /// <see cref="_liveTabs"/>. A tab joins the strip the same day it stops being a stub, and the
+    /// parity sweeps notice if it does not.
+    ///
+    /// <para>Every editor screen's F1..F6 block and both directions of the ring read this list and
+    /// nothing else, so the whole strip shifted one place when the game took the first stop — and
+    /// <see cref="ShellCommands"/>' own function-key range widened with it, because it counts
+    /// <c>LiveEditorTabs.Count</c> keys rather than a literal five.</para>
+    /// </summary>
+    public static IReadOnlyList<ShellMode> LiveEditorTabs { get; } =
+        Array.ConvertAll(_liveTabs, tab => tab.Mode);
+
+    /// <summary>
+    /// The same strip as buttons, left to right — what <see cref="ConsoleChrome"/> places in the
+    /// top band. It exists so the drawn order is <em>read</em> from the order the keys use instead
+    /// of being written down a second time beside it.
+    /// </summary>
+    public static IReadOnlyList<EditorButton> LiveEditorTabButtons { get; } =
+        Array.ConvertAll(_liveTabs, tab => tab.Button);
+
+    /// <summary>
+    /// Which screen a numbered tab key means: 1 is the leftmost tab, 6 the rightmost — TIC-80's
+    /// <c>F1..F5</c> grown by one (REFERENCES-EDITORS §8 item 16), and the whole of what
     /// <see cref="ShellCommands.EditorTabJump"/> means.
     ///
     /// <para>Answered off <see cref="LiveEditorTabs"/> and not off a second list, which is the
     /// only reason this method exists at all: the named key and the Alt+Left/Right ring must
     /// count the tabs in the same order, or F3 would land on one screen and two presses of
     /// Alt+Right on another. A number outside the strip answers null rather than clamping — a
-    /// sixth key that means "the fifth editor" is a key that lies.</para>
+    /// seventh key that means "the sixth editor" is a key that lies.</para>
     /// </summary>
     public static ShellMode? EditorTabForNumber(int number) =>
         number >= 1 && number <= LiveEditorTabs.Count ? LiveEditorTabs[number - 1] : null;
@@ -633,28 +707,30 @@ public static class EditorIcons
     /// <see cref="ClickButton"/> and <see cref="ClickMapButton"/>.</para>
     /// </summary>
     public static bool BelongsToMapEditor(EditorButton button) => button is
-        EditorButton.ExitTab or EditorButton.CodeTab or EditorButton.SpritesTab
-        or EditorButton.TilemapTab or EditorButton.SoundTab or EditorButton.MusicTab
+        EditorButton.ExitTab or EditorButton.GameTab or EditorButton.CodeTab
+        or EditorButton.SpritesTab or EditorButton.TilemapTab or EditorButton.SoundTab
+        or EditorButton.MusicTab
         or EditorButton.ToolPencil or EditorButton.ToolHand or EditorButton.ToolSelect
         or EditorButton.ToolFill or EditorButton.ToolEraser or EditorButton.GridToggle
         or EditorButton.TilesToggle or EditorButton.WorldToggle
         or EditorButton.Save or EditorButton.Undo or EditorButton.Redo;
 
     /// <summary>
-    /// The code editor's own button list: the shared chrome (six tabs, exit, save, undo, redo)
+    /// The code editor's own button list: the shared chrome (the six tabs, exit, save, undo, redo)
     /// and the two tools this screen has model verbs for — find and go-to-line. Everything the
     /// code screen has nothing to do with (every drawing tool, the grid, the eraser, the layer
     /// tabs, the size toggle, clear) stays off it, because a placed button with nothing behind
     /// it is the defect class the button contract test closed in wave 2g.
     /// </summary>
     public static bool BelongsToCodeEditor(EditorButton button) => button is
-        EditorButton.ExitTab or EditorButton.CodeTab or EditorButton.SpritesTab
-        or EditorButton.TilemapTab or EditorButton.SoundTab or EditorButton.MusicTab
+        EditorButton.ExitTab or EditorButton.GameTab or EditorButton.CodeTab
+        or EditorButton.SpritesTab or EditorButton.TilemapTab or EditorButton.SoundTab
+        or EditorButton.MusicTab
         or EditorButton.ToolFind or EditorButton.ToolGoTo
         or EditorButton.Save or EditorButton.Undo or EditorButton.Redo;
 
     /// <summary>
-    /// The <b>sound</b> editor's own button list: the shared chrome (six tabs, exit, save, undo,
+    /// The <b>sound</b> editor's own button list: the shared chrome (the six tabs, exit, save, undo,
     /// redo) and the one tool this screen has a model verb for — play/stop. Everything the sound
     /// screen has nothing to do with (every drawing tool, the grid, the eraser, the layer tabs,
     /// the size toggle, clear, find, go-to) stays off it, because a placed button with nothing
@@ -664,13 +740,14 @@ public static class EditorIcons
     /// this enum, exactly as the palette swatches and the sheet slider are on the sprite screen.
     /// </summary>
     public static bool BelongsToSfxEditor(EditorButton button) => button is
-        EditorButton.ExitTab or EditorButton.CodeTab or EditorButton.SpritesTab
-        or EditorButton.TilemapTab or EditorButton.SoundTab or EditorButton.MusicTab
+        EditorButton.ExitTab or EditorButton.GameTab or EditorButton.CodeTab
+        or EditorButton.SpritesTab or EditorButton.TilemapTab or EditorButton.SoundTab
+        or EditorButton.MusicTab
         or EditorButton.ToolPlay
         or EditorButton.Save or EditorButton.Undo or EditorButton.Redo;
 
     /// <summary>
-    /// The <b>music</b> editor's own button list: the shared chrome (six tabs, exit, save, undo,
+    /// The <b>music</b> editor's own button list: the shared chrome (the six tabs, exit, save, undo,
     /// redo) and the one tool this screen has a model verb for — play/stop. Everything the music
     /// screen has nothing to do with (every drawing tool, the grid, the eraser, the layer tabs,
     /// the size toggle, clear, find, go-to) stays off it, because a placed button with nothing
@@ -681,8 +758,9 @@ public static class EditorIcons
     /// swatches are on the sprite screen and the three grids on the sound screen.
     /// </summary>
     public static bool BelongsToMusicEditor(EditorButton button) => button is
-        EditorButton.ExitTab or EditorButton.CodeTab or EditorButton.SpritesTab
-        or EditorButton.TilemapTab or EditorButton.SoundTab or EditorButton.MusicTab
+        EditorButton.ExitTab or EditorButton.GameTab or EditorButton.CodeTab
+        or EditorButton.SpritesTab or EditorButton.TilemapTab or EditorButton.SoundTab
+        or EditorButton.MusicTab
         or EditorButton.ToolPlay
         or EditorButton.Save or EditorButton.Undo or EditorButton.Redo;
 
@@ -869,6 +947,7 @@ public static class EditorIcons
     public static EditorIcon IconFor(EditorButton button) => button switch
     {
         EditorButton.ExitTab => EditorIcon.Exit,
+        EditorButton.GameTab => EditorIcon.Game,
         EditorButton.CodeTab => EditorIcon.Code,
         EditorButton.SpritesTab => EditorIcon.Sprites,
         EditorButton.TilemapTab => EditorIcon.Tilemap,
@@ -910,11 +989,15 @@ public static class EditorIcons
     public static string Tooltip(EditorButton button) => button switch
     {
         EditorButton.ExitTab => "EXIT  ESC",
-        EditorButton.CodeTab => "CODE  F1-F5 JUMP, ALT+LEFT/RIGHT WALK THE TABS",
-        EditorButton.SpritesTab => "SPRITES  HOME SWITCHES   F1-F5 JUMP, ALT+LEFT/RIGHT WALK THE TABS",
-        EditorButton.TilemapTab => "MAPS  HOME SWITCHES   F1-F5 JUMP, ALT+LEFT/RIGHT WALK THE TABS",
-        EditorButton.SoundTab => "SOUNDS  F1-F5 JUMP, ALT+LEFT/RIGHT WALK THE TABS",
-        EditorButton.MusicTab => "MUSIC  F1-F5 JUMP, ALT+LEFT/RIGHT WALK THE TABS",
+        // The strip's first stop (M9 stage 5). Its text names F1 and the key that opens the
+        // pause menu once you are there, because those are the two things an author who has
+        // never left a game for an editor cannot guess.
+        EditorButton.GameTab => "GAME  F1   ESC IN THE GAME OPENS THE PAUSE MENU",
+        EditorButton.CodeTab => "CODE  F1-F6 JUMP, ALT+LEFT/RIGHT WALK THE TABS",
+        EditorButton.SpritesTab => "SPRITES  HOME SWITCHES   F1-F6 JUMP, ALT+LEFT/RIGHT WALK THE TABS",
+        EditorButton.TilemapTab => "MAPS  HOME SWITCHES   F1-F6 JUMP, ALT+LEFT/RIGHT WALK THE TABS",
+        EditorButton.SoundTab => "SOUNDS  F1-F6 JUMP, ALT+LEFT/RIGHT WALK THE TABS",
+        EditorButton.MusicTab => "MUSIC  F1-F6 JUMP, ALT+LEFT/RIGHT WALK THE TABS",
         EditorButton.ToolSelect => "SELECT  1 CYCLES   DRAG MARKS, GRAB INSIDE MOVES, ESC DROPS",
         EditorButton.ToolPencil => "PENCIL  2   ARROWS MOVE, Z/SPACE DRAW, X PICK, SHIFT+ARROWS SPRITE",
         // The Ctrl clause is TIC-80's replaceColor, hung where TIC-80 hangs it — on the bucket,

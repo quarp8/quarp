@@ -216,7 +216,7 @@ public readonly struct MusicEditorLayout
     /// </summary>
     public static MusicEditorLayout Compute(int screenWidth, int screenHeight)
     {
-        var buttons = new EditorButtonPlace[10];
+        var buttons = new EditorButtonPlace[11];
         int placed = 0;
         ConsoleChrome chrome = ConsoleChrome.Compute(screenWidth, screenHeight, buttons, ref placed);
 

@@ -89,8 +89,8 @@ public readonly struct ConsoleChrome
     // reason — the line is the screen's real width now.
 
     // The right-edge tab group in the owner's dictated order: from the right corner leftwards
-    // music, sounds, tilemaps, sprites, code. One list, so no two screens can present the tabs
-    // in different orders.
+    // music, sounds, tilemaps, sprites, code, game. One list, so no two screens can present the
+    // tabs in different orders.
 
     /// <summary>The prompt's heading when nothing has failed yet.</summary>
     public const string PromptHeading = "UNSAVED.";
@@ -108,21 +108,38 @@ public readonly struct ConsoleChrome
 
     private static readonly string[] _promptVerbs = { PromptSaveVerb, PromptDiscardVerb, PromptStayVerb };
 
-    private static readonly EditorButton[] _rightTabs =
-    {
-        EditorButton.MusicTab, EditorButton.SoundTab, EditorButton.TilemapTab,
-        EditorButton.SpritesTab, EditorButton.CodeTab,
-    };
+    /// <summary>
+    /// The strip as this band lays it out: index 0 hugs the right corner, so it is
+    /// <see cref="EditorIcons.LiveEditorTabButtons"/> read backwards and nothing else.
+    /// </summary>
+    private static readonly EditorButton[] _rightTabs = RightToLeft(EditorIcons.LiveEditorTabButtons);
 
     /// <summary>
-    /// The right-edge tab group, index 0 hugging the right corner — <b>the one owner of the tab
-    /// order</b>. It was published by the host frame in wave R2 because a second frame existed
-    /// then; wave R6 killed that frame and the list moved here with its reader, exactly as that
-    /// file's own comment said it would ("the day the last screen leaves this frame, this list
-    /// goes with the reader and not with the file"). Moved, not copied: there is still one
-    /// array and one order.
+    /// The right-edge tab group, index 0 hugging the right corner. Every screen places its tabs by
+    /// walking it and no screen restates the order — but <b>the order itself is not decided here</b>
+    /// any more: it is <see cref="EditorIcons.LiveEditorTabButtons"/>, the same left-to-right list
+    /// the F-keys and the Alt+Left/Right ring count along, turned round for a band that is measured
+    /// from the right corner.
+    ///
+    /// <para>It was published by the host frame in wave R2 because a second frame existed then;
+    /// wave R6 killed that frame and the list moved here with its reader. It stopped being a list
+    /// at all in the wave after M9 stage 5, and for a reason worth writing down: while the pixels'
+    /// order lived here and the keys' order lived in <c>EditorIcons</c>, swapping two entries in
+    /// one of them moved F2 without moving the icon F2 points at, and the whole suite stayed
+    /// green.</para>
     /// </summary>
     public static IReadOnlyList<EditorButton> RightTabs => _rightTabs;
+
+    /// <summary>The strip, reversed — the one arithmetic that turns "left to right" into "out from the right corner".</summary>
+    private static EditorButton[] RightToLeft(IReadOnlyList<EditorButton> leftToRight)
+    {
+        var reversed = new EditorButton[leftToRight.Count];
+        for (int i = 0; i < reversed.Length; i++)
+        {
+            reversed[i] = leftToRight[leftToRight.Count - 1 - i];
+        }
+        return reversed;
+    }
 
     /// <summary>Screen width this frame was measured for — 160 on profile 8.</summary>
     public int ScreenWidth { get; private init; }
@@ -130,7 +147,7 @@ public readonly struct ConsoleChrome
     /// <summary>Screen height this frame was measured for — 90 on profile 8.</summary>
     public int ScreenHeight { get; private init; }
 
-    /// <summary>The top band, full width: exit at the left, the five editor tabs off the right corner, the tooltip field between them.</summary>
+    /// <summary>The top band, full width: exit at the left, the six tabs off the right corner, the tooltip field between them.</summary>
     public Rectangle TopBar => new(0, 0, ScreenWidth, TopBarHeight);
 
     /// <summary>The rule under the top band.</summary>
@@ -193,7 +210,9 @@ public readonly struct ConsoleChrome
         new(ButtonSize, 0, ScreenWidth - ButtonSize * (1 + _rightTabs.Length), TopBarHeight);
 
     /// <summary>
-    /// How many characters the tooltip field holds — 25 on a 160 px console.
+    /// How many characters the tooltip field holds — 22 on a 160 px console (25 until M9 stage
+    /// 5 gave the strip its sixth tab; a ten-pixel button is two and a half characters of label,
+    /// and the label field is what paid for the GAME tab).
     ///
     /// <para><b>This is a deliberate divergence from what this editor did yesterday.</b> The
     /// host-resolution screen popped a bordered box under the pointer (the dead host frame's
@@ -204,7 +223,7 @@ public readonly struct ConsoleChrome
     /// room instead (<c>studio.c</c>, <c>drawToolbar</c>: <c>tic_api_print(tic,
     /// studio->tooltip.text, TextOffset, 1, ...)</c>, falling back to the editor's name when no
     /// control is hovered). We do the same, with the same fallback. The price is named rather
-    /// than hidden: a label longer than 25 characters is cut, and several of ours are — the
+    /// than hidden: a label longer than 22 characters is cut, and several of ours are — the
     /// sheet slider's is 53. Shortening the label texts themselves would be a second owner of
     /// what a control is called, so the cut happens here, at the one place that knows the
     /// width.</para>
@@ -212,9 +231,9 @@ public readonly struct ConsoleChrome
     public int TooltipChars => TooltipField.Width / SystemFont.CellWidth;
 
     /// <summary>
-    /// Measures the console frame and places its six shared buttons into
+    /// Measures the console frame and places its seven shared buttons into
     /// <paramref name="buttons"/> from <paramref name="placed"/> on: the exit button at the top
-    /// left, then the five editor tabs from the right corner leftwards in
+    /// left, then the six tabs from the right corner leftwards in
     /// <see cref="RightTabs"/>' order — the one owner of that order, so no two screens can end
     /// up presenting the tabs differently. The screen fills the rest of the
     /// array itself, which is why the index travels by reference.

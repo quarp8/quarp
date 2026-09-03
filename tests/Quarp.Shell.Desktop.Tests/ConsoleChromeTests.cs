@@ -28,15 +28,18 @@ public class ConsoleChromeTests
     private const int ScreenWidth = 160;
     private const int ScreenHeight = 90;
 
+    // The strip as the owner dictated it, right corner leftwards. GAME joined the left end of
+    // the group in M9 stage 5, which is why there are six of them and the exit button makes
+    // seven placed buttons in all.
     private static readonly EditorButton[] TabsRightToLeft =
     {
         EditorButton.MusicTab, EditorButton.SoundTab, EditorButton.TilemapTab,
-        EditorButton.SpritesTab, EditorButton.CodeTab,
+        EditorButton.SpritesTab, EditorButton.CodeTab, EditorButton.GameTab,
     };
 
     private static EditorButtonPlace[] Placed()
     {
-        var buttons = new EditorButtonPlace[6];
+        var buttons = new EditorButtonPlace[1 + TabsRightToLeft.Length];
         int placed = 0;
         ConsoleChrome.Compute(ScreenWidth, ScreenHeight, buttons, ref placed);
         Assert.Equal(buttons.Length, placed);
@@ -44,8 +47,8 @@ public class ConsoleChromeTests
     }
 
     /// <summary>
-    /// The frame places exit at the left corner of the top band and then the five editor tabs
-    /// off the right corner in the owner's dictated order, and nothing overlaps anything.
+    /// The frame places exit at the left corner of the top band and then the six tabs off the
+    /// right corner in the owner's dictated order, and nothing overlaps anything.
     ///
     /// <para>Break recipe: swap two entries of <c>_rightTabs</c> in
     /// <see cref="ConsoleChrome"/> and the order assertions go red on every screen at once —
@@ -112,7 +115,7 @@ public class ConsoleChromeTests
     [Fact]
     public void ThePromptVerbsAreRightAlignedAndHitTestBack()
     {
-        var buttons = new EditorButtonPlace[6];
+        var buttons = new EditorButtonPlace[1 + TabsRightToLeft.Length];
         int placed = 0;
         ConsoleChrome chrome = ConsoleChrome.Compute(ScreenWidth, ScreenHeight, buttons, ref placed);
 

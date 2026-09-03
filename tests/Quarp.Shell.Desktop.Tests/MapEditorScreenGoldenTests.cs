@@ -65,6 +65,22 @@ namespace Quarp.Shell.Desktop.Tests;
 /// holds. Every probe of this test passed the change; six new ones ask the four sides and the
 /// ground just beyond them. Was / became: <c>f5655081856eee58</c> / <c>67e018132dbbe454</c>.
 /// </para>
+///
+/// <para><b>Re-pinned 2026-09-02, M9 stage 5 (the tab strip grew a sixth stop).</b> Cause named
+/// before the numbers were read, and confirmed by the fact that <b>every <c>Pget</c> probe in
+/// this file passed the change untouched</b> — which is what says these screens were redrawn and
+/// not broken. Two edits moved pixels, both of them inside the ten rows of the top band and
+/// neither of them in this file's subject:
+/// <list type="number">
+///   <item>the running GAME became the strip's first tab (work order Р6), so
+///     <see cref="ConsoleChrome.RightTabs"/> places six ten-pixel buttons off the right corner
+///     instead of five, and a gamepad glyph appears where the tooltip field used to end;</item>
+///   <item>the tooltip field is therefore ten pixels narrower — 22 characters instead of 25 —
+///     so a hover label that was cut at 25 is cut at 22 and the fallback screen name starts in
+///     the same place but has less room.</item>
+/// </list>
+/// Nothing below <see cref="ConsoleChrome.ContentTop"/> changed, which is why not one structural
+/// probe in this file had to move. Was / became: <c>09f675e0a6018eef</c> / <c>0db9e78f2b8e3b45</c>, <c>e17172c86fa54436</c> / <c>7059b2e73c83d24c</c>, <c>7bf5950a6b0dee2a</c> / <c>85190070a8deb2d0</c>, <c>67e018132dbbe454</c> / <c>d2e48da780621b56</c>, <c>0ab90c2860f76ba4</c> / <c>94ab0bad7ed0d03a</c>.</para>
 /// </summary>
 public class MapEditorScreenGoldenTests : IDisposable
 {
@@ -181,7 +197,7 @@ public class MapEditorScreenGoldenTests : IDisposable
             Assert.InRange(pixel, (byte)0, (byte)15);
         }
 
-        Assert.Equal("09f675e0a6018eef", FrameHash.Of(screen.Framebuffer));
+        Assert.Equal("0db9e78f2b8e3b45", FrameHash.Of(screen.Framebuffer));
     }
 
     /// <summary>
@@ -217,7 +233,7 @@ public class MapEditorScreenGoldenTests : IDisposable
         Assert.Equal((byte)3, console.Pget(145, 85));
         Assert.Equal((byte)0, console.Pget(2, 79));
 
-        Assert.Equal("e17172c86fa54436", FrameHash.Of(screen.Framebuffer));
+        Assert.Equal("7059b2e73c83d24c", FrameHash.Of(screen.Framebuffer));
     }
 
     /// <summary>
@@ -261,7 +277,7 @@ public class MapEditorScreenGoldenTests : IDisposable
         // an overlay, not a screen.
         Assert.Equal((byte)3, console.Pget(24, 11));
 
-        Assert.Equal("7bf5950a6b0dee2a", FrameHash.Of(screen.Framebuffer));
+        Assert.Equal("85190070a8deb2d0", FrameHash.Of(screen.Framebuffer));
     }
 
     /// <summary>
@@ -310,7 +326,7 @@ public class MapEditorScreenGoldenTests : IDisposable
         Assert.Equal((byte)0, console.Pget(26, 25));
         Assert.Equal((byte)0, console.Pget(28, 23));
 
-        Assert.Equal("67e018132dbbe454", FrameHash.Of(screen.Framebuffer));
+        Assert.Equal("d2e48da780621b56", FrameHash.Of(screen.Framebuffer));
     }
 
     /// <summary>
@@ -345,7 +361,7 @@ public class MapEditorScreenGoldenTests : IDisposable
         // screen, which is the whole reason the prompt lives on one reserved line.
         Assert.Equal((byte)8, console.Pget(25, 12));
 
-        Assert.Equal("0ab90c2860f76ba4", FrameHash.Of(screen.Framebuffer));
+        Assert.Equal("94ab0bad7ed0d03a", FrameHash.Of(screen.Framebuffer));
     }
 
     /// <summary>
@@ -418,9 +434,9 @@ public class MapEditorScreenGoldenTests : IDisposable
         MapEditorLayout layout = MapEditorRenderer.Draw(
             screen, map, sheet, view, HoverTarget.OfButton(EditorButton.ToolPencil), true);
 
-        Assert.Equal(25, layout.Chrome.TooltipChars);
+        Assert.Equal(22, layout.Chrome.TooltipChars);
         Assert.Equal(
-            EditorIcons.MapTooltip(EditorButton.ToolPencil)[..25],
+            EditorIcons.MapTooltip(EditorButton.ToolPencil)[..22],
             layout.Chrome.FitTooltip(EditorIcons.MapTooltip(EditorButton.ToolPencil)));
         bool inkInField = false;
         for (int x = layout.Chrome.TooltipField.X; x < layout.Chrome.TooltipField.Right; x++)

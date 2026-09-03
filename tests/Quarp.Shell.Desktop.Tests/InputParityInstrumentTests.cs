@@ -526,6 +526,9 @@ public class InputParityInstrumentTests : IDisposable
         var expectedHotkeyToken = new Dictionary<EditorButton, string>
         {
             [EditorButton.ExitTab] = "ESC",
+            // The strip's first stop since M9 stage 5 — the running game. F1 is its named key,
+            // and the tooltip has to say so or the tab is a mouse-only feature.
+            [EditorButton.GameTab] = "F1",
             [EditorButton.ToolSelect] = "1",
             [EditorButton.ToolPencil] = "2",
             [EditorButton.ToolFill] = "3",

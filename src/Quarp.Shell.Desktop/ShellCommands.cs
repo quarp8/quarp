@@ -329,13 +329,14 @@ public readonly struct ShellCommands
     public bool EditorTabNext { get; init; }
 
     /// <summary>
-    /// Any editor screen: which editor <b>F1..F5</b> asked for this frame as a <b>1-based</b>
-    /// number, 0 for none — the shape <see cref="EditorToolDigit"/>, <see cref="SfxPianoKey"/>
-    /// and <see cref="MusicSlotDigit"/> already use, so a default-constructed frame means
-    /// "nothing was asked for" rather than "the first editor". TIC-80's own keys for exactly this
-    /// (REFERENCES-EDITORS §8 item 16: "<c>F1..F5</c>, <c>Alt+1..5</c>, <c>Ctrl+PgUp/PgDn</c>"),
-    /// and the thing <see cref="EditorTabPrev"/>/<see cref="EditorTabNext"/> cannot do: a ring of
-    /// five costs up to two presses to cross and a named key costs one.
+    /// Any screen with the tab strip on it: which tab <b>F1..F6</b> asked for this frame as a
+    /// <b>1-based</b> number, 0 for none — the shape <see cref="EditorToolDigit"/>,
+    /// <see cref="SfxPianoKey"/> and <see cref="MusicSlotDigit"/> already use, so a
+    /// default-constructed frame means "nothing was asked for" rather than "the first tab".
+    /// TIC-80's own keys for exactly this (REFERENCES-EDITORS §8 item 16: "<c>F1..F5</c>,
+    /// <c>Alt+1..5</c>, <c>Ctrl+PgUp/PgDn</c>") grown by one when M9 stage 5 put the GAME at the
+    /// head of the strip, and the thing <see cref="EditorTabPrev"/>/<see cref="EditorTabNext"/>
+    /// cannot do: a ring of six costs up to three presses to cross and a named key costs one.
     ///
     /// <para><b>What the number means has exactly one owner</b> and it is not this struct:
     /// <see cref="EditorIcons.EditorTabForNumber"/> turns it into a screen, off the same
@@ -344,11 +345,12 @@ public readonly struct ShellCommands
     ///
     /// <para><b>F5 is shared with <see cref="SaveReplay"/>, and that is this struct's ordinary
     /// arrangement rather than a clash</b> — the same shape <see cref="Slower"/> has carried
-    /// since the beginning. Replay saving is a GAME-mode verb and the editor tabs are an
-    /// EDITOR-mode verb; the modes never read each other's fields, and the gate belongs where
-    /// the meaning differs. Unmodified, like TIC-80's: no chord in this shell lands on F1..F5,
-    /// and <see cref="ShellModeMachine.SwitchEditorTab"/> is a no-op outside the five editor
-    /// screens anyway.</para>
+    /// since the beginning. The gate belongs where the meaning differs, and since M9 stage 5 the
+    /// two meanings meet on one screen, so the gate is written down there rather than implied:
+    /// <see cref="GameScreenInput"/> hands the session every time-control key while the game is
+    /// playing (F5 writes a replay) and withholds exactly <see cref="SaveReplay"/>,
+    /// <see cref="PlayReplay"/> and <see cref="TogglePause"/> while the pause menu is up (F5 is
+    /// the sound tab). Unmodified, like TIC-80's: no chord in this shell lands on F1..F6.</para>
     /// </summary>
     public int EditorTabJump { get; init; }
 
@@ -656,10 +658,11 @@ public sealed class ShellCommandReader
             EditorLayerDown = Pressed(keyboard, Keys.PageDown),
             EditorTabPrev = alt && Pressed(keyboard, Keys.Left),
             EditorTabNext = alt && Pressed(keyboard, Keys.Right),
-            // TIC-80's five named tab keys (REFERENCES-EDITORS §8 item 16). Unmodified, the way
-            // the reference has them and the way F11 above is: no chord in this shell lands on
-            // F1..F5. F5 also fills SaveReplay two lines up — one key edge read by two fields
-            // whose modes never meet; see the field's own comment for the whole argument.
+            // TIC-80's named tab keys (REFERENCES-EDITORS §8 item 16), six of them since the
+            // game joined the strip. Unmodified, the way the reference has them and the way F11
+            // above is: no chord in this shell lands on F1..F6. F5 also fills SaveReplay two
+            // lines up — one key edge read by two fields, and the one screen where both readings
+            // are live states its gate out loud; see the field's own comment.
             EditorTabJump = FunctionTab(keyboard),
             // Alt+Up/Down: the code screen's declaration walk. Alt is already read above for the
             // tab strip's Left/Right, and these are the OTHER two arrows, so nothing is shared.
@@ -714,11 +717,13 @@ public sealed class ShellCommandReader
     }
 
     /// <summary>
-    /// First freshly pressed function key F1..F5 as a 1-based number, 0 for none — the same
-    /// one-key-per-frame rule the toolbar digits, the flag digits and the piano follow. Five and
-    /// not twelve: <see cref="EditorIcons.LiveEditorTabs"/> holds five stops, F8 is
-    /// <see cref="PlayReplay"/> and F11 is <see cref="CodeFullscreen"/>, so the range stops
-    /// exactly where the tab strip does.
+    /// First freshly pressed function key as a 1-based number, 0 for none — the same
+    /// one-key-per-frame rule the toolbar digits, the flag digits and the piano follow. Six keys
+    /// and not twelve, and the six are counted rather than written down:
+    /// <see cref="EditorIcons.LiveEditorTabs"/> holds the stops, F8 is <see cref="PlayReplay"/>
+    /// and F11 is <see cref="CodeFullscreen"/>, so the range stops exactly where the tab strip
+    /// does — which is how the strip's sixth stop (the GAME tab, M9 stage 5) widened this range
+    /// without an edit here.
     /// </summary>
     private int FunctionTab(KeyboardState keyboard)
     {

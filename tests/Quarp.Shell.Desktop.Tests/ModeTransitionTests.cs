@@ -13,11 +13,18 @@ namespace Quarp.Shell.Desktop.Tests;
 /// <see cref="ContinuationReloadTests"/> possible): <c>QuarpGame</c> needs a graphics device,
 /// the policy under test does not.
 ///
-/// <para>Three of these are the work order's named proofs: Esc out of a game (1) flushes the
+/// <para>Three of these are the work order's named proofs: leaving a game (1) flushes the
 /// unsaved tail of save.dat through the session's Dispose, (2) drains the audio device before
 /// the library shows, and (3) lets the cart's collectible AssemblyLoadContext actually die —
 /// not "Unload was requested" but a dead weak reference, because a leaked context is invisible
 /// in any other way.</para>
+///
+/// <para><b>M9 stage 5 moved the door those three claims run through, and left the claims
+/// alone.</b> Esc in a game used to BE the exit; now it raises the pause menu and the exit is
+/// that menu's last row (<see cref="LeaveGameThroughThePauseMenu"/>). Every assertion below is
+/// the one it always was — the same flush, the same single drain, the same dead context — which
+/// is the point: the stage changed which keypress leaves a cartridge and changed nothing about
+/// what leaving one means.</para>
 /// </summary>
 public class ModeTransitionTests : IDisposable
 {
@@ -80,20 +87,72 @@ public class ModeTransitionTests : IDisposable
         return machine;
     }
 
+    /// <summary>
+    /// The one door out of a cartridge since M9 stage 5: Esc raises the pause menu, EXIT is its
+    /// last row, and choosing it is what every claim in this file runs through. Written once so
+    /// the tests below cannot drift about what "leaving a game" is.
+    ///
+    /// <para>Break recipe: make <c>ShellModeMachine.HandleEscape</c>'s game case call
+    /// <c>LeaveGame</c> directly again and the first assertion here goes red in every one of
+    /// them — the menu is the feature, not a decoration in front of the old behaviour.</para>
+    /// </summary>
+    private static void LeaveGameThroughThePauseMenu(ShellModeMachine machine)
+    {
+        machine.HandleEscape();
+        Assert.True(machine.PauseMenu.Shown, "Esc in a game must raise the pause menu, not leave");
+        Assert.Equal(ShellMode.Game, machine.Mode);
+
+        machine.PauseMenu.Select(machine.PauseMenu.Items.Count - 1);
+        Assert.Equal(PauseMenuItem.Exit, machine.PauseMenu.Current);
+        machine.ActivatePauseMenuItem();
+    }
+
     [Fact]
-    public void EscapeFromALibraryLaunchedGameReturnsToTheLibrary()
+    public void LeavingALibraryLaunchedGameReturnsToTheLibrary()
     {
         var machine = LibraryMachine(new DrainCounter());
         Assert.Equal(ShellMode.Library, machine.Mode);
 
         Assert.NotNull(machine.LaunchSelected());
         Assert.Equal(ShellMode.Game, machine.Mode);
+        Assert.False(machine.PauseMenu.Shown);      // a launched cart RUNS
 
-        machine.HandleEscape();
+        LeaveGameThroughThePauseMenu(machine);
 
         Assert.Equal(ShellMode.Library, machine.Mode);
         Assert.Null(machine.Session);
         Assert.False(machine.ExitRequested);        // the process lives on — that is the point
+    }
+
+    /// <summary>
+    /// Esc twice is Esc undone: the menu goes up, the simulation stops, and the second press
+    /// puts both back. That is the gesture an author performs by accident more often than any
+    /// other, and the reason RESUME is the row the menu opens on.
+    ///
+    /// <para>Break recipe: drop the <c>Session?.Resume()</c> from
+    /// <c>ShellModeMachine.ResumeFromPauseMenu</c> and the last assertion goes red — the menu
+    /// disappears and the game stays frozen, which is the worst of both.</para>
+    /// </summary>
+    [Fact]
+    public void EscapeRaisesThePauseMenuAndEscapeAgainPutsTheGameBack()
+    {
+        var machine = LibraryMachine(new DrainCounter());
+        Assert.NotNull(machine.LaunchSelected());
+        CartSession session = machine.Session!;
+        Assert.False(session.IsPaused);
+
+        machine.HandleEscape();
+        Assert.True(machine.PauseMenu.Shown);
+        Assert.True(session.IsPaused);
+        Assert.Equal(PauseMenuItem.Resume, machine.PauseMenu.Current);
+
+        machine.HandleEscape();
+        Assert.False(machine.PauseMenu.Shown);
+        Assert.False(session.IsPaused);
+        Assert.Equal(ShellMode.Game, machine.Mode);
+        Assert.Same(session, machine.Session);      // Р4: nothing was disposed on the way
+
+        LeaveGameThroughThePauseMenu(machine);
     }
 
     /// <summary>
@@ -114,7 +173,7 @@ public class ModeTransitionTests : IDisposable
         session.Update(1, default, rewinding: false);    // autosave: disk now holds tick 1
         session.Update(10, default, rewinding: false);   // memory holds tick 11, disk still 1
 
-        machine.HandleEscape();
+        LeaveGameThroughThePauseMenu(machine);
 
         byte[] saved = File.ReadAllBytes(Path.Combine(_saverFolder, "save.dat"));
         Fix expected = 11;      // Dset stores Fix raw values; the conversion owns the format
@@ -130,7 +189,7 @@ public class ModeTransitionTests : IDisposable
         machine.Session!.Update(5, default, rewinding: false);
         Assert.Equal(0, drain.Calls);       // playing never drains — only leaving does
 
-        machine.HandleEscape();
+        LeaveGameThroughThePauseMenu(machine);
 
         Assert.Equal(ShellMode.Library, machine.Mode);
         Assert.Equal(1, drain.Calls);
@@ -174,18 +233,24 @@ public class ModeTransitionTests : IDisposable
         machine.Session!.Update(30, default, rewinding: false);
         WeakReference context = machine.Session.LoadContextWeakReference;
         Assert.True(context.IsAlive);
-        machine.HandleEscape();
+        LeaveGameThroughThePauseMenu(machine);
         Assert.Null(machine.Session);
         return context;
     }
 
     /// <summary>
-    /// `quarp run &lt;cart&gt;` keeps its contract: Esc asks the process to exit and touches
-    /// nothing — the window's own OnExiting/Dispose path saves and unloads, exactly as it did
-    /// before modes existed. The library must not wedge itself into the F5 loop.
+    /// `quarp run &lt;cart&gt;` keeps its contract, through the new door: EXIT on the pause menu
+    /// asks the process to exit and touches nothing — the window's own OnExiting/Dispose path
+    /// saves and unloads, exactly as it did before modes existed. The library must not wedge
+    /// itself into the F5 loop.
+    ///
+    /// <para><b>What stage 5 changed here</b> (Р5): Esc itself no longer quits. It raises the
+    /// same menu a library launch gets, which is what unlocked the editors for an author who
+    /// started with a path on the command line — before this, Esc closed the window and there
+    /// was no other key at all.</para>
     /// </summary>
     [Fact]
-    public void EscapeInADirectLaunchRequestsExitAndLeavesTheSessionStanding()
+    public void ExitInADirectLaunchRequestsExitAndLeavesTheSessionStanding()
     {
         var drain = new DrainCounter();
         using CartSession session = CartSession.Start(_saverFolder);
@@ -196,7 +261,7 @@ public class ModeTransitionTests : IDisposable
             session);
         Assert.Equal(ShellMode.Game, machine.Mode);
 
-        machine.HandleEscape();
+        LeaveGameThroughThePauseMenu(machine);
 
         Assert.True(machine.ExitRequested);
         Assert.Same(session, machine.Session);
@@ -270,7 +335,7 @@ public class ModeTransitionTests : IDisposable
         machine.Library.MoveSelection(+1);
         Assert.NotNull(machine.LaunchSelected());
         Assert.Null(machine.LibraryMessage);        // a successful launch clears the report
-        machine.HandleEscape();
+        LeaveGameThroughThePauseMenu(machine);
     }
 
     /// <summary>
@@ -283,12 +348,12 @@ public class ModeTransitionTests : IDisposable
         var machine = LibraryMachine(new DrainCounter());
         Assert.NotNull(machine.LaunchSelected());
         machine.Session!.Update(5, default, rewinding: false);
-        machine.HandleEscape();
+        LeaveGameThroughThePauseMenu(machine);
 
         Assert.NotNull(machine.LaunchSelected());
         machine.Session!.Update(3, default, rewinding: false);
 
         Assert.Equal(3, machine.Session.Tick);
-        machine.HandleEscape();
+        LeaveGameThroughThePauseMenu(machine);
     }
 }

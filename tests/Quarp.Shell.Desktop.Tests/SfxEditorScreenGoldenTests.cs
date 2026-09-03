@@ -69,6 +69,22 @@ namespace Quarp.Shell.Desktop.Tests;
 /// <c>b8c78584d4e7387f</c> / <c>5667a47283e3db13</c>,
 /// <c>52c6287e53c8cef8</c> / <c>344994e27925881c</c>,
 /// <c>edeada55e2807126</c> / <c>85c142c68c85088a</c>.</para>
+///
+/// <para><b>Re-pinned 2026-09-02, M9 stage 5 (the tab strip grew a sixth stop).</b> Cause named
+/// before the numbers were read, and confirmed by the fact that <b>every <c>Pget</c> probe in
+/// this file passed the change untouched</b> — which is what says these screens were redrawn and
+/// not broken. Two edits moved pixels, both of them inside the ten rows of the top band and
+/// neither of them in this file's subject:
+/// <list type="number">
+///   <item>the running GAME became the strip's first tab (work order Р6), so
+///     <see cref="ConsoleChrome.RightTabs"/> places six ten-pixel buttons off the right corner
+///     instead of five, and a gamepad glyph appears where the tooltip field used to end;</item>
+///   <item>the tooltip field is therefore ten pixels narrower — 22 characters instead of 25 —
+///     so a hover label that was cut at 25 is cut at 22 and the fallback screen name starts in
+///     the same place but has less room.</item>
+/// </list>
+/// Nothing below <see cref="ConsoleChrome.ContentTop"/> changed, which is why not one structural
+/// probe in this file had to move. Was / became: <c>5667a47283e3db13</c> / <c>39de598f899b6729</c>, <c>344994e27925881c</c> / <c>8135bb86e543a8c6</c>, <c>85c142c68c85088a</c> / <c>5421dcbc51fc0564</c>.</para>
 /// </summary>
 public class SfxEditorScreenGoldenTests : IDisposable
 {
@@ -185,7 +201,7 @@ public class SfxEditorScreenGoldenTests : IDisposable
             Assert.InRange(pixel, (byte)0, (byte)15);
         }
 
-        Assert.Equal("5667a47283e3db13", FrameHash.Of(screen.Framebuffer));
+        Assert.Equal("39de598f899b6729", FrameHash.Of(screen.Framebuffer));
     }
 
     /// <summary>
@@ -239,7 +255,7 @@ public class SfxEditorScreenGoldenTests : IDisposable
         // Still no standing notice — this bank is writable.
         Assert.Equal((byte)0, console.Pget(1, 79));
 
-        Assert.Equal("344994e27925881c", FrameHash.Of(screen.Framebuffer));
+        Assert.Equal("8135bb86e543a8c6", FrameHash.Of(screen.Framebuffer));
     }
 
     /// <summary>
@@ -275,7 +291,7 @@ public class SfxEditorScreenGoldenTests : IDisposable
         // still on screen, which is the whole reason the prompt lives on one reserved line.
         Assert.Equal((byte)6, console.Pget(64, 33));
 
-        Assert.Equal("85c142c68c85088a", FrameHash.Of(screen.Framebuffer));
+        Assert.Equal("5421dcbc51fc0564", FrameHash.Of(screen.Framebuffer));
     }
 
     /// <summary>
@@ -352,9 +368,9 @@ public class SfxEditorScreenGoldenTests : IDisposable
         SfxEditorLayout layout = SfxEditorRenderer.Draw(
             screen, session, view, HoverTarget.OfSfxRegion(SfxRegion.Pitch), true);
 
-        Assert.Equal(25, layout.Chrome.TooltipChars);
+        Assert.Equal(22, layout.Chrome.TooltipChars);
         Assert.Equal(
-            EditorIcons.SfxPitchTooltip[..25],
+            EditorIcons.SfxPitchTooltip[..22],
             layout.Chrome.FitTooltip(EditorIcons.SfxPitchTooltip));
         bool inkInField = false;
         for (int x = layout.Chrome.TooltipField.X; x < layout.Chrome.TooltipField.Right; x++)

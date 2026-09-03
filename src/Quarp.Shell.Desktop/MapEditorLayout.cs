@@ -191,7 +191,7 @@ public readonly struct MapEditorLayout
     public static MapEditorLayout Compute(
         int screenWidth, int screenHeight, MapEditorOverlay overlay, int selectedSprite)
     {
-        var buttons = new EditorButtonPlace[17];
+        var buttons = new EditorButtonPlace[18];
         int placed = 0;
         ConsoleChrome chrome = ConsoleChrome.Compute(screenWidth, screenHeight, buttons, ref placed);
 

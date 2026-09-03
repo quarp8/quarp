@@ -789,8 +789,9 @@ public class CodeEditorScreenTests : IDisposable
     /// while the sprite sheet on another tab is dirty must not drop the sheet. The editor stays
     /// open, that tab comes to the front and asks.
     ///
-    /// <para>Break recipe: make <c>CloseUnlessAnotherBankIsDirty</c> call <c>CloseEditor</c>
-    /// straight away and every assertion here goes red at once.</para>
+    /// <para>Break recipe: make <c>CloseUnlessAnotherBankIsDirty</c> call
+    /// <c>FinishLeavingCartridge</c> straight away — skipping the <c>RaiseDirtyBankPrompt</c> that
+    /// asks the other banks — and every assertion here goes red at once.</para>
     /// </summary>
     [Fact]
     public void LeavingFromTheCodeTabDoesNotDropADirtySheet()

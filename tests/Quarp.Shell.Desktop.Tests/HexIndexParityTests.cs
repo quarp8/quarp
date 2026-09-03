@@ -1,5 +1,7 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using Microsoft.Xna.Framework.Input;
 using Quarp.Core;
 using Quarp.Shell.Desktop;
@@ -33,6 +35,16 @@ public class HexIndexParityTests : IDisposable
     private const int Off = -1000;
 
     private static readonly Keys[] NoKeys = Array.Empty<Keys>();
+
+    /// <summary>
+    /// The strip's five <b>editor</b> stops — the whole of <see cref="EditorIcons.LiveEditorTabs"/>
+    /// minus the GAME tab M9 stage 5 put at its head. Derived from that one list rather than
+    /// written out, so a seventh tab joins these sweeps by existing; the game is subtracted
+    /// because it prints no bank index and has no Ctrl+H to give, which is a fact about that
+    /// screen and not an exception to the rule this file states.
+    /// </summary>
+    private static IEnumerable<ShellMode> EditorScreens =>
+        EditorIcons.LiveEditorTabs.Where(tab => tab != ShellMode.Game);
 
     private readonly string _root;
 
@@ -70,7 +82,7 @@ public class HexIndexParityTests : IDisposable
         machine.Menu.SkipIntro();
         machine.OpenLibrary();
         machine.OpenEditor();
-        foreach (ShellMode tab in EditorIcons.LiveEditorTabs)
+        foreach (ShellMode tab in EditorScreens)
         {
             machine.SwitchEditorTab(tab);
         }
@@ -151,7 +163,7 @@ public class HexIndexParityTests : IDisposable
     /// and not a latch.
     ///
     /// <para>Break recipe: delete the <c>EditorHexToggle</c> block from any ONE of the five
-    /// routers and exactly that starting point goes red. Give any screen a private copy of the
+    /// editor routers and exactly that starting point goes red. Give any screen a private copy of the
     /// flag — a <c>bool</c> on its view, say — and the agreement assertion goes red for every
     /// starting point but that screen's own, which is the TIC-80 defect this file names in its
     /// header.</para>
@@ -159,7 +171,7 @@ public class HexIndexParityTests : IDisposable
     [Fact]
     public void CtrlHFromAnyScreenFlipsTheOneShellWideFormat()
     {
-        foreach (ShellMode start in EditorIcons.LiveEditorTabs)
+        foreach (ShellMode start in EditorScreens)
         {
             ShellModeMachine modes = OpenCart();
             var keys = new ShellCommandReader();
@@ -174,7 +186,7 @@ public class HexIndexParityTests : IDisposable
 
             // The value the OTHER four screens will print with is this same value: walking the
             // ring must not find a screen that kept its own answer.
-            foreach (ShellMode other in EditorIcons.LiveEditorTabs)
+            foreach (ShellMode other in EditorScreens)
             {
                 modes.SwitchEditorTab(other);
                 Assert.True(modes.Indexes.Hex);
@@ -251,7 +263,7 @@ public class HexIndexParityTests : IDisposable
     [Fact]
     public void NeitherBareHNorCtrlGFlipsTheFormat()
     {
-        foreach (ShellMode start in EditorIcons.LiveEditorTabs)
+        foreach (ShellMode start in EditorScreens)
         {
             ShellModeMachine modes = OpenCart();
             var keys = new ShellCommandReader();

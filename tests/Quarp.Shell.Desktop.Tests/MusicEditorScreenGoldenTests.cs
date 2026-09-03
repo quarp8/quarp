@@ -64,6 +64,22 @@ namespace Quarp.Shell.Desktop.Tests;
 /// <c>22161effe99e69b8</c> / <c>7d275675a9a49b49</c>,
 /// <c>e0a1d594f0c1e76b</c> / <c>4020d9d32eb89e26</c>,
 /// <c>6924d083aabcb026</c> / <c>101a599676bc6e4f</c>.</para>
+///
+/// <para><b>Re-pinned 2026-09-02, M9 stage 5 (the tab strip grew a sixth stop).</b> Cause named
+/// before the numbers were read, and confirmed by the fact that <b>every <c>Pget</c> probe in
+/// this file passed the change untouched</b> — which is what says these screens were redrawn and
+/// not broken. Two edits moved pixels, both of them inside the ten rows of the top band and
+/// neither of them in this file's subject:
+/// <list type="number">
+///   <item>the running GAME became the strip's first tab (work order Р6), so
+///     <see cref="ConsoleChrome.RightTabs"/> places six ten-pixel buttons off the right corner
+///     instead of five, and a gamepad glyph appears where the tooltip field used to end;</item>
+///   <item>the tooltip field is therefore ten pixels narrower — 22 characters instead of 25 —
+///     so a hover label that was cut at 25 is cut at 22 and the fallback screen name starts in
+///     the same place but has less room.</item>
+/// </list>
+/// Nothing below <see cref="ConsoleChrome.ContentTop"/> changed, which is why not one structural
+/// probe in this file had to move. Was / became: <c>d02bc2109b9fc4b0</c> / <c>76a41799678a6bf2</c>, <c>7d275675a9a49b49</c> / <c>6bf1010a19e5025f</c>, <c>4020d9d32eb89e26</c> / <c>98321b4ad1117a88</c>, <c>101a599676bc6e4f</c> / <c>470ed0f6483d2e25</c>.</para>
 /// </summary>
 public class MusicEditorScreenGoldenTests : IDisposable
 {
@@ -205,7 +221,7 @@ public class MusicEditorScreenGoldenTests : IDisposable
             Assert.InRange(pixel, (byte)0, (byte)15);
         }
 
-        Assert.Equal("d02bc2109b9fc4b0", FrameHash.Of(screen.Framebuffer));
+        Assert.Equal("76a41799678a6bf2", FrameHash.Of(screen.Framebuffer));
     }
 
     /// <summary>
@@ -260,7 +276,7 @@ public class MusicEditorScreenGoldenTests : IDisposable
         // Unsaved work: the save button's face is the modified floppy in warn yellow.
         Assert.Equal((byte)8, console.Pget(1, 22));
 
-        Assert.Equal("7d275675a9a49b49", FrameHash.Of(screen.Framebuffer));
+        Assert.Equal("6bf1010a19e5025f", FrameHash.Of(screen.Framebuffer));
     }
 
     /// <summary>
@@ -306,7 +322,7 @@ public class MusicEditorScreenGoldenTests : IDisposable
         // the author will hear.
         Assert.Equal((byte)1, console.Pget(151, 12));
 
-        Assert.Equal("4020d9d32eb89e26", FrameHash.Of(screen.Framebuffer));
+        Assert.Equal("98321b4ad1117a88", FrameHash.Of(screen.Framebuffer));
     }
 
     /// <summary>
@@ -342,7 +358,7 @@ public class MusicEditorScreenGoldenTests : IDisposable
         // on screen, which is the whole reason the prompt lives on one reserved line.
         Assert.Equal((byte)2, console.Pget(99, 18));
 
-        Assert.Equal("101a599676bc6e4f", FrameHash.Of(screen.Framebuffer));
+        Assert.Equal("470ed0f6483d2e25", FrameHash.Of(screen.Framebuffer));
     }
 
     /// <summary>
@@ -414,9 +430,9 @@ public class MusicEditorScreenGoldenTests : IDisposable
         MusicEditorLayout layout = MusicEditorRenderer.Draw(
             screen, session, view, HoverTarget.OfMusicRegion(MusicRegion.Channels), true);
 
-        Assert.Equal(25, layout.Chrome.TooltipChars);
+        Assert.Equal(22, layout.Chrome.TooltipChars);
         Assert.Equal(
-            EditorIcons.MusicChannelsTooltip[..25],
+            EditorIcons.MusicChannelsTooltip[..22],
             layout.Chrome.FitTooltip(EditorIcons.MusicChannelsTooltip));
         bool inkInField = false;
         for (int x = layout.Chrome.TooltipField.X; x < layout.Chrome.TooltipField.Right; x++)

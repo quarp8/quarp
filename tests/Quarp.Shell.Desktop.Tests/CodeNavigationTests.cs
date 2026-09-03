@@ -18,8 +18,9 @@ namespace Quarp.Shell.Desktop.Tests;
 ///     driven through the production <see cref="ShellCommandReader"/> and
 ///     <see cref="CodeEditorInput"/>, so the chord/bare-key precedence being asserted is the
 ///     shell's own and not a second copy of it.</item>
-///   <item><b>F1..F5 name the five editors</b> (§8 item 16) and <b>the budget readout turns red
-///     past the limit</b> (§8 item 13, TIC-80's <c>drawStatus</c>).</item>
+///   <item><b>F1..F6 name the six tabs</b> (§8 item 16 plus the GAME tab of M9 stage 5) and
+///     <b>the budget readout turns red past the limit</b> (§8 item 13, TIC-80's
+///     <c>drawStatus</c>).</item>
 /// </list>
 ///
 /// <para><b>Headless throughout.</b> <see cref="CodeEditorSession"/> is a plain object,
@@ -355,17 +356,18 @@ public class CodeNavigationTests : IDisposable
         Assert.Equal(5, harness.Session.CursorLine);
 
         harness.Tap(Keys.LeftAlt, Keys.Right);
-        Assert.Equal(EditorIcons.LiveEditorTabs[1], harness.Modes.Mode);
+        // Index 2, not 1: CODE is the strip's second stop since the GAME tab took the first.
+        Assert.Equal(EditorIcons.LiveEditorTabs[2], harness.Modes.Mode);
         // The tab key left the caret exactly where the walk had put it.
         Assert.Equal(5, harness.Modes.CodeEditor!.CursorLine);
     }
 
     // ==================================================================================
-    // 3. F1..F5 — TIC-80's five named tab keys.
+    // 3. F1..F6 — TIC-80's named tab keys, and the sixth the GAME tab added.
     // ==================================================================================
 
     /// <summary>
-    /// Each of the five keys lands on the tab of the same number, in
+    /// Each of the six keys lands on the tab of the same number, in
     /// <see cref="EditorIcons.LiveEditorTabs"/>' own left-to-right order — driven through the
     /// production reader and the production router, one key per case, from the CODE screen every
     /// time.
@@ -373,7 +375,11 @@ public class CodeNavigationTests : IDisposable
     /// <para>Break recipe: reorder <see cref="EditorIcons.LiveEditorTabs"/> and every row but the
     /// one whose tab did not move goes red — which is the whole reason
     /// <see cref="EditorIcons.EditorTabForNumber"/> reads that list instead of carrying a second
-    /// one. Change <c>FunctionTab</c>'s base key to <c>Keys.F2</c> and all five go red at once.</para>
+    /// one. Change <c>FunctionTab</c>'s base key to <c>Keys.F2</c> and all six go red at once.</para>
+    ///
+    /// <para>Row 1 is the GAME tab (M9 stage 5). Reaching it from an editor opened out of the
+    /// library is legal and lands on the game screen with the pause menu up and START on it — the
+    /// work order's Р7 — which is why this row asserts a mode and not a session.</para>
     /// </summary>
     [Theory]
     [InlineData(1)]
@@ -381,6 +387,7 @@ public class CodeNavigationTests : IDisposable
     [InlineData(3)]
     [InlineData(4)]
     [InlineData(5)]
+    [InlineData(6)]
     public void FunctionKeysJumpStraightToTheEditorOfThatNumber(int number)
     {
         Harness harness = OpenCodeEditor(Sample);
@@ -392,29 +399,33 @@ public class CodeNavigationTests : IDisposable
 
     /// <summary>
     /// The named key and the ring must count the tabs the same way, and the keys stop where the
-    /// strip stops. Three claims, and the last two are the negative control: <b>F6 is not a sixth
-    /// editor</b>, and <b>a function key is deaf while the exit prompt is up</b> — the prompt owns
-    /// the input, and a keystroke that carried the author away from a question about their unsaved
-    /// text is how that text gets lost.
+    /// strip stops. Three claims, and the last two are the negative control: <b>F7 is not a
+    /// seventh tab</b>, and <b>a function key is deaf while the exit prompt is up</b> — the
+    /// prompt owns the input, and a keystroke that carried the author away from a question about
+    /// their unsaved text is how that text gets lost.
+    ///
+    /// <para>The key the ring is compared against moved from F2 to F3 when the GAME tab took the
+    /// head of the strip: one step of Alt+Right from CODE is now SPRITES, and the point of the
+    /// assertion is that the two roads count the same list, not which screen they land on.</para>
     ///
     /// <para>Break recipe: make <see cref="EditorIcons.EditorTabForNumber"/> clamp instead of
-    /// answering null and the F6 assertion goes red; move the router's function-key block above
+    /// answering null and the F7 assertion goes red; move the router's function-key block above
     /// the exit-prompt branch in <c>CodeEditorInput.Update</c> and the prompt assertions do.</para>
     /// </summary>
     [Fact]
-    public void TheKeysAgreeWithTheRingStopAtFiveAndAreDeafUnderThePrompt()
+    public void TheKeysAgreeWithTheRingStopAtSixAndAreDeafUnderThePrompt()
     {
-        // F2 and one step of Alt+Right must be the same screen — one owner of the order.
+        // F3 and one step of Alt+Right must be the same screen — one owner of the order.
         Harness byKey = OpenCodeEditor(Sample);
-        byKey.Tap(Keys.F2);
+        byKey.Tap(Keys.F3);
         Harness byRing = OpenCodeEditor(Sample);
         byRing.Tap(Keys.LeftAlt, Keys.Right);
         Assert.Equal(byRing.Modes.Mode, byKey.Modes.Mode);
 
-        // F6 is not a tab: nothing above five exists, and clamping would be a key that lies.
+        // F7 is not a tab: nothing above six exists, and clamping would be a key that lies.
         Harness harness = OpenCodeEditor(Sample);
         Assert.Null(EditorIcons.EditorTabForNumber(EditorIcons.LiveEditorTabs.Count + 1));
-        harness.Tap(Keys.F6);
+        harness.Tap(Keys.F7);
         Assert.Equal(ShellMode.CodeEditor, harness.Modes.Mode);
 
         // Under the exit prompt every key but Z / X / Esc is deaf, this one included.
@@ -422,7 +433,7 @@ public class CodeNavigationTests : IDisposable
         Assert.True(harness.Session.IsDirty);
         harness.Tap(Keys.Escape);
         Assert.True(harness.View.ExitPromptShown);
-        harness.Tap(Keys.F2);
+        harness.Tap(Keys.F3);
         Assert.Equal(ShellMode.CodeEditor, harness.Modes.Mode);
         Assert.True(harness.View.ExitPromptShown);
     }
@@ -486,7 +497,7 @@ public class CodeNavigationTests : IDisposable
     private static VirtualConsole DrawStatus(byte? numberColor)
     {
         var screen = new ShellScreen();
-        var buttons = new EditorButtonPlace[6];
+        var buttons = new EditorButtonPlace[1 + ConsoleChrome.RightTabs.Count];
         int placed = 0;
         ConsoleChrome chrome = ConsoleChrome.Compute(ConsoleWidth, ConsoleHeight, buttons, ref placed);
         screen.Begin();

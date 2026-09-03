@@ -18,15 +18,50 @@ namespace Quarp.Shell.Desktop;
 /// headless test. The machine therefore holds the policy and calls out through two seams the
 /// shell provides: a session factory and an audio drain.</para>
 ///
-/// <para><b>Escape means different things on purpose</b> (work order, stage 1): a cart started
-/// as <c>quarp run &lt;cart&gt;</c> is the author's F5 loop, and Esc quits the process like it
-/// always has — the library must not wedge itself into that loop. A cart started from the
-/// library returns to the library. Esc in the library returns to the boot menu (ADR-028; it
-/// used to quit, before the menu existed to return to); Esc in the menu quits — except that
-/// mid-intro it skips, and in the name field it cancels the field. Esc in the editor returns
-/// to the library when the session is clean, and raises the session's footer prompt when it
-/// is not — unsaved pixels leave only through an explicit Z (save) or X (discard), never
-/// silently.</para>
+/// <para><b>Escape means different things on purpose.</b> Esc in the library returns to the boot
+/// menu (ADR-028; it used to quit, before the menu existed to return to); Esc in the menu quits —
+/// except that mid-intro it skips, and in the name field it cancels the field. Esc in the editor
+/// <b>with a cartridge running</b> goes back to the game tab and touches nothing else
+/// (<see cref="EscapeReturnsToTheGame"/>); with nothing running it returns to the library when the
+/// session is clean, and raises the session's footer prompt when it is not — unsaved pixels leave
+/// only through an explicit Z (save) or X (discard), never silently. Esc <b>in a game</b> raises
+/// <see cref="PauseMenu"/> — see below.</para>
+///
+/// <para><b>M9 stage 5: the game became a tab, and the session stopped dying at the door.</b>
+/// Until this stage leaving a game meant <c>Session.Dispose()</c>, so the input log and the
+/// <c>TimeMachine</c> — everything ADR-006 and ADR-007 are about — were destroyed by the only
+/// keypress that led out of a running cart, and the editors could only be entered from the
+/// library, which is to say only after that destruction. "Pause, edit, continue at the same
+/// tick" was therefore a property of the core with no key attached to it. Now:
+///
+/// <list type="bullet">
+///   <item>Esc raises the pause menu over the frame; <see cref="PauseMenuItem.Exit"/> is the
+///     only door that still disposes anything;</item>
+///   <item><see cref="SwitchEditorTab"/> travels between the game and the five editors in both
+///     directions and <b>keeps the session</b> — walking off the game tab only pauses it (Р1:
+///     an author must not be editing a moving target);</item>
+///   <item>a save in any editor reaches the running cartridge through
+///     <see cref="PollSessionReload"/>, which is <see cref="TimeMachine.Rebuild"/> and a return
+///     to the very same tick (Р2);</item>
+///   <item>a direct launch (<c>quarp run &lt;cart&gt;</c>) gets the same menu, and its Exit
+///     leaves the process (Р5) — the author is no longer locked out of the editors.</item>
+/// </list>
+///
+/// <para><b>One owner of "the cartridge this shell has open".</b> A cartridge is open as a
+/// <em>whole</em>: the running <see cref="Session"/> and the folder's five editor banks are faces
+/// of one thing, and they are let go together by <see cref="ReleaseCartridge"/> — the only method
+/// that calls <see cref="CartSession.Dispose"/> and the only one that forgets a bank. It has
+/// exactly the two callers Р4 allows: leaving the cartridge (the pause menu's EXIT, or closing the
+/// editors when nothing is running — both through <see cref="ReturnToLibrary"/>) and a cartridge
+/// change (<see cref="LaunchSelected"/>, <see cref="LoadCartFromPath"/>).
+///
+/// <para>This is a fix, not decoration. Until it, leaving a game for the library disposed the
+/// session and left the <em>editor</em> standing on the cart just left; the next cart launched from
+/// the library then found a non-null folder, F2 opened the previous cartridge's code, and Ctrl+S
+/// wrote it there. Two fields that had to be cleared together, in two methods that each knew about
+/// one of them. Now the banks live in one object (<see cref="OpenCartridge"/>) whose whole lifetime
+/// is one assignment, so "forgot to clear the other flag" is not a state this class can reach —
+/// pinned by the two-cartridge fixture in <c>PauseAndContinueTests</c>, which is what caught it.</para></para>
 /// </summary>
 public sealed class ShellModeMachine
 {
@@ -111,18 +146,33 @@ public sealed class ShellModeMachine
     /// <summary>The boot screen's model — intro clock, selection, the name field. Idle on a direct launch.</summary>
     public MainMenuSession Menu { get; } = new();
 
+    /// <summary>
+    /// The menu that stands over a paused game (M9 stage 5). It is up exactly while the
+    /// simulation is being held still by the shell rather than by the player's Space, which is
+    /// why the machine and not the window owns it: raising it and pausing the session are one
+    /// act, and two owners of that act would eventually disagree.
+    /// </summary>
+    public PauseMenu PauseMenu { get; } = new();
+
     public ShellMode Mode { get; private set; }
 
-    /// <summary>The running cartridge; non-null exactly while <see cref="Mode"/> is <see cref="ShellMode.Game"/>.</summary>
+    /// <summary>
+    /// The running cartridge, or null when none is. It is <b>not</b> a mirror of
+    /// <see cref="Mode"/>: since M9 stage 5 a session goes on standing (paused) while the author
+    /// works on any of the five editor tabs, which is the whole point of the stage — the sentence
+    /// that used to be here, "non-null exactly while Mode is Game", stopped being true the day the
+    /// game became a tab. What is still exact is the other direction: the game screen with no
+    /// session behind it is the START menu of Р7, and nothing else.
+    /// </summary>
     public CartSession? Session { get; private set; }
 
     /// <summary>
-    /// The open sprite sheet; non-null while <see cref="Mode"/> is <see cref="ShellMode.Editor"/>
-    /// <b>or</b> <see cref="ShellMode.MapEditor"/> — the two tabs are two faces of one open
-    /// cartridge, and the sheet stays alive (unsaved pixels and all) while the author is on the
-    /// map tab. That is the stage-3 promise "there and back without losing unsaved work".
+    /// The open sprite sheet; non-null while any editor tab is open, because the two graphics tabs
+    /// are two faces of one open cartridge and the sheet stays alive (unsaved pixels and all) while
+    /// the author is elsewhere. That is the stage-3 promise "there and back without losing unsaved
+    /// work".
     /// </summary>
-    public SpriteEditorSession? Editor { get; private set; }
+    public SpriteEditorSession? Editor => _open?.Sheet;
 
     /// <summary>
     /// The open map of the same cart, created lazily by the first visit to the tilemap tab and
@@ -130,10 +180,10 @@ public sealed class ShellModeMachine
     /// Null until that first visit: a cart whose map is never opened must not get a session
     /// (and therefore cannot get a file) it never asked for.
     /// </summary>
-    public MapEditorSession? MapEditor { get; private set; }
+    public MapEditorSession? MapEditor => _open?.Map;
 
     /// <summary>The map screen's camera, cursor and exit prompt; non-null exactly while <see cref="MapEditor"/> is.</summary>
-    public MapEditorView? MapView { get; private set; }
+    public MapEditorView? MapView => _open?.MapView;
 
     /// <summary>
     /// The sprite screen's view — the canvas grid switch and the sheet-block drag. Unlike its
@@ -152,7 +202,7 @@ public sealed class ShellModeMachine
     /// session and that all five routers already hold, because the whole point of the feature is
     /// that the author sets it once: five per-screen copies would be five answers to one
     /// question. Nothing about it is ever written to a cartridge, which is why it is not on a
-    /// session; and it survives <see cref="CloseEditor"/> on purpose, because a way of reading
+    /// session; and it survives <see cref="ReleaseCartridge"/> on purpose, because a way of reading
     /// is not a property of the cart being read.
     /// </summary>
     public IndexFormat Indexes { get; private set; }
@@ -166,10 +216,10 @@ public sealed class ShellModeMachine
     /// an unsaved character. Null until that first visit: a cart whose code is never opened must
     /// not get a session (and therefore cannot get a <c>src</c> folder) it never asked for.
     /// </summary>
-    public CodeEditorSession? CodeEditor { get; private set; }
+    public CodeEditorSession? CodeEditor => _open?.Code;
 
     /// <summary>The code screen's scroll, footer fields and exit prompt; non-null exactly while <see cref="CodeEditor"/> is.</summary>
-    public CodeEditorView? CodeView { get; private set; }
+    public CodeEditorView? CodeView => _open?.CodeView;
 
     /// <summary>
     /// The open effects bank of the same cart's <c>sfx.bin</c>, created lazily by the first
@@ -178,10 +228,10 @@ public sealed class ShellModeMachine
     /// opened must not get a session (and therefore cannot get an <c>sfx.bin</c>) it never
     /// asked for.
     /// </summary>
-    public SfxEditorSession? SfxEditor { get; private set; }
+    public SfxEditorSession? SfxEditor => _open?.Sfx;
 
     /// <summary>The sound screen's slot, cursor, pen, playback request and exit prompt; non-null exactly while <see cref="SfxEditor"/> is.</summary>
-    public SfxEditorView? SfxView { get; private set; }
+    public SfxEditorView? SfxView => _open?.SfxView;
 
     /// <summary>
     /// The open song of the same cart's <c>music.bin</c>, created lazily by the first visit to
@@ -189,13 +239,21 @@ public sealed class ShellModeMachine
     /// unsaved pattern. Null until that first visit: a cart whose song is never opened must not
     /// get a session (and therefore cannot get a <c>music.bin</c>) it never asked for.
     /// </summary>
-    public MusicEditorSession? MusicEditor { get; private set; }
+    public MusicEditorSession? MusicEditor => _open?.Music;
 
     /// <summary>The music screen's window, mute table, playback request and exit prompt; non-null exactly while <see cref="MusicEditor"/> is.</summary>
-    public MusicEditorView? MusicView { get; private set; }
+    public MusicEditorView? MusicView => _open?.MusicView;
 
-    /// <summary>The folder both editor sessions belong to — remembered because a session does not carry its own path.</summary>
-    private string? _editorFolder;
+    /// <summary>
+    /// The cartridge whose banks are open in the editors, or null when none is. The one field the
+    /// six properties above read: opening is one assignment and closing is one assignment, so a
+    /// bank cannot outlive the cartridge it belongs to — see the type comment for the defect that
+    /// bought this shape.
+    /// </summary>
+    private OpenCartridge? _open;
+
+    /// <summary>The folder those banks belong to — remembered because an editor session does not carry its own path.</summary>
+    private string? EditorFolder => _open?.Folder;
 
     /// <summary>
     /// True once Escape meant "leave the process". The shell polls this and calls
@@ -216,8 +274,14 @@ public sealed class ShellModeMachine
     {
         switch (Mode)
         {
-            case ShellMode.Game when !_directLaunch:
-                LeaveGameForLibrary();
+            case ShellMode.Game:
+                // M9 stage 5: Esc no longer leaves a game — it raises the pause menu over the
+                // frame, and pressing it again is the menu's own RESUME. The two roads out of a
+                // cartridge are now that menu's Exit and the tab strip, and neither of them is a
+                // key the player's thumb finds by accident. The direct launch gets the identical
+                // treatment (Р5): it used to quit the process here, which is exactly what locked
+                // `quarp run <cart>` out of every editor this milestone built.
+                TogglePauseMenu();
                 break;
             case ShellMode.Menu when Menu.Phase == MenuPhase.Intro:
                 // Esc is "any key" here like every other key: it cuts the intro, it does not
@@ -234,45 +298,266 @@ public sealed class ShellModeMachine
                 Mode = ShellMode.Menu;
                 break;
             case ShellMode.Editor:
-                // The session judges (clean closes, dirty raises or lowers its prompt);
-                // the machine only executes the verdict — and then asks the OTHER open bank
-                // the same question, because leaving the editor must not drop a dirty map that
-                // happens to be on the tab the author is not looking at.
+                // With a cartridge running this is the way back to it and nothing else (see
+                // EscapeReturnsToTheGame). With nothing running the session judges (clean closes,
+                // dirty raises or lowers its prompt); the machine only executes the verdict — and
+                // then asks the OTHER open bank the same question, because leaving the editor must
+                // not drop a dirty map that happens to be on the tab the author is not looking at.
+                if (EscapeReturnsToTheGame(Editor!.ExitPromptShown))
+                {
+                    break;
+                }
                 if (Editor!.RequestClose())
                 {
                     CloseAfterSheetResolved();
                 }
                 break;
             case ShellMode.MapEditor:
+                if (EscapeReturnsToTheGame(MapView!.ExitPromptShown))
+                {
+                    break;
+                }
                 if (MapView!.RequestClose(MapEditor!))
                 {
                     CloseAfterMapResolved();
                 }
                 break;
             case ShellMode.CodeEditor:
+                if (EscapeReturnsToTheGame(CodeView!.ExitPromptShown))
+                {
+                    break;
+                }
                 if (CodeView!.RequestClose(CodeEditor!))
                 {
                     CloseAfterCodeResolved();
                 }
                 break;
             case ShellMode.SfxEditor:
+                if (EscapeReturnsToTheGame(SfxView!.ExitPromptShown))
+                {
+                    break;
+                }
                 if (SfxView!.RequestClose(SfxEditor!))
                 {
                     CloseAfterSfxResolved();
                 }
                 break;
             case ShellMode.MusicEditor:
+                if (EscapeReturnsToTheGame(MusicView!.ExitPromptShown))
+                {
+                    break;
+                }
                 if (MusicView!.RequestClose(MusicEditor!))
                 {
                     CloseAfterMusicResolved();
                 }
                 break;
             default:
-                // A direct-launch game, or the menu at rest: leave the process. The session,
-                // if any, is deliberately left standing — QuarpGame's OnExiting/Dispose path
-                // saves and unloads it, same as it always has.
+                // The menu at rest: leave the process. A session, if one somehow still stands,
+                // is deliberately left alone — QuarpGame's OnExiting/Dispose path saves and
+                // unloads it, same as it always has.
                 ExitRequested = true;
                 break;
+        }
+    }
+
+    /// <summary>
+    /// The half of <c>Esc</c> that is the same on all five editor screens: <b>with a cartridge
+    /// running it is the way back to the game tab, and it destroys nothing.</b>
+    ///
+    /// <para>This is a fix of stage 5's own making. Esc in an editor still ran the road it ran
+    /// when a session could not survive a trip to the editors — the close chain, which ends by
+    /// letting the cartridge go — so the key that used to mean "back to the library" quietly killed
+    /// a <em>live</em> session, input log, time machine and all, from a screen the author had
+    /// reached with the game paused behind it. The way out of a cartridge is the pause menu's EXIT
+    /// (which asks about unsaved work first); Esc here is travel, not a door.</para>
+    ///
+    /// <para>A raised exit prompt outranks it, on all five screens: there Esc already means "stay",
+    /// and answering a question by leaving the screen it is asked on would lose it. With nothing
+    /// running the old road is the whole road — the editors were opened from the library, and the
+    /// library is where they close to.</para>
+    /// </summary>
+    /// <param name="promptShown">Whether this screen is already asking about its unsaved work.</param>
+    /// <returns>True when Escape has been dealt with by travelling; false to let the screen judge.</returns>
+    private bool EscapeReturnsToTheGame(bool promptShown)
+    {
+        if (promptShown || Session is null)
+        {
+            return false;
+        }
+        SwitchEditorTab(ShellMode.Game);
+        return true;
+    }
+
+    // --- the pause menu (M9 stage 5) ---
+
+    /// <summary>
+    /// Esc on the game screen, both ways: raise the menu and stop the simulation, or lower it
+    /// and let the simulation go. Stopping and raising are one act on purpose — a menu that was
+    /// up over a running game would be exactly the moving target Р1 forbids, and a pause with no
+    /// menu on it would be the Space key, which already exists.
+    /// </summary>
+    public void TogglePauseMenu()
+    {
+        if (Mode != ShellMode.Game)
+        {
+            return;
+        }
+        if (PauseMenu.Shown)
+        {
+            if (Session is null)
+            {
+                // Nothing to lower it onto. With no cartridge behind it this menu is not an
+                // overlay, it IS the game screen (Р7: START and EXIT), so "close" would leave a
+                // black screen whose only keys — the tabs — this router only offers while the menu
+                // is up. Esc therefore does nothing here; EXIT is the row that leaves.
+                return;
+            }
+            ResumeFromPauseMenu();
+            return;
+        }
+        Session?.PauseForEditing();
+        PauseMenu.Open(Session is not null);
+    }
+
+    /// <summary>
+    /// Enter / Z on the menu, and a click on a row. Returns the session it just started, or
+    /// null — the same shape <see cref="LaunchSelected"/> has, and for the same reason: the
+    /// window has wiring to do (speaker, title, tick accumulator) that this class must not know
+    /// about. Every other verb answers null because it started nothing.
+    /// </summary>
+    public CartSession? ActivatePauseMenuItem()
+    {
+        if (Mode != ShellMode.Game || !PauseMenu.Shown)
+        {
+            return null;
+        }
+        switch (PauseMenu.Current)
+        {
+            case PauseMenuItem.Resume:
+                return Session is null ? StartGameFromEditor() : ResumeFromPauseMenu();
+            case PauseMenuItem.StepBack:
+                Session?.ApplyCommands(new ShellCommands { StepBack = true });
+                return null;
+            case PauseMenuItem.StepForward:
+                Session?.ApplyCommands(new ShellCommands { StepForward = true });
+                return null;
+            case PauseMenuItem.Rewind:
+                Session?.JumpTicks(-PauseMenu.JumpTicks);
+                return null;
+            case PauseMenuItem.Ahead:
+                Session?.JumpTicks(PauseMenu.JumpTicks);
+                return null;
+            default:
+                LeaveGame();
+                return null;
+        }
+    }
+
+    /// <summary>Lowers the menu and lets the cartridge run again — RESUME, and Esc on an open menu.</summary>
+    private CartSession? ResumeFromPauseMenu()
+    {
+        PauseMenu.Close();
+        Session?.Resume();
+        return null;
+    }
+
+    /// <summary>
+    /// START: the author walked into the editors from the library, pressed F1, and there is no
+    /// cartridge behind the menu (Р7). Launches the very folder the editor banks belong to, so
+    /// the game that appears is the one being edited — including every change already saved to
+    /// disk. Failures land on <see cref="LibraryMessage"/> and leave the menu up, exactly as a
+    /// failed library launch leaves the library up.
+    /// </summary>
+    private CartSession? StartGameFromEditor()
+    {
+        if (EditorFolder is not string folder)
+        {
+            return null;
+        }
+        try
+        {
+            CartSession session = _startSession(folder);
+            Session = session;
+            PauseMenu.Close();
+            LibraryMessage = null;
+            return session;
+        }
+        catch (Exception e) when (e is CartLoadException or IOException or UnauthorizedAccessException)
+        {
+            LibraryMessage = $"{Path.GetFileName(folder)}: {FirstLine(e.Message)}";
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// EXIT on the pause menu — the one door out of a cartridge, and (with a cartridge change)
+    /// one of the only two places in this shell that disposes a session.
+    ///
+    /// <para><b>It asks about unsaved work first, with the editors' own question</b> (the one
+    /// <c>Esc</c> in an editor asks): the tab strip means the author can be holding an unsaved
+    /// sprite sheet or an unsaved line of code while standing on the game screen, and a door that
+    /// dropped those silently would be the same door for a whole cartridge that the editors refuse
+    /// to be for a single bank. One owner of "may I leave with this unsaved" —
+    /// <see cref="RaiseDirtyBankPrompt"/> — so the answer cannot differ between the two roads that
+    /// ask it. The leaving resumes at <see cref="FinishLeavingCartridge"/> once every open bank has
+    /// been answered for.</para>
+    /// </summary>
+    public void LeaveGame()
+    {
+        if (Mode != ShellMode.Game)
+        {
+            return;
+        }
+        if (RaiseDirtyBankPrompt(resolved: null))
+        {
+            // The question is now up on the bank's own screen, and the game screen is no longer
+            // the one on show — so the menu comes down here for the same reason the tab strip
+            // lowers it. The session stays paused: only RESUME ever starts it again.
+            PauseMenu.Close();
+            return;
+        }
+        FinishLeavingCartridge();
+    }
+
+    /// <summary>
+    /// Every open bank has answered for itself; now the cartridge is actually left. A direct launch
+    /// leaves the <b>process</b>, because that is what <c>quarp run &lt;cart&gt;</c> means and the
+    /// author's F5 loop must not end in a library it never asked for — and there is no library to
+    /// go back to in a direct launch, which is why this is the end of both roads there. Anything
+    /// else goes back to the library it came from.
+    /// </summary>
+    private void FinishLeavingCartridge()
+    {
+        PauseMenu.Close();
+        if (_directLaunch)
+        {
+            // The session stays standing: QuarpGame's OnExiting/Dispose path saves and unloads
+            // it, exactly as it did when Esc meant this.
+            ExitRequested = true;
+            return;
+        }
+        ReturnToLibrary();
+    }
+
+    /// <summary>
+    /// One frame's worth of "did the cartridge on disk change" for a session that is <b>not</b>
+    /// being ticked — which, since the game became a tab, is every frame the author spends in an
+    /// editor. This is the whole of the stage's save rule (Р2) at this layer: <c>Ctrl+S</c>
+    /// anywhere writes a file, the file is what <see cref="CartWatcher"/> watches, and the
+    /// rebuild that follows is <see cref="TimeMachine.Rebuild"/> — same input log, new code and
+    /// banks, the same tick.
+    ///
+    /// <para>Called unconditionally by the window once a frame; the guard is here rather than
+    /// there so a headless test can drive the rule. On the game screen it does nothing, because
+    /// <see cref="CartSession.Update(int, InputState, bool)"/> polls the watcher itself and
+    /// polling twice would rebuild twice.</para>
+    /// </summary>
+    public void PollSessionReload()
+    {
+        if (Mode != ShellMode.Game)
+        {
+            Session?.PollReload();
         }
     }
 
@@ -291,8 +576,15 @@ public sealed class ShellModeMachine
         try
         {
             CartSession session = _startSession(entry.Path);
+            // The cartridge change of Р4, stated rather than assumed: whatever was open goes
+            // before the new one arrives. Standing on the library screen there is nothing left to
+            // release (that is what got the author here), so today this releases nothing — and it
+            // is the line that keeps that true, because "launch a second cart over the first" is
+            // the shape the two-cartridge defect took.
+            ReleaseCartridge();
             Session = session;
             Mode = ShellMode.Game;
+            PauseMenu.Close();      // a cart launched from the library RUNS; the menu is Esc's
             LibraryMessage = null;
             return session;
         }
@@ -329,8 +621,7 @@ public sealed class ShellModeMachine
         }
         try
         {
-            Editor = new SpriteEditorSession(entry.Path);
-            _editorFolder = entry.Path;
+            _open = new OpenCartridge(entry.Path, new SpriteEditorSession(entry.Path));
             Mode = ShellMode.Editor;
             LibraryMessage = null;
         }
@@ -407,8 +698,7 @@ public sealed class ShellModeMachine
             {
                 Console.Error.WriteLine(vsCodeWarning);
             }
-            Editor = new SpriteEditorSession(root);
-            _editorFolder = root;
+            _open = new OpenCartridge(root, new SpriteEditorSession(root));
             Mode = ShellMode.Editor;
             Menu.CancelNameEntry();     // the menu the author eventually returns to is at rest
         }
@@ -437,8 +727,10 @@ public sealed class ShellModeMachine
         try
         {
             CartSession session = _startSession(path);
+            ReleaseCartridge();     // the same cartridge change LaunchSelected makes, same reason
             Session = session;
             Mode = ShellMode.Game;
+            PauseMenu.Close();
             Menu.Message = null;
             LibraryMessage = null;
             return session;
@@ -459,19 +751,53 @@ public sealed class ShellModeMachine
     }
 
     /// <summary>
-    /// The four live tabs — sprites, tilemap, code and sound — clicked or keyed: the one door
-    /// between the faces of one open cartridge (<see cref="EditorIcons.TabTarget"/> owns which
-    /// button means which). Asking for the tab already on screen is the honest no-op the tab
-    /// strip promises. Every session but the sheet's is born here, on first arrival, and a bank
-    /// that will not load — a map.bin of the wrong length, an unreadable src/main.cs, an sfx.bin
-    /// that breaks a rule of AUDIO-FORMAT §5 — reports the way a failed launch does instead of
-    /// throwing the shell away.
+    /// The six live tabs — <b>game</b>, code, sprites, tilemap, sound and music — clicked or
+    /// keyed: the one door between the faces of one open cartridge, running one included
+    /// (<see cref="EditorIcons.TabTarget"/> owns which button means which). Asking for the tab
+    /// already on screen is the honest no-op the tab strip promises. Every session but the
+    /// sheet's is born here, on first arrival, and a bank that will not load — a map.bin of the
+    /// wrong length, an unreadable src/main.cs, an sfx.bin that breaks a rule of AUDIO-FORMAT
+    /// §5 — reports the way a failed launch does instead of throwing the shell away.
+    ///
+    /// <para><b>Walking off the game tab pauses the cartridge</b> (M9 stage 5, Р1). The pause
+    /// happens here, once, and only when the travel actually succeeded: a tab that refused to
+    /// open (a corrupt bank, a sealed .quarp8) leaves the author on the game screen, and a game
+    /// left paused by a journey that never happened would be a pause nobody asked for. What that
+    /// refusal cannot yet do is <em>say</em> so on the game screen — see the note at the guard
+    /// itself.</para>
     /// </summary>
     public void SwitchEditorTab(ShellMode target)
     {
-        if (Mode is not (ShellMode.Editor or ShellMode.MapEditor or ShellMode.CodeEditor
-            or ShellMode.SfxEditor or ShellMode.MusicEditor))
+        bool leavingGame = Mode == ShellMode.Game;
+        SwitchEditorTabCore(target);
+        if (leavingGame && Mode != ShellMode.Game)
         {
+            Session?.PauseForEditing();
+            PauseMenu.Close();
+        }
+    }
+
+    private void SwitchEditorTabCore(ShellMode target)
+    {
+        if (Mode is not (ShellMode.Game or ShellMode.Editor or ShellMode.MapEditor
+            or ShellMode.CodeEditor or ShellMode.SfxEditor or ShellMode.MusicEditor))
+        {
+            return;
+        }
+        if (target == ShellMode.Game)
+        {
+            EnterGameTab();
+            return;
+        }
+        if (!EnsureSheetOpen())
+        {
+            // No cartridge to edit, or one that cannot be edited. The reason lands in
+            // LibraryMessage, which the library screen prints — and that is a NAMED GAP when the
+            // refusal happens on the GAME screen, which has no message line of its own: an author
+            // who ran `quarp run game.quarp8` and pressed F2 sees the key do nothing. Sealed
+            // packages are not editable in this milestone by decision (unpacking is not M9), so
+            // the gap is a silent no-op rather than a wrong action; closing it wants a notice line
+            // on the pause menu, which is a screen this stage did not build.
             return;
         }
         if (target == ShellMode.Editor)
@@ -485,8 +811,8 @@ public sealed class ShellModeMachine
             {
                 try
                 {
-                    MapEditor = new MapEditorSession(_editorFolder!);
-                    MapView = new MapEditorView();
+                    _open!.Map = new MapEditorSession(_open.Folder);
+                    _open.MapView = new MapEditorView();
                 }
                 catch (Exception e) when (e is CartLoadException or IOException or UnauthorizedAccessException)
                 {
@@ -506,8 +832,8 @@ public sealed class ShellModeMachine
                     // The same lazy birth and the same failure rule as the map's: an unreadable
                     // src/main.cs reports the way a failed launch does and leaves the tab the
                     // author is standing on exactly where it was.
-                    CodeEditor = new CodeEditorSession(_editorFolder!);
-                    CodeView = new CodeEditorView(TextClipboard);
+                    _open!.Code = new CodeEditorSession(_open.Folder);
+                    _open.CodeView = new CodeEditorView(TextClipboard);
                 }
                 catch (Exception e) when (e is CartLoadException or IOException or UnauthorizedAccessException)
                 {
@@ -539,8 +865,8 @@ public sealed class ShellModeMachine
                 // failed launch does and leaves the tab the author is standing on exactly where it
                 // was. A cart with no music.bin at all opens silently, because an absent bank is
                 // 64 empty patterns and not an error (AUDIO-FORMAT §1).
-                MusicEditor = new MusicEditorSession(_editorFolder!);
-                MusicView = new MusicEditorView();
+                _open!.Music = new MusicEditorSession(_open.Folder);
+                _open.MusicView = new MusicEditorView();
             }
             catch (Exception e) when (e is CartLoadException or IOException or UnauthorizedAccessException)
             {
@@ -549,6 +875,80 @@ public sealed class ShellModeMachine
             }
         }
         Mode = ShellMode.MusicEditor;
+    }
+
+    /// <summary>
+    /// Arriving on the game tab. The screen shows whatever frame the cartridge last drew, with
+    /// the pause menu over it — because the simulation has been standing still since the author
+    /// walked off (Р1), and a game that started running again the instant its tab came back
+    /// would take the decision away from them. With no cartridge behind it the same menu appears
+    /// with START on its first row (Р7).
+    /// </summary>
+    private void EnterGameTab()
+    {
+        if (Mode == ShellMode.Game)
+        {
+            return;         // the honest no-op every tab's own button is
+        }
+        Mode = ShellMode.Game;
+        // Belt beside the brace — but only since the reload stopped clearing the pause. Until
+        // that fix this call had a road with a real effect on it: an edit that arrived while the
+        // author stood on an editor tab and whose new code could not survive the recorded past
+        // fell back to restart mode, and the restart cleared CartSession's pause, so the game was
+        // running by the time F1 brought its tab back and only this line stopped it. The pause is
+        // the shell's to hold now (CartSession.TryReload puts it back), so today this call changes
+        // nothing and removing it turns no test red — said out loud rather than left as a mystery.
+        // It stays because "the game screen is entered by the strip with the simulation standing
+        // still" is the rule, and the day a second road reaches this method is the day the rule
+        // would otherwise be broken by an edit that looked unrelated.
+        Session?.PauseForEditing();
+        PauseMenu.Open(Session is not null);
+    }
+
+    /// <summary>
+    /// The open sprite sheet, which every editor screen needs whether it draws sprites or not:
+    /// the map screen paints its tiles from it, and the four sibling screens report their load
+    /// failures through its cart name. It is born by <see cref="OpenEditor"/> when the author
+    /// comes from the library — and, since M9 stage 5, here, when they come from a running game
+    /// instead and no editor has been opened yet.
+    ///
+    /// <para>A sealed <c>.quarp8</c> answers false with the same message the library gives:
+    /// unpacking is not this milestone, and the honest answer belongs <em>before</em> any
+    /// editing rather than as a surprise at save time.</para>
+    ///
+    /// <para><b>An already-open cartridge is trusted, and that trust is what
+    /// <see cref="ReleaseCartridge"/> pays for.</b> Nothing here compares the open folder with the
+    /// running session's, because the two cannot disagree: a cartridge is opened as a whole and
+    /// let go as a whole, so there is no state in which the banks belong to one cart and the
+    /// session to another. That is precisely the invariant this shell did not have — the editor
+    /// used to survive the trip to the library and open the previous cart's code over the next
+    /// cart's game.</para>
+    /// </summary>
+    private bool EnsureSheetOpen()
+    {
+        if (_open is not null)
+        {
+            return true;
+        }
+        if (Session is not CartSession session)
+        {
+            return false;
+        }
+        if (!Directory.Exists(session.CartPath))
+        {
+            LibraryMessage = "read-only: unpack to a folder to edit";
+            return false;
+        }
+        try
+        {
+            _open = new OpenCartridge(session.CartPath, new SpriteEditorSession(session.CartPath));
+            return true;
+        }
+        catch (Exception e) when (e is CartLoadException or IOException or UnauthorizedAccessException)
+        {
+            LibraryMessage = $"{session.Name}: {FirstLine(e.Message)}";
+            return false;
+        }
     }
 
     /// <summary>
@@ -576,14 +976,14 @@ public sealed class ShellModeMachine
         {
             return SfxEditor;
         }
-        if (_editorFolder is null)
+        if (_open is null)
         {
             return null;        // no cartridge is open: nothing to read a bank out of
         }
         try
         {
-            SfxEditor = new SfxEditorSession(_editorFolder);
-            SfxView = new SfxEditorView();
+            _open.Sfx = new SfxEditorSession(_open.Folder);
+            _open.SfxView = new SfxEditorView();
         }
         catch (Exception e) when (e is CartLoadException or IOException or UnauthorizedAccessException)
         {
@@ -606,8 +1006,8 @@ public sealed class ShellModeMachine
     /// </summary>
     public void CycleEditorTab(int direction)
     {
-        if (Mode is not (ShellMode.Editor or ShellMode.MapEditor or ShellMode.CodeEditor
-            or ShellMode.SfxEditor or ShellMode.MusicEditor))
+        if (Mode is not (ShellMode.Game or ShellMode.Editor or ShellMode.MapEditor
+            or ShellMode.CodeEditor or ShellMode.SfxEditor or ShellMode.MusicEditor))
         {
             return;
         }
@@ -781,6 +1181,28 @@ public sealed class ShellModeMachine
     /// </summary>
     private void CloseUnlessAnotherBankIsDirty(ShellMode resolved)
     {
+        if (RaiseDirtyBankPrompt(resolved))
+        {
+            return;
+        }
+        FinishLeavingCartridge();
+    }
+
+    /// <summary>
+    /// Comes to the front of the first open bank that is still unsaved and raises its exit
+    /// question there, or answers false when every bank is settled. <b>The one owner of "may this
+    /// cartridge be left with unsaved work in it"</b>, asked by both roads that leave one: the last
+    /// answered editor prompt (<see cref="CloseUnlessAnotherBankIsDirty"/>) and the pause menu's
+    /// EXIT (<see cref="LeaveGame"/>), which before this fix walked straight past every open bank
+    /// and dropped it. <paramref name="resolved"/> is the bank that has just answered — skipped, so
+    /// the same question is not asked of it twice — or null when the asking has just begun.
+    ///
+    /// <para>The order is the tab strip's own, so the questions arrive left to right, and a prompt
+    /// that is already up is left alone rather than raised again: <c>RequestClose</c> on a raised
+    /// prompt means "stay", which would lower the very question being asked.</para>
+    /// </summary>
+    private bool RaiseDirtyBankPrompt(ShellMode? resolved)
+    {
         if (resolved != ShellMode.Editor && Editor is { IsDirty: true } sheet)
         {
             Mode = ShellMode.Editor;
@@ -788,7 +1210,7 @@ public sealed class ShellModeMachine
             {
                 sheet.RequestClose();           // dirty and down ⇒ this raises it, exactly once
             }
-            return;
+            return true;
         }
         if (resolved != ShellMode.MapEditor && MapEditor is { IsDirty: true } map)
         {
@@ -797,7 +1219,7 @@ public sealed class ShellModeMachine
             {
                 MapView.RequestClose(map);
             }
-            return;
+            return true;
         }
         if (resolved != ShellMode.CodeEditor && CodeEditor is { IsDirty: true } code)
         {
@@ -806,7 +1228,7 @@ public sealed class ShellModeMachine
             {
                 CodeView.RequestClose(code);
             }
-            return;
+            return true;
         }
         if (resolved != ShellMode.SfxEditor && SfxEditor is { IsDirty: true } sfx)
         {
@@ -815,7 +1237,7 @@ public sealed class ShellModeMachine
             {
                 SfxView.RequestClose(sfx);
             }
-            return;
+            return true;
         }
         if (resolved != ShellMode.MusicEditor && MusicEditor is { IsDirty: true } music)
         {
@@ -824,46 +1246,14 @@ public sealed class ShellModeMachine
             {
                 MusicView.RequestClose(music);
             }
-            return;
+            return true;
         }
-        CloseEditor();
+        return false;
     }
 
     /// <summary>
-    /// Editor → library. The rescan mirrors <see cref="LeaveGameForLibrary"/>: carts appear
-    /// and disappear while one is being edited, and the bar must land on the cart just edited
-    /// whatever moved around it.
-    /// </summary>
-    private void CloseEditor()
-    {
-        string? edited = _editorFolder;
-        Editor = null;
-        // The sprite view outlives the session (see SpriteView), so the ONE thing in it that is
-        // about a gesture rather than a preference is closed by hand: a drag left open by an
-        // editor that went away must not still be open when the next cart's sheet appears.
-        SpriteView.EndTileBlock();
-        MapEditor = null;
-        MapView = null;
-        CodeEditor = null;
-        CodeView = null;
-        SfxEditor = null;
-        SfxView = null;
-        MusicEditor = null;
-        MusicView = null;
-        _editorFolder = null;
-        Mode = ShellMode.Library;
-        Library.Rescan();
-        if (edited is not null)
-        {
-            // The bar lands on the cart just edited even when the editor was opened from the
-            // menu's CREATE GAME — the rescan's own keep-by-path only knows the previous
-            // selection, and a newborn cart never was one.
-            Library.SelectPath(edited);
-        }
-    }
-
-    /// <summary>
-    /// The transition this milestone stage exists for, in an order the lifecycle tests pin:
+    /// The transition this milestone stage exists for — the cartridge is left and the library
+    /// comes back — in an order the lifecycle tests pin:
     ///
     /// <list type="number">
     ///   <item>drain the audio device — the queued tail of the game dies on the same frame as
@@ -871,21 +1261,102 @@ public sealed class ShellModeMachine
     ///   <item><see cref="CartSession.Dispose"/> — which flushes the unsaved tail of save.dat
     ///     (<c>SaveIfDirty(force: true)</c>), stops the file watcher and unloads the cart's
     ///     collectible AssemblyLoadContext;</item>
-    ///   <item>drop the reference — the session, its TimeMachine and the cartridge instance
-    ///     become unreachable together, which is what actually lets the load context be
-    ///     collected: <c>Unload()</c> alone only asks;</item>
-    ///   <item>rescan the library, so the list reflects the disk as it is now and the bar
-    ///     stays on the cart just played.</item>
+    ///   <item>drop the references — the session, its TimeMachine, the cartridge instance and
+    ///     every open editor bank become unreachable together, which is what actually lets the
+    ///     load context be collected: <c>Unload()</c> alone only asks;</item>
+    ///   <item>rescan the library, so the list reflects the disk as it is now, and put the bar on
+    ///     the cart just left whatever moved around it — including a cart born in the menu's
+    ///     CREATE GAME, which the rescan's own keep-by-path cannot know about because a newborn
+    ///     cart was never the previous selection.</item>
     /// </list>
+    ///
+    /// <para>Both roads out of a cartridge end here: the pause menu's EXIT and the last answered
+    /// exit prompt of an editor opened with nothing running.</para>
     /// </summary>
-    private void LeaveGameForLibrary()
+    private void ReturnToLibrary()
     {
-        _drainAudio();
-        Session!.Dispose();
-        Session = null;
-        LibraryMessage = null;
+        string? left = ReleaseCartridge();
+        // The message is NOT cleared here, and that is the whole point of the line's absence.
+        // A broken bank is reported by SwitchEditorTabCore and EnsureSfxBank into LibraryMessage,
+        // and the library screen is the only screen that prints it (LibraryRenderer): clearing it
+        // on the way there would mean the author never sees why the tab refused to open. Every
+        // path that starts something new clears it already — launching a cart, opening the
+        // editor, entering the library from the menu — so a stale message cannot survive an
+        // action; only the report about the action that just failed does.
         Mode = ShellMode.Library;
         Library.Rescan();
+        if (left is not null)
+        {
+            Library.SelectPath(left);
+        }
+    }
+
+    /// <summary>
+    /// <b>Letting a cartridge go — the one owner of that act.</b> It is one act and not two: the
+    /// running session and the five editor banks are faces of one open cartridge, and the defect
+    /// this method exists to make unreachable was exactly a road that released one of them and
+    /// forgot the other (game → EXIT dropped the session and left the editor standing on that
+    /// cart, so the next cart launched from the library opened the previous one's code under F2
+    /// and Ctrl+S wrote it there).
+    ///
+    /// <para>A no-op when nothing is open. The audio drain is a game's tail, so it happens only
+    /// when a game is what is being let go; the library's own silence comes from the drain that
+    /// already ran.</para>
+    /// </summary>
+    /// <returns>The folder that was open — the session's or the editors' — or null when neither was.</returns>
+    private string? ReleaseCartridge()
+    {
+        string? folder = EditorFolder ?? Session?.CartPath;
+        if (Session is CartSession session)
+        {
+            _drainAudio();
+            session.Dispose();
+            Session = null;
+        }
+        // The sprite view outlives the cartridge (see SpriteView), so the ONE thing in it that is
+        // about a gesture rather than a preference is closed by hand: a drag left open by an
+        // editor that went away must not still be open when the next cart's sheet appears.
+        SpriteView.EndTileBlock();
+        _open = null;
+        PauseMenu.Close();
+        return folder;
+    }
+
+    /// <summary>
+    /// The cartridge the editors have open, as one object. Its point is its lifetime: every bank
+    /// below is born lazily on the tab that needs it and dies with the whole, so the shell cannot
+    /// end up holding one cartridge's sprites while another one runs. The sheet is not nullable
+    /// because it is what "open" means — the four sibling screens report their load failures
+    /// through its cart name, and the map screen paints its tiles out of it.
+    /// </summary>
+    private sealed class OpenCartridge
+    {
+        public OpenCartridge(string folder, SpriteEditorSession sheet)
+        {
+            Folder = folder;
+            Sheet = sheet;
+        }
+
+        /// <summary>The cartridge folder every bank here was read from and will be written back to.</summary>
+        public string Folder { get; }
+
+        public SpriteEditorSession Sheet { get; }
+
+        public MapEditorSession? Map { get; set; }
+
+        public MapEditorView? MapView { get; set; }
+
+        public CodeEditorSession? Code { get; set; }
+
+        public CodeEditorView? CodeView { get; set; }
+
+        public SfxEditorSession? Sfx { get; set; }
+
+        public SfxEditorView? SfxView { get; set; }
+
+        public MusicEditorSession? Music { get; set; }
+
+        public MusicEditorView? MusicView { get; set; }
     }
 
     /// <summary>

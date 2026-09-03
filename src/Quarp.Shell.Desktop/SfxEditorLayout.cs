@@ -76,7 +76,7 @@ public enum SfxField
 /// that carries it. (3) Save, undo and redo left the status band for the panel's button row, for
 /// the reason the sprite and map screens' did: the console's status line is five pixels tall and
 /// an icon-button is ten. (4) The tooltip is printed in the top band instead of popping under the
-/// pointer, and is cut to 25 characters — see <see cref="ConsoleChrome.TooltipChars"/>. (5) The
+/// pointer, and is cut to 22 characters — see <see cref="ConsoleChrome.TooltipChars"/>. (5) The
 /// message band is one line, so a standing notice yields to the exit prompt — see
 /// <see cref="ConsoleChromeRenderer.DrawMessageLine"/>. (6) The status line no longer repeats the
 /// slot's speed, length and loop: they have permanent homes on this screen now (two stepper
@@ -264,7 +264,7 @@ public readonly struct SfxEditorLayout
     /// </summary>
     public static SfxEditorLayout Compute(int screenWidth, int screenHeight)
     {
-        var buttons = new EditorButtonPlace[10];
+        var buttons = new EditorButtonPlace[11];
         int placed = 0;
         ConsoleChrome chrome = ConsoleChrome.Compute(screenWidth, screenHeight, buttons, ref placed);
 

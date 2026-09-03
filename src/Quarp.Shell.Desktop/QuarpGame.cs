@@ -293,6 +293,13 @@ public sealed class QuarpGame : Game
         // only place that sees both halves of that frame.
         ShellMode screenOnEntry = _modes.Mode;
 
+        // M9 stage 5, Р2 — the one save rule: while the author stands on an editor tab the
+        // paused session runs no ticks, so nothing would poll the cartridge folder and a Ctrl+S
+        // would reach the running cartridge never. The machine owns the guard (it is a no-op on
+        // the game screen, whose own Update polls) so the rule is testable without a window;
+        // this line is the whole of the window's part in it.
+        _modes.PollSessionReload();
+
         switch (_modes.Mode)
         {
             case ShellMode.Game:
@@ -420,25 +427,45 @@ public sealed class QuarpGame : Game
         base.Update(gameTime);
     }
 
-    /// <summary>One frame of a running cart: time control, ticks, audio — and, since ADR-030, the cartridge's pointer.</summary>
+    /// <summary>
+    /// One frame of the game screen: the router's verdict first, then ticks, audio and — since
+    /// ADR-030 — the cartridge's pointer.
+    ///
+    /// <para><b>Every key of this screen moved into <see cref="GameScreenInput"/> in M9 stage 5</b>,
+    /// which is the sixth router and the first one this screen has ever had. What is left here is
+    /// what genuinely needs a window: the frame clock, the speaker and the input snapshot. The
+    /// screen also stopped being a screen that always has a cartridge behind it — F1 from an
+    /// editor opened out of the library lands here with nothing running and the pause menu
+    /// offering START (Р7), which is why the session is read as a nullable now.</para>
+    /// </summary>
     private void UpdateGame(in ShellCommands commands, KeyboardState keyboard, in EditorMouse mouse, GameTime gameTime)
     {
-        if (commands.Quit)
+        CartSession? before = _modes.Session;
+        GameScreenInput.Update(
+            ConsoleEditorContext(),
+            commands,
+            mouse.ToConsole(_shellScreen.Placement(
+                GraphicsDevice.PresentationParameters.BackBufferWidth,
+                GraphicsDevice.PresentationParameters.BackBufferHeight)));
+        if (_modes.ExitRequested)
         {
-            // Direct launch: exit request, picked up by Update. Library launch: the machine
-            // drains the speaker, disposes the session (save.dat's forced flush lives in that
-            // Dispose) and lands back on a rescanned library — see ShellModeMachine.
-            _modes.HandleEscape();
-            if (!_modes.ExitRequested)
-            {
-                UpdateWindowTitle();
-                _accumulator.Reset();
-            }
+            return;             // Update picks this up and calls Exit
+        }
+        if (_modes.Mode != ShellMode.Game)
+        {
+            // A tab key or a tab click took us to an editor, or Exit went back to the library.
+            UpdateWindowTitle();
+            _accumulator.Reset();
             return;
         }
-
-        CartSession session = _modes.Session!;
-        session.ApplyCommands(commands);
+        if (_modes.Session is not CartSession session)
+        {
+            return;             // the pause menu on a blank screen: nothing to tick
+        }
+        if (!ReferenceEquals(before, session))
+        {
+            OnSessionStarted();     // the menu's START just launched one — same wiring as every other road
+        }
 
         // A speed change or a pause invalidates the banked remainder: it was measured in the
         // old rung's units, and carrying it across would spit out a burst of ticks nobody
@@ -1029,18 +1056,39 @@ public sealed class QuarpGame : Game
 
     private void RenderFrame()
     {
-        if (_modes.Session is not CartSession session || _spriteBatch is null || _presenter is null)
+        if (_spriteBatch is null || _presenter is null || _overlay is null)
         {
-            return;     // No cart on screen, or called before LoadContent (a crash during the very first reload).
+            return;     // Called before LoadContent — a crash during the very first reload.
         }
-        _overlay.Show(session.Status, session.StatusPercent);
+        CartSession? session = _modes.Session;
+        _overlay.Show(session?.Status, session?.StatusPercent ?? -1);
+        if (_modes.PauseMenu.Shown)
+        {
+            _overlay.ShowMenu(
+                _modes.PauseMenu.Text(session?.Tick),
+                _modes.PauseMenu.Box(_shellScreen.Width, _shellScreen.Height),
+                _modes.PauseMenu.TextOrigin(_shellScreen.Width, _shellScreen.Height));
+        }
+        else
+        {
+            _overlay.HideMenu();
+        }
+
+        // With no cartridge behind it the game screen still has to be a picture: the shell's own
+        // console, cleared, so the pause menu's START stands on ground rather than on whatever
+        // the last frame left in the back buffer (Р7).
+        if (session is null)
+        {
+            _shellScreen.Begin();
+            _shellScreen.Console.Cls(0);
+        }
 
         _presenter.ClearLetterbox();
         _spriteBatch.Begin(samplerState: SamplerState.PointClamp);
         Rectangle dest = _presenter.Draw(
             _spriteBatch,
-            session.Framebuffer,
-            session.Display,
+            session?.Framebuffer ?? _shellScreen.Framebuffer,
+            session?.Display ?? _shellScreen.Display,
             GraphicsDevice.PresentationParameters.BackBufferWidth,
             GraphicsDevice.PresentationParameters.BackBufferHeight);
         // The overlay goes over the same rectangle, so its pixels line up with console

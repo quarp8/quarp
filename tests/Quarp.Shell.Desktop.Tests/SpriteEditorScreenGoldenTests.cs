@@ -97,6 +97,22 @@ namespace Quarp.Shell.Desktop.Tests;
 /// <c>d7586acedcbd9269</c> / <c>9b0e89f5fc5c7705</c>,
 /// <c>a440fd38a44e731a</c> / <c>961f347605d04ad2</c>,
 /// <c>a110ff917226f080</c> / <c>af32c85410a518c8</c>.</para>
+///
+/// <para><b>Re-pinned 2026-09-02, M9 stage 5 (the tab strip grew a sixth stop).</b> Cause named
+/// before the numbers were read, and confirmed by the fact that <b>every <c>Pget</c> probe in
+/// this file passed the change untouched</b> — which is what says these screens were redrawn and
+/// not broken. Two edits moved pixels, both of them inside the ten rows of the top band and
+/// neither of them in this file's subject:
+/// <list type="number">
+///   <item>the running GAME became the strip's first tab (work order Р6), so
+///     <see cref="ConsoleChrome.RightTabs"/> places six ten-pixel buttons off the right corner
+///     instead of five, and a gamepad glyph appears where the tooltip field used to end;</item>
+///   <item>the tooltip field is therefore ten pixels narrower — 22 characters instead of 25 —
+///     so a hover label that was cut at 25 is cut at 22 and the fallback screen name starts in
+///     the same place but has less room.</item>
+/// </list>
+/// Nothing below <see cref="ConsoleChrome.ContentTop"/> changed, which is why not one structural
+/// probe in this file had to move. Was / became: <c>9b0e89f5fc5c7705</c> / <c>4d524c0104341aeb</c>, <c>961f347605d04ad2</c> / <c>9892735cdbac8ee0</c>, <c>af32c85410a518c8</c> / <c>721c580642bbfb16</c>.</para>
 /// </summary>
 public class SpriteEditorScreenGoldenTests : IDisposable
 {
@@ -187,7 +203,7 @@ public class SpriteEditorScreenGoldenTests : IDisposable
             Assert.InRange(pixel, (byte)0, (byte)15);
         }
 
-        Assert.Equal("9b0e89f5fc5c7705", FrameHash.Of(screen.Framebuffer));
+        Assert.Equal("4d524c0104341aeb", FrameHash.Of(screen.Framebuffer));
     }
 
     /// <summary>
@@ -230,7 +246,7 @@ public class SpriteEditorScreenGoldenTests : IDisposable
         // The notice is unchanged — sprite 000 is still the map's empty tile, drawn on or not.
         Assert.Equal((byte)8, console.Pget(2, 79));
 
-        Assert.Equal("961f347605d04ad2", FrameHash.Of(screen.Framebuffer));
+        Assert.Equal("9892735cdbac8ee0", FrameHash.Of(screen.Framebuffer));
     }
 
     /// <summary>
@@ -276,7 +292,7 @@ public class SpriteEditorScreenGoldenTests : IDisposable
         // on screen, which is the whole reason the prompt lives on one reserved line.
         Assert.Equal((byte)8, console.Pget(21, 12));
 
-        Assert.Equal("af32c85410a518c8", FrameHash.Of(screen.Framebuffer));
+        Assert.Equal("721c580642bbfb16", FrameHash.Of(screen.Framebuffer));
     }
 
     /// <summary>
@@ -346,11 +362,11 @@ public class SpriteEditorScreenGoldenTests : IDisposable
         SpriteEditorLayout layout = SpriteEditorRenderer.Draw(
             screen, editor, HoverTarget.OfSlider(), true, null, new SheetScroll(), 0.0);
 
-        // The slider's label is 53 characters and the field holds 25 — the cut is the field's,
+        // The slider's label is 53 characters and the field holds 22 — the cut is the field's,
         // not the label's, so no second owner of what a control is called ever appears.
-        Assert.Equal(25, layout.Chrome.TooltipChars);
+        Assert.Equal(22, layout.Chrome.TooltipChars);
         Assert.Equal(
-            EditorIcons.SliderTooltip[..25], layout.Chrome.FitTooltip(EditorIcons.SliderTooltip));
+            EditorIcons.SliderTooltip[..22], layout.Chrome.FitTooltip(EditorIcons.SliderTooltip));
         // Ink appears in the top band's free strip...
         bool inkInField = false;
         for (int x = layout.Chrome.TooltipField.X; x < layout.Chrome.TooltipField.Right; x++)

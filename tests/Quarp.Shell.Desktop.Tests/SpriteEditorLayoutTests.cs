@@ -157,7 +157,7 @@ public class SpriteEditorLayoutTests
 
     /// <summary>
     /// The tab strip, literally: exit alone at the left corner; from the right corner leftwards
-    /// music, sounds, tilemaps, sprites, code. The order has one owner —
+    /// music, sounds, tilemaps, sprites, code, game. The order has one owner —
     /// <see cref="ConsoleChrome.RightTabs"/> — so no two screens can present the tabs
     /// differently.
     ///
@@ -176,17 +176,19 @@ public class SpriteEditorLayoutTests
         Rectangle tilemap = layout.ButtonRect(EditorButton.TilemapTab);
         Rectangle sprites = layout.ButtonRect(EditorButton.SpritesTab);
         Rectangle code = layout.ButtonRect(EditorButton.CodeTab);
+        Rectangle game = layout.ButtonRect(EditorButton.GameTab);
 
         Assert.Equal((0, 0), (exit.X, exit.Y));
         Assert.Equal(ScreenWidth, music.Right);                         // music hugs the right corner
-        Assert.True(code.X < sprites.X);                                // left-to-right at the right edge:
-        Assert.True(sprites.X < tilemap.X);                             // code, sprites, tilemaps, sounds, music
+        Assert.True(game.X < code.X);                                   // left-to-right at the right edge:
+        Assert.True(code.X < sprites.X);                                // game, code, sprites, tilemaps,
+        Assert.True(sprites.X < tilemap.X);                             // sounds, music — which is F1..F6
         Assert.True(tilemap.X < sound.X);
         Assert.True(sound.X < music.X);
-        Assert.All(new[] { exit, music, sound, tilemap, sprites, code }, tab => Assert.Equal(0, tab.Y));
+        Assert.All(new[] { exit, music, sound, tilemap, sprites, code, game }, tab => Assert.Equal(0, tab.Y));
         Assert.Equal(
             new[] { EditorButton.MusicTab, EditorButton.SoundTab, EditorButton.TilemapTab,
-                    EditorButton.SpritesTab, EditorButton.CodeTab },
+                    EditorButton.SpritesTab, EditorButton.CodeTab, EditorButton.GameTab },
             ConsoleChrome.RightTabs);
     }
 
@@ -267,8 +269,9 @@ public class SpriteEditorLayoutTests
         Assert.Equal((0, ScreenWidth, ScreenHeight), (layout.StatusBar.X, layout.StatusBar.Width, layout.StatusBar.Bottom));
         foreach (EditorButton tab in new[]
         {
-            EditorButton.ExitTab, EditorButton.CodeTab, EditorButton.SpritesTab,
-            EditorButton.TilemapTab, EditorButton.SoundTab, EditorButton.MusicTab,
+            EditorButton.ExitTab, EditorButton.GameTab, EditorButton.CodeTab,
+            EditorButton.SpritesTab, EditorButton.TilemapTab, EditorButton.SoundTab,
+            EditorButton.MusicTab,
         })
         {
             Assert.True(layout.TabStrip.Contains(layout.ButtonRect(tab)));
@@ -281,7 +284,7 @@ public class SpriteEditorLayoutTests
         // it is where a hover label goes (TIC-80's drawToolbar). It must not be zero.
         Assert.True(layout.Chrome.TooltipChars > 0);
         Assert.Equal(layout.ButtonRect(EditorButton.ExitTab).Right, layout.Chrome.TooltipField.X);
-        Assert.Equal(layout.ButtonRect(EditorButton.CodeTab).X, layout.Chrome.TooltipField.Right);
+        Assert.Equal(layout.ButtonRect(EditorButton.GameTab).X, layout.Chrome.TooltipField.Right);
     }
 
     /// <summary>

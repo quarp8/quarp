@@ -179,7 +179,13 @@ public sealed class MenuModeTests : IDisposable
         Assert.NotNull(session);
         Assert.Equal(ShellMode.Game, machine.Mode);
 
-        machine.HandleEscape();     // a by-path cart is a library-style launch, not an F5 loop
+        // A by-path cart is a library-style launch, not an F5 loop — so its pause menu's EXIT
+        // lands in the library. Esc alone only raises that menu since M9 stage 5.
+        machine.HandleEscape();
+        Assert.True(machine.PauseMenu.Shown);
+        machine.PauseMenu.Select(machine.PauseMenu.Items.Count - 1);
+        Assert.Equal(PauseMenuItem.Exit, machine.PauseMenu.Current);
+        machine.ActivatePauseMenuItem();
 
         Assert.Equal(ShellMode.Library, machine.Mode);
         Assert.False(machine.ExitRequested);

@@ -59,12 +59,21 @@ public sealed class ShellOverlay : IDisposable
     private Rectangle _menuBox;
     private Point _menuOrigin;
 
+    // The paused game's top band, as finished console pixels (M9 stage 5a). Indices, not
+    // colours: what arrives here is the shell console's own framebuffer, drawn by the one
+    // painter every editor band goes through, and turning an index into a colour is
+    // PaletteColors' job — the same single owner the presenter uses. Kept so a frame whose band
+    // has not changed re-rasterizes nothing.
+    private readonly byte[] _band;
+    private int _bandRows;
+
     public ShellOverlay(GraphicsDevice device, int width, int height)
     {
         ArgumentNullException.ThrowIfNull(device);
         _width = width;
         _height = height;
         _pixels = new Color[width * height];
+        _band = new byte[width * height];
         _texture = new Texture2D(device, width, height);
 
         // Palette colours, so the layer reads as part of the console rather than as a
@@ -129,6 +138,51 @@ public sealed class ShellOverlay : IDisposable
     public void HideMenu() => ShowMenu(null, Rectangle.Empty, Point.Zero);
 
     /// <summary>
+    /// Raises the paused game's top band (M9 stage 5a): the first <paramref name="rows"/> rows
+    /// of an already-drawn indexed framebuffer, blended over the frame <b>opaquely</b> — it is a
+    /// band, not a tint, and the game's picture must not show through the tab icons.
+    ///
+    /// <para><b>Why pixels and not a description.</b> The band is drawn by
+    /// <see cref="ConsoleChromeRenderer"/> into the shell's own console, exactly as the five
+    /// editor screens draw theirs, and arrives here finished. A painter here that placed the
+    /// icons itself would be a second owner of what the tab strip looks like; a band written
+    /// into the cartridge's framebuffer instead would land inside the frame hash the CI compares
+    /// across architectures, which is the one thing this whole class exists to prevent. See
+    /// <see cref="GameTabBar"/>.</para>
+    ///
+    /// <para><paramref name="pixels"/> is read through <see cref="Palette.Master32"/> under the
+    /// identity display stage, which is what <see cref="ShellScreen.Begin"/> guarantees for
+    /// every tool screen and therefore for this band.</para>
+    /// </summary>
+    public void ShowBand(ReadOnlySpan<byte> pixels, int rows)
+    {
+        if (rows <= 0 || rows > _height)
+        {
+            HideBand();
+            return;
+        }
+        ReadOnlySpan<byte> source = pixels[..(_width * rows)];
+        if (_bandRows == rows && source.SequenceEqual(_band.AsSpan(0, _width * rows)))
+        {
+            return;
+        }
+        source.CopyTo(_band);
+        _bandRows = rows;
+        Rasterize();
+    }
+
+    /// <summary>Lowers the band — the game is running again, and the frame is the whole screen.</summary>
+    public void HideBand()
+    {
+        if (_bandRows == 0)
+        {
+            return;
+        }
+        _bandRows = 0;
+        Rasterize();
+    }
+
+    /// <summary>
     /// Blends the layer over the frame. <paramref name="destination"/> must be the rectangle
     /// the console texture was drawn into, so overlay pixels line up with console pixels.
     /// </summary>
@@ -148,9 +202,25 @@ public sealed class ShellOverlay : IDisposable
     {
         Array.Clear(_pixels);
         _empty = true;
+        DrawBand();
         DrawStatusBox();
         DrawMenuBox();
         _texture.SetData(_pixels);
+    }
+
+    /// <summary>The paused game's top band, copied through the shell's one index-to-colour owner.</summary>
+    private void DrawBand()
+    {
+        if (_bandRows == 0)
+        {
+            return;
+        }
+        int count = _width * _bandRows;
+        for (int i = 0; i < count; i++)
+        {
+            _pixels[i] = PaletteColors.Opaque(_band[i]);
+        }
+        _empty = false;
     }
 
     /// <summary>The pause menu's plate and rows, drawn where <see cref="PauseMenu"/> put them.</summary>

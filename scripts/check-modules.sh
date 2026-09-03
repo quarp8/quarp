@@ -148,6 +148,7 @@ LAYERS=(
   "ShellScreen.cs|1"           # консоль оболочки: свой VirtualConsole профиля 8, без устройства
   "PaletteColors.cs|1"         # Master32 -> Color, три сдвига, один владелец
   "TimeSpeed.cs|1"             # ступень лестницы скоростей, точная дробь
+  "TickScrubber.cs|1"          # разгон удержания стрелки: аим меню паузы во времени
   "TickAccumulator.cs|1"       # фиксированный шаг: копит время, отдаёт тики
   "AudioQueue.cs|1"            # политика очереди блоков, без устройства
   "MainMenuSession.cs|1"       # модель главного меню: фазы, пункты, ввод имени (+MenuPhase, MenuItem)
@@ -187,6 +188,7 @@ LAYERS=(
   # не «рендер», хотя и рисует: он пишет в кадровый буфер вызовами ядра, как LibraryRenderer.
   "ConsoleChrome.cs|2"         # рама экрана инструмента в пикселях консоли (160x90) (+EditorButtonPlace, EditorPromptVerb)
   "ConsoleChromeRenderer.cs|2" # пиксели этой рамы — полосы, кнопки, статус, строка сообщения
+  "GameTabBar.cs|2"            # верхняя полоса экрана игры на паузе: раскладка и пиксели
   # SpriteEditorRenderer переехал сюда из «рендера» в волне R2, ровно как LibraryRenderer в R1:
   # ни GraphicsDevice, ни Texture2D, ни SpriteBatch — только ShellScreen и вызовы ядра.
   "SpriteEditorRenderer.cs|2"  # пиксели экрана спрайтов — в консоли, не в окне

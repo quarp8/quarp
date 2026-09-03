@@ -58,6 +58,21 @@ public readonly struct ShellCommands
     public bool MenuRight { get; init; }
 
     /// <summary>
+    /// Left arrow <b>held</b>, not pressed — the pause menu's scrubber (M9 stage 5a), which is
+    /// the one control in this shell whose whole point is that holding it does more than
+    /// repeating it would. It sits beside <see cref="MenuLeft"/> rather than replacing it because
+    /// the two answer different questions about the same key, and every other reader of the
+    /// arrows wants the edge.
+    ///
+    /// <para>The only other held key in this struct is <see cref="Rewinding"/>, and for exactly
+    /// the same reason: real-time travel in time is a hold, and every discrete verb is a press.</para>
+    /// </summary>
+    public bool MenuLeftHeld { get; init; }
+
+    /// <summary>Right arrow held — <see cref="MenuLeftHeld"/>'s twin, forward.</summary>
+    public bool MenuRightHeld { get; init; }
+
+    /// <summary>
     /// Library: launch the selected cart — Z or Enter, the confirm keys the pad maps to
     /// O/Start. In the editor's exit prompt the same Z means "save and exit". Never fires
     /// with Ctrl held: Ctrl+Z is <see cref="EditorUndo"/>, and a chord must not double as
@@ -593,6 +608,12 @@ public sealed class ShellCommandReader
             MenuDown = Pressed(keyboard, Keys.Down),
             MenuLeft = Pressed(keyboard, Keys.Left),
             MenuRight = Pressed(keyboard, Keys.Right),
+            // The same two keys as a HOLD, for the pause menu's scrubber. Read here with no
+            // modifier gate, by the same rule the four edges above are: the gate belongs where
+            // the meaning differs, and the one router that reads these fields answers the tab
+            // strip's Alt+Left/Right before it ever looks at them.
+            MenuLeftHeld = keyboard.IsKeyDown(Keys.Left),
+            MenuRightHeld = keyboard.IsKeyDown(Keys.Right),
             // Shift+arrows step the tile, Ctrl+Shift+arrows size the picker's block (wave 3e).
             // The !ctrl here is the same rule the editor letters carry: a chord must not double
             // as its bare key, and before this wave Ctrl+Shift+Right quietly stepped the tile.

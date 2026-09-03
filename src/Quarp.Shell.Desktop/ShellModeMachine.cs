@@ -154,6 +154,39 @@ public sealed class ShellModeMachine
     /// </summary>
     public PauseMenu PauseMenu { get; } = new();
 
+    /// <summary>
+    /// Where the pause menu's arrows are aiming (M9 stage 5a). It lives beside the menu and not
+    /// inside it for the same reason the menu lives here and not in the window: the aim is a
+    /// fact about this session's timeline, the menu is a picture of it, and the travel is the
+    /// session's own affair.
+    /// </summary>
+    public TickScrubber Scrub { get; } = new();
+
+    /// <summary>
+    /// The tick the pause menu prints between its arrows: the scrubber's aim, not the session's
+    /// own tick. The two differ only while a backward move is waiting for a frame it fits in
+    /// (<see cref="CartSession.ScrubTo"/>), and during that wait the aim is the honest answer —
+    /// it is what the author's key is moving and where the release will land. Null with nothing
+    /// running, which is also when the menu has no scrub row to print it on.
+    ///
+    /// <para><b>Read from the session, not from <see cref="Scrub"/>.</b> The same number is
+    /// printed twice on this screen — here between the arrows, and by the session's own status
+    /// line at the bottom left — and while a move was deferred the two used to be two different
+    /// numbers on one screen for as long as the travel took. <see cref="CartSession.ShownTick"/>
+    /// is the single owner both printers read; this property still answers the scrubber's aim
+    /// only because <see cref="ScrubFrame"/> publishes that aim to the session every frame the
+    /// menu is up.</para>
+    /// </summary>
+    public int? MenuTick => Session?.ShownTick;
+
+    /// <summary>
+    /// What the paused game's top bar calls this cartridge: the running session's manifest name,
+    /// or — with nothing running (Р7) — the folder the editor tabs are open on. Empty when
+    /// neither exists, which is a state the game screen can only be in for one frame.
+    /// </summary>
+    public string GameTitle =>
+        Session?.Name is string name && name.Length > 0 ? name : Editor?.CartName ?? "";
+
     public ShellMode Mode { get; private set; }
 
     /// <summary>
@@ -417,7 +450,7 @@ public sealed class ShellModeMachine
             return;
         }
         Session?.PauseForEditing();
-        PauseMenu.Open(Session is not null);
+        OpenPauseMenu();
     }
 
     /// <summary>
@@ -436,17 +469,10 @@ public sealed class ShellModeMachine
         {
             case PauseMenuItem.Resume:
                 return Session is null ? StartGameFromEditor() : ResumeFromPauseMenu();
-            case PauseMenuItem.StepBack:
-                Session?.ApplyCommands(new ShellCommands { StepBack = true });
-                return null;
-            case PauseMenuItem.StepForward:
-                Session?.ApplyCommands(new ShellCommands { StepForward = true });
-                return null;
-            case PauseMenuItem.Rewind:
-                Session?.JumpTicks(-PauseMenu.JumpTicks);
-                return null;
-            case PauseMenuItem.Ahead:
-                Session?.JumpTicks(PauseMenu.JumpTicks);
+            case PauseMenuItem.Scrub:
+                // The one row with no Enter verb: its verbs are the two arrows it draws, held.
+                // Doing something here — a step, say — would be a third meaning for a key that
+                // already means "choose", on the one row where choosing means nothing.
                 return null;
             default:
                 LeaveGame();
@@ -454,9 +480,142 @@ public sealed class ShellModeMachine
         }
     }
 
+    /// <summary>
+    /// One frame of the pause menu's scrubber (M9 stage 5a). <paramref name="direction"/> is the
+    /// arrow being held — keyboard or pointer, they are one gesture (Р4) — and
+    /// <paramref name="seconds"/> is the frame's length, which is what makes the ramp a fact
+    /// about time rather than about the machine's frame rate.
+    ///
+    /// <para><b>Why the aim and the travel are two objects.</b> <see cref="TickScrubber"/> says
+    /// where the author is pointing and moves at 60 Hz whatever happens;
+    /// <see cref="CartSession.ScrubTo"/> says what the simulation can afford this frame, which
+    /// on a long session is sometimes nothing at all (a backward move costs its destination —
+    /// see that method). Keeping them apart is what lets the number under the author's finger
+    /// keep responding on the frames the picture behind it cannot.</para>
+    ///
+    /// <para>Releasing is a frame like any other, with direction 0: it is the frame on which a
+    /// deferred backward move is finally made, and after which the aim and the session agree
+    /// again.</para>
+    /// </summary>
+    public void ScrubFrame(int direction, double seconds)
+    {
+        if (Mode != ShellMode.Game || !PauseMenu.Shown || Session is not CartSession session)
+        {
+            return;
+        }
+        Scrub.Frame(direction, seconds, session.Tick, session.LogTickCount);
+        if (!Scrub.Aiming)
+        {
+            // Nobody is scrubbing, so the printed number simply follows the session — including
+            // when the session moved by itself (a hot reload that could not replay the past falls
+            // back to a restart, which moves the tick with no key touched).
+            SyncScrub(session);
+            return;
+        }
+        int stood = session.Tick;
+        // Unconditionally, including on the frame the aim and the session already agree on: this
+        // call is also what publishes the aim to CartSession.ShownTick, and a frame that skipped
+        // it would leave the status line advertising the destination of the move before this one.
+        session.ScrubTo(Scrub.Target, release: direction == 0);
+        if (direction == 0 && (Scrub.Target == session.Tick || session.Tick == stood))
+        {
+            // Released, and the session has either arrived or refused to move at all. The second
+            // case is real and is not a rounding error: a crashed cartridge standing at the end
+            // of its log has no forward to run (Р3's fresh simulation needs a cartridge that
+            // still runs), so an aim past the tip is a number nobody will ever reach. Leaving it
+            // up would print a tick that never arrives — on the menu and, since ShownTick, on the
+            // status line with it.
+            SyncScrub(session);
+        }
+    }
+
+    /// <summary>
+    /// Puts the aim and the tick the session prints back in step. Two calls rather than one
+    /// because they are two objects with one fact between them: <see cref="TickScrubber.Sync"/>
+    /// says the arrows are no longer aiming anywhere, and
+    /// <see cref="CartSession.ForgetScrubAim"/> says the same thing to the printers.
+    /// </summary>
+    private void SyncScrub(CartSession session)
+    {
+        Scrub.Sync(session.Tick);
+        session.ForgetScrubAim();
+    }
+
+    /// <summary>
+    /// Makes the deferred move now, whatever the frame budget says — the release frame that a
+    /// road out of the pause menu would otherwise never get.
+    ///
+    /// <para><b>Why every exit owes the author this.</b> A backward scrub is allowed to lag its
+    /// aim by design (<see cref="CartSession.ScrubTo"/>), so at any moment the author may be
+    /// holding a travel that has not happened yet — the menu printing tick 99 870 while the
+    /// session still stands on 100 000. Leaving the menu on such a frame used to drop that travel
+    /// silently and resume the cartridge on the tick the author had already scrubbed away from:
+    /// they saw one number and got another. So the roads that keep the cartridge alive commit
+    /// first — <see cref="ResumeFromPauseMenu"/> (RESUME and Esc) and
+    /// <see cref="SwitchEditorTab"/> (F1..F6, Alt+arrows, and the band's own tab buttons, which
+    /// all end here).</para>
+    ///
+    /// <para><b>EXIT deliberately does not,</b> and that is a decision rather than an oversight:
+    /// it destroys the session, so the only thing a commit could buy there is a resimulation of
+    /// up to a couple of hundred milliseconds spent landing on a tick nobody will ever see. On
+    /// the one road out of EXIT that keeps the session alive — an unsaved bank raises its
+    /// question and the author backs out — the aim is simply forgotten, and
+    /// <see cref="OpenPauseMenu"/> re-aims on the tick the session really stands on, which is
+    /// also the frame that is on screen. Nothing on screen lies either way.</para>
+    ///
+    /// <para>Costs nothing when there is nothing pending: with no aim in flight this is a null
+    /// check and a comparison.</para>
+    /// </summary>
+    public void CommitScrub()
+    {
+        if (Session is not CartSession session)
+        {
+            return;
+        }
+        if (Scrub.Aiming)
+        {
+            session.ScrubTo(Scrub.Target, release: true);
+        }
+        SyncScrub(session);
+    }
+
+    /// <summary>
+    /// Puts the scrubber's aim back on the session's own tick. Called by the game screen's
+    /// router whenever some other key moves time (<c>,</c>, <c>.</c>, <c>Home</c>, held
+    /// Backspace — all of which survive the shorter menu by Р2), because an aim left pointing at
+    /// where the author used to be would fight the next arrow they press.
+    /// </summary>
+    public void CancelScrub()
+    {
+        if (Session is CartSession session)
+        {
+            SyncScrub(session);
+        }
+    }
+
+    /// <summary>
+    /// Raises the menu over whatever is (or is not) running, with the scrubber's aim on the tick
+    /// the session actually stands on. The sync is the whole reason this is a method and not two
+    /// lines twice: the aim outlives the menu, and a menu raised on a stale aim would print the
+    /// tick of the last session the author scrubbed.
+    /// </summary>
+    private void OpenPauseMenu()
+    {
+        PauseMenu.Open(Session is not null);
+        if (Session is CartSession session)
+        {
+            SyncScrub(session);
+        }
+        else
+        {
+            Scrub.Sync(0);
+        }
+    }
+
     /// <summary>Lowers the menu and lets the cartridge run again — RESUME, and Esc on an open menu.</summary>
     private CartSession? ResumeFromPauseMenu()
     {
+        CommitScrub();      // the travel the author was holding happens before the game does
         PauseMenu.Close();
         Session?.Resume();
         return null;
@@ -769,6 +928,13 @@ public sealed class ShellModeMachine
     public void SwitchEditorTab(ShellMode target)
     {
         bool leavingGame = Mode == ShellMode.Game;
+        if (leavingGame)
+        {
+            // Before the mode moves, because CommitScrub only acts on a live session — and
+            // because a tab key is one of the roads out of the scrub row that used to drop an
+            // uncommitted travel. The whole rule is in CommitScrub.
+            CommitScrub();
+        }
         SwitchEditorTabCore(target);
         if (leavingGame && Mode != ShellMode.Game)
         {
@@ -902,7 +1068,7 @@ public sealed class ShellModeMachine
         // still" is the rule, and the day a second road reaches this method is the day the rule
         // would otherwise be broken by an edit that looked unrelated.
         Session?.PauseForEditing();
-        PauseMenu.Open(Session is not null);
+        OpenPauseMenu();
     }
 
     /// <summary>

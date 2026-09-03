@@ -53,6 +53,24 @@ namespace Quarp.Shell.Desktop;
 /// tick, and a machine with no sound card changes nothing about what the simulation
 /// computes.</para>
 /// </summary>
+/// <summary>
+/// What one frame of the <b>game</b> screen is made of, once the graphics device is subtracted:
+/// the surface the window presents, the output state it is presented through, and — only while
+/// the pause menu is up — the band laid over it and the surface that band was painted on.
+///
+/// <para>It exists so the two surfaces can be compared. The cartridge's framebuffer is the golden
+/// master this whole project is about; the band and the menu ride an overlay texture precisely so
+/// that pausing cannot change a pixel of it, and "cannot" is a claim about which object was
+/// handed to which painter. <see cref="QuarpGame.ComposeGameScreen"/> makes that choice and this
+/// type reports it, so a headless test can hold both and ask whether they are the same array.</para>
+/// </summary>
+/// <param name="Presented">The framebuffer the window shows: the running cartridge's own, or the shell's when none is running.</param>
+/// <param name="Display">The output state that framebuffer is shown through — its console's, never a mixture.</param>
+/// <param name="Band">The paused game's top band, measured and painted; null while the game runs.</param>
+/// <param name="BandSurface">The surface <paramref name="Band"/> was painted on, whose first rows the overlay lifts; null while the game runs.</param>
+public readonly record struct GameScreenLayers(
+    Framebuffer Presented, DisplayPalette Display, GameTabBar? Band, Framebuffer? BandSurface);
+
 public sealed class QuarpGame : Game
 {
     private readonly TickAccumulator _accumulator = new();
@@ -446,7 +464,8 @@ public sealed class QuarpGame : Game
             commands,
             mouse.ToConsole(_shellScreen.Placement(
                 GraphicsDevice.PresentationParameters.BackBufferWidth,
-                GraphicsDevice.PresentationParameters.BackBufferHeight)));
+                GraphicsDevice.PresentationParameters.BackBufferHeight)),
+            gameTime.ElapsedGameTime.TotalSeconds);
         if (_modes.ExitRequested)
         {
             return;             // Update picks this up and calls Exit
@@ -1061,40 +1080,89 @@ public sealed class QuarpGame : Game
             return;     // Called before LoadContent — a crash during the very first reload.
         }
         CartSession? session = _modes.Session;
+        GameScreenLayers layers = ComposeGameScreen(_modes, _shellScreen, _hover.Target, _hover.TooltipVisible);
         _overlay.Show(session?.Status, session?.StatusPercent ?? -1);
-        if (_modes.PauseMenu.Shown)
+        if (layers.Band is GameTabBar band)
         {
             _overlay.ShowMenu(
-                _modes.PauseMenu.Text(session?.Tick),
+                _modes.PauseMenu.Text(_modes.MenuTick),
                 _modes.PauseMenu.Box(_shellScreen.Width, _shellScreen.Height),
                 _modes.PauseMenu.TextOrigin(_shellScreen.Width, _shellScreen.Height));
+            _overlay.ShowBand(layers.BandSurface!.Pixels, band.Rows);
         }
         else
         {
             _overlay.HideMenu();
-        }
-
-        // With no cartridge behind it the game screen still has to be a picture: the shell's own
-        // console, cleared, so the pause menu's START stands on ground rather than on whatever
-        // the last frame left in the back buffer (Р7).
-        if (session is null)
-        {
-            _shellScreen.Begin();
-            _shellScreen.Console.Cls(0);
+            _overlay.HideBand();
         }
 
         _presenter.ClearLetterbox();
         _spriteBatch.Begin(samplerState: SamplerState.PointClamp);
         Rectangle dest = _presenter.Draw(
             _spriteBatch,
-            session?.Framebuffer ?? _shellScreen.Framebuffer,
-            session?.Display ?? _shellScreen.Display,
+            layers.Presented,
+            layers.Display,
             GraphicsDevice.PresentationParameters.BackBufferWidth,
             GraphicsDevice.PresentationParameters.BackBufferHeight);
         // The overlay goes over the same rectangle, so its pixels line up with console
         // pixels — and it is a texture of its own, so the framebuffer stays untouched.
         _overlay.Draw(_spriteBatch, dest);
         _spriteBatch.End();
+    }
+
+    /// <summary>
+    /// Everything <see cref="RenderFrame"/> decides that does not need a graphics device: which
+    /// surface the window presents on the game screen, and — while the pause menu is up — the
+    /// band painted over it (M9 stage 5a).
+    ///
+    /// <para><b>Why this is a static method and not four lines inside the render.</b> The stage's
+    /// headline promise is that <em>the frame on screen at the moment of the pause is the frame
+    /// the player was playing</em>: the cartridge's framebuffer is the project's golden master
+    /// (<c>quarp sim</c> hashes it, CI compares those hashes across architectures), so the band
+    /// must neither write a pixel of it nor push it down by its eleven rows. That promise lives
+    /// in the choice of two surfaces, and while the choice sat inside a device-bound method the
+    /// only test that could reach it was one that made both surfaces itself and then compared the
+    /// cartridge's frame with a copy of itself — a check that stayed green with the band's draw
+    /// commented out. Here the choice is the thing under test: hand this a real session and it
+    /// answers with the two framebuffers it picked, and they are either the same object or they
+    /// are not.</para>
+    ///
+    /// <para>With no cartridge running (Р7's START menu) the game screen <em>is</em> the shell's
+    /// own console, so that is what comes back as <see cref="GameScreenLayers.Presented"/> — and
+    /// it is cleared here when the band is not going to clear it. That is also the one state in
+    /// which the two surfaces are deliberately the <b>same</b> object: with no cartridge there is
+    /// no golden master to keep off, and the band is simply part of the picture.</para>
+    /// </summary>
+    public static GameScreenLayers ComposeGameScreen(
+        ShellModeMachine modes, ShellScreen shell, HoverTarget? hover, bool tooltipVisible)
+    {
+        ArgumentNullException.ThrowIfNull(modes);
+        ArgumentNullException.ThrowIfNull(shell);
+        CartSession? session = modes.Session;
+        // The cartridge's own surfaces while one is running: never the shell's, or the paused
+        // picture would be the tool screen the author last drew instead of the game.
+        Framebuffer presented = session?.Framebuffer ?? shell.Framebuffer;
+        DisplayPalette display = session?.Display ?? shell.Display;
+        if (!modes.PauseMenu.Shown)
+        {
+            // Playing: no band at all (160x90 is too small to spend eleven rows on a player who
+            // is not editing anything — see GameTabBar). With nothing running the screen still
+            // has to be a picture, so the shell's console is cleared rather than left holding
+            // whatever the last mode drew.
+            if (session is null)
+            {
+                shell.Begin();
+                shell.Console.Cls(0);
+            }
+            return new GameScreenLayers(presented, display, Band: null, BandSurface: null);
+        }
+        // Paused. The band goes on the SHELL's console — the one surface that is never presented
+        // while a cartridge is on screen — and ShellOverlay.ShowBand lifts its finished rows into
+        // the RGBA layer the pause menu and the PAUSE indicator already ride on. See GameTabBar
+        // for why finished pixels travel rather than a description of them.
+        GameTabBar bar = GameTabBar.Compute(shell.Width, shell.Height);
+        bar.Draw(shell, modes.GameTitle, hover, tooltipVisible);
+        return new GameScreenLayers(presented, display, bar, shell.Framebuffer);
     }
 
     /// <summary>

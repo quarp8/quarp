@@ -95,7 +95,7 @@ public class FunctionKeyParityTests : IDisposable
         switch (modes.Mode)
         {
             case ShellMode.Game:
-                GameScreenInput.Update(shell, commands, mouse);
+                GameScreenInput.Update(shell, commands, mouse, FrameSeconds);
                 break;
             case ShellMode.Editor:
                 SpriteEditorInput.Update(shell, commands, mouse, FrameSeconds);

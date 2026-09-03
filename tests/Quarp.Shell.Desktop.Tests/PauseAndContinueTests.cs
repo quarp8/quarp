@@ -206,7 +206,7 @@ public class PauseAndContinueTests : IDisposable
         switch (modes.Mode)
         {
             case ShellMode.Game:
-                GameScreenInput.Update(shell, commands, mouse);
+                GameScreenInput.Update(shell, commands, mouse, FrameSeconds);
                 if (modes.Mode == ShellMode.Game && modes.Session is CartSession session)
                 {
                     session.Update(session.IsPaused ? 0 : TicksPerFrame, default, rewinding: false);
@@ -267,13 +267,35 @@ public class PauseAndContinueTests : IDisposable
         }
     }
 
-    /// <summary>Puts the pause menu's cursor on a named row, the way Up/Down would, and chooses it.</summary>
-    private static void ChoosePauseMenuItem(ShellModeMachine modes, PauseMenuItem item)
+    /// <summary>Puts the pause menu's cursor on a named row, the way Up/Down would.</summary>
+    private static void SelectPauseMenuItem(ShellModeMachine modes, PauseMenuItem item)
     {
         int index = modes.PauseMenu.Items.ToList().IndexOf(item);
         Assert.True(index >= 0, $"{item} is not on the menu this state offers");
         modes.PauseMenu.Select(index);
+    }
+
+    /// <summary>Puts the pause menu's cursor on a named row, the way Up/Down would, and chooses it.</summary>
+    private static void ChoosePauseMenuItem(ShellModeMachine modes, PauseMenuItem item)
+    {
+        SelectPauseMenuItem(modes, item);
         modes.ActivatePauseMenuItem();
+    }
+
+    /// <summary>
+    /// Taps a scrub arrow <paramref name="count"/> times, standing on the STEP row. A tap is one
+    /// tick by <see cref="TickScrubber"/>'s own press-edge rule — the distance <c>,</c> and
+    /// <c>.</c> move — so this travels an <b>exact</b> number of ticks through the production
+    /// router, which is what the acceptance check below needs and what no held arrow can promise.
+    /// </summary>
+    private static void ScrubTaps(
+        ShellModeMachine modes, ShellCommandReader keys, EditorMouseReader pointer, Keys arrow, int count)
+    {
+        SelectPauseMenuItem(modes, PauseMenuItem.Scrub);
+        for (int i = 0; i < count; i++)
+        {
+            Tap(modes, keys, pointer, arrow);
+        }
     }
 
     // ==================================================================================
@@ -314,7 +336,8 @@ public class PauseAndContinueTests : IDisposable
         byte[] oldCodeThere = ReferenceFrame(7, ticks);
         byte[] newCodeThere = ReferenceFrame(11, ticks);
         byte[] newCodeAtStart = ReferenceFrame(11, 0);
-        byte[] newCodeEarlier = ReferenceFrame(11, ticks - PauseMenu.JumpTicks);
+        const int back = 60;        // one console second, the distance acceptance 3 names
+        byte[] newCodeEarlier = ReferenceFrame(11, ticks - back);
 
         ShellModeMachine modes = Playing();
         var keys = new ShellCommandReader();
@@ -358,12 +381,14 @@ public class PauseAndContinueTests : IDisposable
         Assert.True(modes.PauseMenu.Shown);
         Assert.Equal(ticks, session.Tick);
 
-        // Acceptance 3: sixty back, sixty forward, the same frame both times.
-        ChoosePauseMenuItem(modes, PauseMenuItem.Rewind);
-        Assert.Equal(ticks - PauseMenu.JumpTicks, session.Tick);
+        // Acceptance 3: sixty back, sixty forward, the same frame both times. Sixty taps of the
+        // scrub row's arrows since stage 5a took the REWIND 60 / AHEAD 60 rows away — the verb is
+        // the same one, and the distance is exact because a tap is one tick.
+        ScrubTaps(modes, keys, pointer, Keys.Left, back);
+        Assert.Equal(ticks - back, session.Tick);
         Assert.Equal(newCodeEarlier, session.Framebuffer.Pixels);
 
-        ChoosePauseMenuItem(modes, PauseMenuItem.Ahead);
+        ScrubTaps(modes, keys, pointer, Keys.Right, back);
         Assert.Equal(ticks, session.Tick);
         Assert.Equal(newCodeThere, session.Framebuffer.Pixels);
     }
@@ -519,7 +544,10 @@ public class PauseAndContinueTests : IDisposable
         Assert.False(modes.PauseMenu.GameRunning);
         Assert.Equal(new[] { PauseMenuItem.Resume, PauseMenuItem.Exit }, modes.PauseMenu.Items);
         Assert.Contains("START", modes.PauseMenu.Text(null), StringComparison.Ordinal);
-        Assert.Contains("NO GAME RUNNING", modes.PauseMenu.Text(null), StringComparison.Ordinal);
+        // Two rows and no third: the header row that used to read "NO GAME RUNNING" went with
+        // every other header in stage 5a, and with nothing running there is no tick to scrub.
+        Assert.Equal(2, modes.PauseMenu.Text(null).Split('\n').Length);
+        Assert.DoesNotContain("<", modes.PauseMenu.Text(null), StringComparison.Ordinal);
 
         ChoosePauseMenuItem(modes, PauseMenuItem.Resume);
 
@@ -638,17 +666,16 @@ public class PauseAndContinueTests : IDisposable
     /// arithmetic, <see cref="PauseMenu.ItemRect"/>, used by the hit test and by
     /// <see cref="ShellOverlay"/> alike.
     ///
-    /// <para><b>Break recipe, corrected.</b> The one written here before was false, and saying so
-    /// is the point: it claimed that making <see cref="PauseMenu.ItemRect"/> count rows from
-    /// <c>index</c> instead of <c>index + 1</c> would turn this red. It does not, and cannot —
-    /// <b>both</b> channels of this test go through that same function (the pointer road takes its
-    /// click point from <c>ItemRect</c> and the hit test answers with <c>ItemRect</c>), so the two
-    /// stay in perfect agreement while the click lands a row away from the letters the author sees.
-    /// The claim that actually fails here is a narrower one: break the pointer road's <em>hover
-    /// then click</em> pair — return early from <c>PauseMenu.Select</c> — and the two frames stop
-    /// agreeing at once. What ties a rectangle to a printed row is
-    /// <see cref="AClickWhereARowIsPrintedActivatesThatRow"/>, which measures the click point from
-    /// the ink instead.</para>
+    /// <para><b>Break recipe, corrected twice.</b> The one written here originally was false, and
+    /// saying so is the point: it claimed that making <see cref="PauseMenu.ItemRect"/> count rows
+    /// from <c>index</c> instead of <c>index + 1</c> would turn this red. It could not — both
+    /// channels went through that same function. Since stage 5a the two channels are further
+    /// apart than they were (a held key on a selected row against a held pointer on a printed
+    /// arrow) and the recipe that fails is: drop the <c>ScrubDirection</c> pointer branch in
+    /// <c>GameScreenInput</c>, or return early from <c>PauseMenu.Select</c>, and the two roads
+    /// disagree at once. What ties a rectangle to a printed glyph is
+    /// <see cref="AClickWhereTheArrowIsPrintedScrubsThatWay"/>, which measures the click point
+    /// from the ink instead.</para>
     /// </summary>
     [Fact]
     public void TheMenuAnswersTheArrowsAndThePointerWithTheSameVerb()
@@ -659,7 +686,7 @@ public class PauseAndContinueTests : IDisposable
     }
 
     /// <summary>
-    /// One run of "play a while, open the menu, step one tick back" — once with the mouse alone
+    /// One run of "play a while, open the menu, scrub one tick back" — once with the mouse alone
     /// and once with the keyboard alone. No <see cref="Keys"/> value is touched on the pointer
     /// road past the Escape that opens the menu, and no coordinate on the keyboard road at all.
     /// </summary>
@@ -676,17 +703,15 @@ public class PauseAndContinueTests : IDisposable
 
         if (byPointer)
         {
-            Rectangle row = modes.PauseMenu.ItemRect(
-                modes.PauseMenu.Items.ToList().IndexOf(PauseMenuItem.StepBack),
-                ConsoleWidth, ConsoleHeight);
-            Frame(modes, keys, pointer, NoKeys, row.Center.X, row.Center.Y, ButtonState.Pressed);
-            Frame(modes, keys, pointer, NoKeys, row.Center.X, row.Center.Y);
+            Rectangle arrow = modes.PauseMenu.ScrubArrowRect(-1, ConsoleWidth, ConsoleHeight);
+            Frame(modes, keys, pointer, NoKeys, arrow.Center.X, arrow.Center.Y, ButtonState.Pressed);
+            Frame(modes, keys, pointer, NoKeys, arrow.Center.X, arrow.Center.Y);
         }
         else
         {
             Tap(modes, keys, pointer, Keys.Down);
-            Assert.Equal(PauseMenuItem.StepBack, modes.PauseMenu.Current);
-            Tap(modes, keys, pointer, Keys.Enter);
+            Assert.Equal(PauseMenuItem.Scrub, modes.PauseMenu.Current);
+            Tap(modes, keys, pointer, Keys.Left);
         }
 
         Assert.Equal(99, session.Tick);
@@ -698,8 +723,9 @@ public class PauseAndContinueTests : IDisposable
     /// overlap, every row's rectangle answers the hit test with its own index, and the cursor
     /// marks exactly one row of the printed block.
     ///
-    /// <para>Break recipe: drop the <c>+ 1</c> from <see cref="PauseMenu.LineCount"/> — the box
-    /// gets one row too short and the last row's centre stops hit-testing to it.</para>
+    /// <para>Break recipe: give <see cref="PauseMenu.LineCount"/> back the <c>+ 1</c> the header
+    /// row needed — the box grows a row nothing prints on, every row shifts, and the count of
+    /// printed lines stops matching the count of items.</para>
     /// </summary>
     [Fact]
     public void TheMenusRowsAreInsideItsBoxAndHitTestBackToThemselves()
@@ -724,10 +750,26 @@ public class PauseAndContinueTests : IDisposable
         }
         Assert.False(menu.TryItem(0, 0, ConsoleWidth, ConsoleHeight, out _));
 
-        // The printed block: a header and one row per item, with the cursor on exactly one.
+        // The two scrub arrows: inside the box, on the scrub row, not on each other, and each
+        // hit-testing back to its own direction.
+        Rectangle backArrow = menu.ScrubArrowRect(-1, ConsoleWidth, ConsoleHeight);
+        Rectangle forwardArrow = menu.ScrubArrowRect(+1, ConsoleWidth, ConsoleHeight);
+        int scrubRow = menu.Items.ToList().IndexOf(PauseMenuItem.Scrub);
+        Assert.True(box.Contains(backArrow) && box.Contains(forwardArrow));
+        Assert.False(backArrow.Intersects(forwardArrow));
+        Assert.True(rows[scrubRow].Contains(backArrow) && rows[scrubRow].Contains(forwardArrow));
+        Assert.True(menu.TryScrubArrow(
+            backArrow.Center.X, backArrow.Center.Y, ConsoleWidth, ConsoleHeight, out int backWay));
+        Assert.Equal(-1, backWay);
+        Assert.True(menu.TryScrubArrow(
+            forwardArrow.Center.X, forwardArrow.Center.Y, ConsoleWidth, ConsoleHeight, out int forwardWay));
+        Assert.Equal(+1, forwardWay);
+        Assert.False(menu.TryScrubArrow(0, 0, ConsoleWidth, ConsoleHeight, out _));
+
+        // The printed block: one row per item and no header at all, with the cursor on exactly one.
         string[] lines = menu.Text(300).Split('\n');
-        Assert.Equal(menu.Items.Count + 1, lines.Length);
-        Assert.Contains("300", lines[0], StringComparison.Ordinal);
+        Assert.Equal(menu.Items.Count, lines.Length);
+        Assert.Contains("300", lines[scrubRow], StringComparison.Ordinal);
         Assert.Equal(1, lines.Count(line => line.StartsWith(">", StringComparison.Ordinal)));
         menu.Move(+1);
         Assert.Equal(
@@ -939,10 +981,7 @@ public class PauseAndContinueTests : IDisposable
     /// </summary>
     [Theory]
     [InlineData(PauseMenuItem.Resume)]
-    [InlineData(PauseMenuItem.StepBack)]
-    [InlineData(PauseMenuItem.StepForward)]
-    [InlineData(PauseMenuItem.Rewind)]
-    [InlineData(PauseMenuItem.Ahead)]
+    [InlineData(PauseMenuItem.Scrub)]
     [InlineData(PauseMenuItem.Exit)]
     public void AClickWhereARowIsPrintedActivatesThatRow(PauseMenuItem item)
     {
@@ -971,17 +1010,12 @@ public class PauseAndContinueTests : IDisposable
                 Assert.False(modes.PauseMenu.Shown);
                 Assert.False(session.IsPaused);
                 break;
-            case PauseMenuItem.StepBack:
-                Assert.Equal(99, session.Tick);
-                break;
-            case PauseMenuItem.StepForward:
-                Assert.Equal(101, session.Tick);
-                break;
-            case PauseMenuItem.Rewind:
-                Assert.Equal(100 - PauseMenu.JumpTicks, session.Tick);
-                break;
-            case PauseMenuItem.Ahead:
-                Assert.Equal(100 + PauseMenu.JumpTicks, session.Tick);
+            case PauseMenuItem.Scrub:
+                // The one row with no verb of its own: clicking its letters puts the cursor
+                // there and moves nothing. Its two verbs are the arrows, and they are checked
+                // the same way, from their own ink, by the theory below.
+                Assert.True(modes.PauseMenu.Shown);
+                Assert.Equal(100, session.Tick);
                 break;
             default:
                 Assert.Equal(ShellMode.Library, modes.Mode);
@@ -991,46 +1025,95 @@ public class PauseAndContinueTests : IDisposable
     }
 
     /// <summary>
+    /// <b>A click where an arrow is printed must scrub the way the arrow points.</b> The sibling
+    /// of the theory above, for the two glyphs that replaced four rows in stage 5a, and written
+    /// the same way for the same reason: the point clicked is measured from the <em>ink</em>
+    /// (<see cref="WhereTheMenuPrints"/> finds the one character by blanking it), never from
+    /// <see cref="PauseMenu.ScrubArrowRect"/> — which is the arithmetic the hit test itself uses,
+    /// so taking the click point from it would be asking one function two questions and calling
+    /// the agreement a test.
+    ///
+    /// <para><b>Break recipe (measured, and the obvious one does not work).</b> Moving
+    /// <c>PauseMenu.LeftArrowColumn</c> changes <b>nothing</b> here, and that is the single owner
+    /// doing its job: the printed glyph and the hit rectangle are placed by the same constant, so
+    /// they move together. What this test catches is the two disagreeing, so the recipe has to
+    /// break one side only — add one to the column inside <c>PauseMenu.ScrubArrowRect</c> and the
+    /// backward row goes red (the click lands on the space beside the rectangle and nothing
+    /// scrubs) while the forward row stays green, together with the four rows of
+    /// <see cref="TheScrubRowNeverCutsTheTickNumberAndNeverMovesItsArrows"/>.</para>
+    /// </summary>
+    [Theory]
+    [InlineData("<", -1)]
+    [InlineData(">", +1)]
+    public void AClickWhereTheArrowIsPrintedScrubsThatWay(string arrow, int direction)
+    {
+        ShellModeMachine modes = Playing();
+        var keys = new ShellCommandReader();
+        var pointer = new EditorMouseReader();
+        CartSession session = modes.Session!;
+
+        Frames(modes, keys, pointer, 100);
+        Tap(modes, keys, pointer, Keys.Escape);
+        Assert.True(modes.PauseMenu.Shown);
+        Assert.Equal(100, session.Tick);
+
+        Point spot = WhereTheMenuPrints(modes.PauseMenu, session.Tick, arrow);
+
+        // Press: one frame of the hold, which is one tick by the scrubber's press-edge rule.
+        Frame(modes, keys, pointer, NoKeys, spot.X, spot.Y, ButtonState.Pressed);
+        Frame(modes, keys, pointer, NoKeys, spot.X, spot.Y);
+
+        Assert.Equal(100 + direction, session.Tick);
+        Assert.True(modes.PauseMenu.Shown);         // scrubbing never leaves the menu
+    }
+
+    /// <summary>
     /// What each row reads on a running game — the test's own expectation of the printed word,
-    /// rather than a copy of the menu's private table. The two travelling rows ask
-    /// <see cref="PauseMenu.JumpTicks"/> for their number, because that constant is the fact the
-    /// label is built from.
+    /// rather than a copy of the menu's private table.
     /// </summary>
     private static string LabelOf(PauseMenuItem item) => item switch
     {
         PauseMenuItem.Resume => "RESUME",
-        PauseMenuItem.StepBack => "STEP -1",
-        PauseMenuItem.StepForward => "STEP +1",
-        PauseMenuItem.Rewind => $"REWIND {PauseMenu.JumpTicks}",
-        PauseMenuItem.Ahead => $"AHEAD {PauseMenu.JumpTicks}",
+        PauseMenuItem.Scrub => "STEP",
         _ => "EXIT",
     };
 
     /// <summary>
-    /// The centre of the <b>ink</b> of the row a label is printed on. The block is printed twice
-    /// into a console — once whole and once with that one line blanked — and the pixels that differ
-    /// are, by construction, exactly the glyphs of that row; their bounding box is where the eye
-    /// sees it. Nothing here measures a font or counts a line height: the layout comes from
-    /// <c>VirtualConsole.Print</c>, which is the same cursor rule <c>ShellOverlay.Print</c> mirrors
-    /// when it paints this menu over the frame ("the same 4x6 layout VirtualConsole.Print uses", by
-    /// that method's own comment).
+    /// The centre of the <b>ink</b> of a label where the menu actually prints it. The block is
+    /// printed twice into a console — once whole and once with those characters replaced by
+    /// spaces — and the pixels that differ are, by construction, exactly that label's glyphs;
+    /// their bounding box is where the eye sees it. Nothing here measures a font or counts a line
+    /// height: the layout comes from <c>VirtualConsole.Print</c>, which is the same cursor rule
+    /// <c>ShellOverlay.Print</c> mirrors when it paints this menu over the frame ("the same 4x6
+    /// layout VirtualConsole.Print uses", by that method's own comment).
+    ///
+    /// <para>Only the label is blanked, not the whole row, because since stage 5a a row can carry
+    /// three separate controls (the word, and the two arrows on either side of the tick) and the
+    /// centre of a whole row would be none of them. Column 0 is skipped when searching: it is the
+    /// selection cursor's column, and the cursor is a <c>&gt;</c>.</para>
     /// </summary>
     private static Point WhereTheMenuPrints(PauseMenu menu, int? tick, string label)
     {
         string[] lines = menu.Text(tick).Split('\n');
         int row = -1;
+        int column = -1;
         for (int i = 0; i < lines.Length; i++)
         {
-            if (lines[i].Contains(label, StringComparison.Ordinal))
+            int at = lines[i].IndexOf(label, 1, StringComparison.Ordinal);
+            if (at >= 0)
             {
                 Assert.True(row < 0, $"'{label}' is printed on two rows of the menu");
                 row = i;
+                column = at;
             }
         }
         Assert.True(row >= 0, $"'{label}' is not printed on the menu at all");
 
         string[] blanked = (string[])lines.Clone();
-        blanked[row] = new string(' ', lines[row].Length);
+        blanked[row] = string.Concat(
+            lines[row].AsSpan(0, column),
+            new string(' ', label.Length),
+            lines[row].AsSpan(column + label.Length));
         Point origin = menu.TextOrigin(ConsoleWidth, ConsoleHeight);
         VirtualConsole whole = Printed(string.Join('\n', lines), origin);
         VirtualConsole without = Printed(string.Join('\n', blanked), origin);
@@ -1053,7 +1136,7 @@ public class PauseAndContinueTests : IDisposable
                 maxY = Math.Max(maxY, y);
             }
         }
-        Assert.True(maxX >= 0, $"the row reading '{label}' printed no ink at all");
+        Assert.True(maxX >= 0, $"'{label}' printed no ink at all");
         return new Point((minX + maxX) / 2, (minY + maxY) / 2);
     }
 
@@ -1067,70 +1150,54 @@ public class PauseAndContinueTests : IDisposable
     }
 
     /// <summary>
-    /// The two travelling rows say how far they travel, and travel exactly that far. The distance
-    /// is read <b>off the printed row</b> and then handed to the machine, so a label that promised
-    /// one number while the session moved another would fail here — which is how a second copy of a
-    /// number always ends. Until this wave the labels were the literals "REWIND 60" and "AHEAD 60",
-    /// written a dozen lines under <see cref="PauseMenu.JumpTicks"/> itself.
+    /// The scrub row prints the whole tick number, whatever the number is, and neither arrow
+    /// moves when it grows. The first half is the rule the deleted header used to carry (a
+    /// session past 999999 ticks — four and a half hours at 60 Hz, and any session a long rewind
+    /// has walked twice — once printed "PAUSED  T 100000" for tick 1000000: not a shortened
+    /// number but a different one). The second half is new and is the reason the number is
+    /// centred in a fixed field: a clickable glyph that moves while the author is reading is the
+    /// worst kind of button, which is the rule <c>ConsoleChrome.PromptVerbRect</c> already states
+    /// for the exit prompt.
     ///
-    /// <para>Break recipe: put the literal back ("REWIND 60") and change <c>JumpTicks</c> to 30 —
-    /// the parse still finds 60 on the row, the session moves 30, and both halves go red. Changing
-    /// <c>JumpTicks</c> alone, with the label derived from it, keeps this green on purpose: that is
-    /// the one owner working.</para>
+    /// <para><b>Break recipe (measured).</b> Make the tick field grow with the number — replace
+    /// the centring in <c>PauseMenu.ScrubRowText</c> with a left-aligned copy at
+    /// <c>TickColumn</c> and let <c>RightArrowColumn</c> follow the digits — and the arrow rows
+    /// go red the moment the tick has a different number of digits from the first case. Cut the
+    /// digits to the field with <c>digits[..TickColumns]</c> instead and the int.MaxValue row
+    /// goes red on the number itself.</para>
     /// </summary>
     [Theory]
-    [InlineData(PauseMenuItem.Rewind, -1)]
-    [InlineData(PauseMenuItem.Ahead, +1)]
-    public void TheTravellingRowsMoveExactlyAsFarAsTheyClaim(PauseMenuItem item, int direction)
-    {
-        ShellModeMachine modes = Playing();
-        var keys = new ShellCommandReader();
-        var pointer = new EditorMouseReader();
-        CartSession session = modes.Session!;
-
-        Frames(modes, keys, pointer, 200);
-        Tap(modes, keys, pointer, Keys.Escape);
-
-        string word = item == PauseMenuItem.Rewind ? "REWIND" : "AHEAD";
-        string row = Assert.Single(
-            modes.PauseMenu.Text(session.Tick).Split('\n'),
-            line => line.Contains(word, StringComparison.Ordinal));
-        int promised = int.Parse(
-            new string(row.Where(char.IsDigit).ToArray()), System.Globalization.CultureInfo.InvariantCulture);
-        Assert.Equal(PauseMenu.JumpTicks, promised);
-
-        ChoosePauseMenuItem(modes, item);
-
-        Assert.Equal(200 + (direction * promised), session.Tick);
-    }
-
-    /// <summary>
-    /// The header keeps the whole tick number. A session past 999999 ticks — four and a half hours
-    /// at 60 Hz, and any session a long rewind has walked twice — used to print "PAUSED  T 100000"
-    /// for tick 1000000: not a shortened number but a different one, on the single line the author
-    /// reads to know where in time they are standing.
-    ///
-    /// <para>Break recipe: give <c>PauseMenu.Header</c> back its one format
-    /// (<c>$"PAUSED  T {digits}"</c> for every tick) and the two long rows go red on the digits
-    /// while the short one stays green — which is the shape of the bug: it only appears past the
-    /// width, which is why nobody saw it.</para>
-    /// </summary>
-    [Theory]
+    [InlineData(0)]
     [InlineData(300)]
     [InlineData(1_000_000)]
     [InlineData(int.MaxValue)]
-    public void TheMenuHeaderNeverCutsTheTickNumber(int tick)
+    public void TheScrubRowNeverCutsTheTickNumberAndNeverMovesItsArrows(int tick)
     {
         var menu = new PauseMenu();
         menu.Open(gameRunning: true);
+        int scrubRow = menu.Items.ToList().IndexOf(PauseMenuItem.Scrub);
 
-        string header = menu.Text(tick).Split('\n')[0];
+        string row = menu.Text(tick).Split('\n')[scrubRow];
 
         Assert.Contains(
-            tick.ToString(System.Globalization.CultureInfo.InvariantCulture), header, StringComparison.Ordinal);
+            tick.ToString(System.Globalization.CultureInfo.InvariantCulture), row, StringComparison.Ordinal);
         Assert.True(
-            header.Length <= menu.Box(ConsoleWidth, ConsoleHeight).Width / SystemFont.CellWidth,
-            "the header outgrew the box it is printed in");
+            row.Length * SystemFont.CellWidth <= menu.Box(ConsoleWidth, ConsoleHeight).Width,
+            "the scrub row outgrew the box it is printed in");
+        Assert.All(menu.Text(tick).Split('\n'), line => Assert.Equal(row.Length, line.Length));
+
+        // Both arrows are printed exactly where the hit test says they are, at every width of
+        // number: the printed column is taken from the string, the rectangle from the model.
+        Assert.Equal('<', row[ColumnOf(menu, -1)]);
+        Assert.Equal('>', row[ColumnOf(menu, +1)]);
+    }
+
+    /// <summary>Which character cell of the printed row an arrow's rectangle covers.</summary>
+    private static int ColumnOf(PauseMenu menu, int direction)
+    {
+        Rectangle arrow = menu.ScrubArrowRect(direction, ConsoleWidth, ConsoleHeight);
+        Point origin = menu.TextOrigin(ConsoleWidth, ConsoleHeight);
+        return (arrow.X - origin.X) / SystemFont.CellWidth;
     }
 
     // ==================================================================================

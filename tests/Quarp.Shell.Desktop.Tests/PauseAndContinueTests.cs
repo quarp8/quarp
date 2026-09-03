@@ -1057,13 +1057,28 @@ public class PauseAndContinueTests : IDisposable
         Assert.True(modes.PauseMenu.Shown);
         Assert.Equal(100, session.Tick);
 
+        // Both arrows are tested from tick 99, not from the pause tick, and that is the point
+        // of this line rather than a detail of the fixture: since M9 stage 5b the scrubber may
+        // not walk past the end of the recording (owner's rule — a pause is a look at what was
+        // played, not play by proxy), so a forward click AT the pause tick is a no-op by
+        // design. Standing one tick inside the recording is the only place where both
+        // directions have somewhere to go.
+        // Stepped back with the pointer rather than the Left key on purpose: the menu opens with
+        // the cursor on RESUME, and the arrow keys scrub only while the scrub row is the one
+        // under the cursor. A click on the printed arrow needs no cursor at all, which is the
+        // very property the rest of this test is about.
+        Point back = WhereTheMenuPrints(modes.PauseMenu, session.Tick, "<");
+        Frame(modes, keys, pointer, NoKeys, back.X, back.Y, ButtonState.Pressed);
+        Frame(modes, keys, pointer, NoKeys, back.X, back.Y);
+        Assert.Equal(99, session.Tick);
+
         Point spot = WhereTheMenuPrints(modes.PauseMenu, session.Tick, arrow);
 
         // Press: one frame of the hold, which is one tick by the scrubber's press-edge rule.
         Frame(modes, keys, pointer, NoKeys, spot.X, spot.Y, ButtonState.Pressed);
         Frame(modes, keys, pointer, NoKeys, spot.X, spot.Y);
 
-        Assert.Equal(100 + direction, session.Tick);
+        Assert.Equal(99 + direction, session.Tick);
         Assert.True(modes.PauseMenu.Shown);         // scrubbing never leaves the menu
     }
 

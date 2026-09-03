@@ -55,21 +55,30 @@ namespace Quarp.Shell.Desktop;
 /// </summary>
 /// <summary>
 /// What one frame of the <b>game</b> screen is made of, once the graphics device is subtracted:
-/// the surface the window presents, the output state it is presented through, and — only while
-/// the pause menu is up — the band laid over it and the surface that band was painted on.
+/// the surface the window presents, the output state it is presented through, — only while
+/// the pause menu is up — the band laid over it and the surface that band was painted on, and
+/// what the overlay's bottom-left line is told to say.
 ///
 /// <para>It exists so the two surfaces can be compared. The cartridge's framebuffer is the golden
 /// master this whole project is about; the band and the menu ride an overlay texture precisely so
 /// that pausing cannot change a pixel of it, and "cannot" is a claim about which object was
 /// handed to which painter. <see cref="QuarpGame.ComposeGameScreen"/> makes that choice and this
 /// type reports it, so a headless test can hold both and ask whether they are the same array.</para>
+///
+/// <para>The status line joined it in M9 stage 5b for the same reason and by the same argument:
+/// "with the menu up there is no bottom line" is a decision, it needs a test, and a test can only
+/// reach it if the decision comes out of the composition rather than dying inside a device-bound
+/// render.</para>
 /// </summary>
 /// <param name="Presented">The framebuffer the window shows: the running cartridge's own, or the shell's when none is running.</param>
 /// <param name="Display">The output state that framebuffer is shown through — its console's, never a mixture.</param>
 /// <param name="Band">The paused game's top band, measured and painted; null while the game runs.</param>
 /// <param name="BandSurface">The surface <paramref name="Band"/> was painted on, whose first rows the overlay lifts; null while the game runs.</param>
+/// <param name="Status">What the overlay's bottom-left line says, or null for no line at all — see <see cref="QuarpGame.PausedStatus"/>.</param>
+/// <param name="StatusPercent">The progress bar's fill in 0..100 while a blocking resimulation is running, or -1.</param>
 public readonly record struct GameScreenLayers(
-    Framebuffer Presented, DisplayPalette Display, GameTabBar? Band, Framebuffer? BandSurface);
+    Framebuffer Presented, DisplayPalette Display, GameTabBar? Band, Framebuffer? BandSurface,
+    string? Status, int StatusPercent);
 
 public sealed class QuarpGame : Game
 {
@@ -1079,9 +1088,8 @@ public sealed class QuarpGame : Game
         {
             return;     // Called before LoadContent — a crash during the very first reload.
         }
-        CartSession? session = _modes.Session;
         GameScreenLayers layers = ComposeGameScreen(_modes, _shellScreen, _hover.Target, _hover.TooltipVisible);
-        _overlay.Show(session?.Status, session?.StatusPercent ?? -1);
+        _overlay.Show(layers.Status, layers.StatusPercent);
         if (layers.Band is GameTabBar band)
         {
             _overlay.ShowMenu(
@@ -1112,8 +1120,9 @@ public sealed class QuarpGame : Game
 
     /// <summary>
     /// Everything <see cref="RenderFrame"/> decides that does not need a graphics device: which
-    /// surface the window presents on the game screen, and — while the pause menu is up — the
-    /// band painted over it (M9 stage 5a).
+    /// surface the window presents on the game screen, the band painted over it while the pause
+    /// menu is up (M9 stage 5a), and what the overlay's bottom-left line says — which, with the
+    /// menu up, is nothing at all (M9 stage 5b, <see cref="PausedStatus"/>).
     ///
     /// <para><b>Why this is a static method and not four lines inside the render.</b> The stage's
     /// headline promise is that <em>the frame on screen at the moment of the pause is the frame
@@ -1143,6 +1152,7 @@ public sealed class QuarpGame : Game
         // picture would be the tool screen the author last drew instead of the game.
         Framebuffer presented = session?.Framebuffer ?? shell.Framebuffer;
         DisplayPalette display = session?.Display ?? shell.Display;
+        int percent = session?.StatusPercent ?? -1;
         if (!modes.PauseMenu.Shown)
         {
             // Playing: no band at all (160x90 is too small to spend eleven rows on a player who
@@ -1154,7 +1164,8 @@ public sealed class QuarpGame : Game
                 shell.Begin();
                 shell.Console.Cls(0);
             }
-            return new GameScreenLayers(presented, display, Band: null, BandSurface: null);
+            return new GameScreenLayers(
+                presented, display, Band: null, BandSurface: null, session?.Status, percent);
         }
         // Paused. The band goes on the SHELL's console — the one surface that is never presented
         // while a cartridge is on screen — and ShellOverlay.ShowBand lifts its finished rows into
@@ -1162,8 +1173,32 @@ public sealed class QuarpGame : Game
         // for why finished pixels travel rather than a description of them.
         GameTabBar bar = GameTabBar.Compute(shell.Width, shell.Height);
         bar.Draw(shell, modes.GameTitle, hover, tooltipVisible);
-        return new GameScreenLayers(presented, display, bar, shell.Framebuffer);
+        return new GameScreenLayers(presented, display, bar, shell.Framebuffer, PausedStatus(session), percent);
     }
+
+    /// <summary>
+    /// What the bottom-left line says with the menu up — which is <b>nothing</b>, unless the
+    /// console is busy.
+    ///
+    /// <para><b>Why the line goes (M9 stage 5b, the owner's third complaint).</b> Under an open
+    /// menu that line read <c>PAUSE 4000</c>: the word "pause" over a picture that is visibly
+    /// paused and has a menu on it, and a second copy of the tick already standing between the
+    /// scrub row's arrows. Stage 5a answered the duplicate by making the two printers agree; the
+    /// owner's answer is that there should not be two, and it is the better one — the disagreement
+    /// and all the machinery that prevented it are gone with the second printer. With the menu
+    /// <em>down</em> the line stays exactly as it was since M2: pausing with Space, the speed
+    /// rungs and the replay indicator have nowhere else to speak.</para>
+    ///
+    /// <para><b>The one thing that still speaks: a blocking resimulation.</b> While a seek is
+    /// running (a rewind the frame budget could not defer, or a hot reload's
+    /// <c>TimeMachine.Rebuild</c> — both perfectly normal with the menu up) the session publishes
+    /// <c>REBUILD 42%</c> with a percentage and repaints the window from inside its own loop.
+    /// That line is not a duplicate of anything on the menu; it is the console saying why the
+    /// window has stopped answering, and it is the only reason the author does not think the
+    /// shell has hung. So the rule is "no idle status under the menu", not "no pixels".</para>
+    /// </summary>
+    private static string? PausedStatus(CartSession? session) =>
+        session is not null && session.StatusPercent >= 0 ? session.Status : null;
 
     /// <summary>
     /// One frame of a tool screen: draw it into the shell's console, then hand that framebuffer

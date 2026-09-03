@@ -14,18 +14,27 @@ using Xunit.Abstractions;
 namespace Quarp.Shell.Desktop.Tests;
 
 /// <summary>
-/// <b>M9 stage 5a: the scrubber and the paused game's top band.</b> The owner looked at the
-/// seven-row pause menu in a live window and cut it to three: the header went, the four rows that
-/// moved the tick became one row with the tick between two arrows, and the top band the five
-/// editor screens wear appeared over the paused frame.
+/// <b>M9 stages 5a and 5b: the scrubber and the paused game's top band.</b> The owner looked at
+/// the seven-row pause menu in a live window and cut it to three (5a): the header went, the four
+/// rows that moved the tick became one row with the tick between two arrows, and the top band the
+/// five editor screens wear appeared over the paused frame. Then he looked at <em>that</em> and
+/// returned three more findings (5b), two of which were about numbers the organizer had invented
+/// rather than been given — the ramp and the aim's ceiling.
 ///
-/// <para><b>The measurement is the point of this file.</b> The owner's acceptance for the arrows
-/// is a pair of numbers, not a feeling (Р5): a held arrow must carry the session from tick
-/// 100 000 to tick 0 in no more than ten seconds, and no frame of that travel may take longer
-/// than about a hundred milliseconds. Both are measured here, on a cartridge deliberately built
-/// to cost a real cartridge's work per tick, through the production router — see
-/// <see cref="AHeldArrowCrossesAHundredThousandTicksInsideTheOwnersBudget"/>, which prints what
-/// it measured.</para>
+/// <para><b>What this file pins, and what it stopped pinning.</b> The ramp is now the owner's own
+/// table, dictated second by second (<see cref="TickScrubber"/>), and it is checked as a table:
+/// <see cref="AHeldArrowFollowsTheOwnersRampSecondBySecond"/> asserts how far a hold has carried
+/// the aim at every boundary in it, so substituting any one row goes red. The stage-5a acceptance
+/// gate that went with the invented ramp — "100 000 ticks in under ten seconds" — is cancelled by
+/// the owner's order: the same curve now needs about thirteen and a half seconds, and that is the
+/// named price of being able to aim. What survives from 5a is the <b>frame</b> measurement, which
+/// was never about the ramp — see
+/// <see cref="AHeldRewindCostsFarLessPerFrameThanCommittingTheAim"/>, which prints what it
+/// measured.</para>
+///
+/// <para><b>And what the ramp is for:</b>
+/// <see cref="ASeriesOfSingleClicksLandsExactlyOnTheTickTheOwnerNamed"/> — the owner's own
+/// example, tick 1164, reached by clicking, with no overshoot at all.</para>
 ///
 /// <para><b>Why that is hard, in one paragraph, because it decides the whole design.</b> Going
 /// backwards in this console is a cold boot and a resimulation from tick 0 (ADR-006 — no
@@ -186,41 +195,50 @@ public class PauseScrubTests : IDisposable
     }
 
     // ==================================================================================
-    // 1. Р5 — the numbers.
+    // 1. The frame budget — the half of Р5 that survived stage 5b.
     // ==================================================================================
 
     /// <summary>
-    /// <b>The owner's acceptance, measured.</b> A session is played to tick 100 000 (half an hour
-    /// at 60 Hz), the menu is raised, and the left arrow is held down until the session stands on
-    /// tick 0. Two numbers are taken and both are asserted: how long the arrow had to be held,
-    /// and the longest single frame of the whole travel. Both are printed, so a run of this test
-    /// is the report as well as the check.
+    /// <b>No frame of a held rewind may cost what committing the aim would.</b> A session is
+    /// played to tick 100 000 (half an hour at 60 Hz), the menu is raised, and the left arrow is
+    /// held down until the session stands on tick 0. Two numbers are taken and printed — how long
+    /// the arrow had to be held, and the longest single frame of the travel — and one of them is
+    /// a gate.
     ///
-    /// <para><b>The two clocks are different on purpose, and only one of them is a gate.</b> "How
-    /// long did the author hold the arrow" is <em>console</em> time — the frames' own lengths, fed
-    /// in — so it is a fact about the ramp and not about this machine, and ten seconds of it is
-    /// asserted exactly as the owner wrote it. "How long did a frame take" is <em>wall</em> time,
-    /// and wall time is the machine's: the first cut of this test demanded a hundred milliseconds
-    /// a frame, which the 4 ms measured here clears by a factor of twenty-four and a Debug run
-    /// under a coverage tool on a loaded CI box need not. So the frame gate is a <b>ratio</b>
-    /// against the naive variant timed on the same machine in the same run
+    /// <para><b>Why the console-time number is printed and not asserted any more.</b> Stage 5a
+    /// demanded "100 000 ticks in under ten seconds", and this test enforced it. That demand was
+    /// part of the ramp the organizer invented, and the owner cancelled both in stage 5b: his own
+    /// table spends its first three seconds moving three ticks, needs about thirteen and a half
+    /// seconds to cross 100 000, and is right — a control that cannot be aimed is not made useful
+    /// by being fast. The ramp is now checked as a table by
+    /// <see cref="AHeldArrowFollowsTheOwnersRampSecondBySecond"/>; the number here is left in the
+    /// output because it is the honest cost of that decision and the loop bound below is a
+    /// runaway guard, not an acceptance.</para>
+    ///
+    /// <para><b>The gate is a ratio, and that is deliberate.</b> "How long did a frame take" is
+    /// <em>wall</em> time, and wall time is the machine's: the first cut of this test demanded a
+    /// hundred milliseconds a frame, which the ~4 ms measured here clears by a factor of
+    /// twenty-four and a Debug run under a coverage tool on a loaded CI box need not. So the
+    /// frame gate is measured against the naive variant timed on the same machine in the same run
     /// (<see cref="NaiveCommitMs"/>): a frame of scrubbing must be at least
     /// <see cref="NaiveCommitFactor"/> times cheaper than committing the aim outright. That is a
     /// statement about the mechanism, and the mechanism is what the owner asked for. The absolute
     /// milliseconds are still printed, because they are the observation the ADR quotes.</para>
     ///
-    /// <para><b>Break recipe (measured, not guessed).</b> Delete the affordability guard in
-    /// <see cref="CartSession.ScrubTo"/> — commit every aim the moment it moves — and this goes
-    /// red with <c>a frame of scrubbing cost 220.4 ms against 212.6 ms for one naive commit</c>,
-    /// a factor of one, and the whole run takes a minute instead of a third of a second. Flatten
-    /// the ramp instead (make <see cref="TickScrubber.RateAt"/> return the base rate) and it goes
-    /// red on the tick: ten seconds of holding at one tick a frame leaves the session on 99 400.</para>
+    /// <para><b>Break recipe (run on the owner's ramp, not inherited from stage 5a).</b> Delete
+    /// the affordability guard in <see cref="CartSession.ScrubTo"/> — commit every aim the moment
+    /// it moves — and this goes red with <c>a frame of scrubbing cost 219.8 ms against 208.7 ms
+    /// for one naive commit at tick 100000 — a factor of 0.9</c>, and the one test takes 83
+    /// seconds instead of two.</para>
     /// </summary>
     [Fact]
-    public void AHeldArrowCrossesAHundredThousandTicksInsideTheOwnersBudget()
+    public void AHeldRewindCostsFarLessPerFrameThanCommittingTheAim()
     {
         const int start = 100_000;
-        const double heldSecondsAllowed = 10.0;
+
+        // Not a gate: the owner's ramp crosses 100 000 in about 13.5 s, and a hold that has not
+        // arrived in twice that has stopped moving rather than moved slowly.
+        const double runawaySeconds = 30.0;
 
         ShellModeMachine modes = Playing();
         var keys = new ShellCommandReader();
@@ -240,7 +258,7 @@ public class PauseScrubTests : IDisposable
         double worstFrameMs = 0;
         int frames = 0;
         var arrow = new[] { Keys.Left };
-        while (session.Tick > 0 && heldSeconds <= heldSecondsAllowed)
+        while (session.Tick > 0 && heldSeconds <= runawaySeconds)
         {
             clock.Restart();
             Frame(modes, keys, pointer, arrow);
@@ -256,9 +274,6 @@ public class PauseScrubTests : IDisposable
 
         Assert.Equal(0, session.Tick);
         Assert.True(
-            heldSeconds <= heldSecondsAllowed,
-            $"the arrow had to be held {heldSeconds:F2} s to reach tick 0 from {start}");
-        Assert.True(
             worstFrameMs * NaiveCommitFactor <= naiveMs,
             $"a frame of scrubbing cost {worstFrameMs:F1} ms against {naiveMs:F1} ms for one naive "
             + $"commit at tick {start} — a factor of {naiveMs / Math.Max(worstFrameMs, 0.0001):F1}");
@@ -267,9 +282,9 @@ public class PauseScrubTests : IDisposable
     /// <summary>
     /// <b>The scenario the whole feature is for: the game died, wind back and see why.</b> A
     /// cartridge that throws at tick 100 000 is played into its crash, the right arrow is held for
-    /// two seconds against the end of the recording — which a crashed cartridge cannot run past,
-    /// so every one of those frames is a move that does not happen — and only then is the left
-    /// arrow held. The rewind has to stay inside the frame budget.
+    /// two seconds against the end of the recording — where, since stage 5b, there is nothing to
+    /// the right at all — and only then is the left arrow held. The session must not move a tick
+    /// during the forward hold, and the rewind that follows has to stay inside the frame budget.
     ///
     /// <para><b>Why this is a test and not a corner case.</b> The frame budget is spent against a
     /// measured price per resimulated tick, and that measurement used to be taken on the travel
@@ -280,10 +295,17 @@ public class PauseScrubTests : IDisposable
     /// ever fail the budget check again, and the window went back to spending a fifth of a second
     /// per frame — on precisely the cartridge state the author reaches by crashing.</para>
     ///
-    /// <para><b>Break recipe.</b> Price the forward travel by the step requested instead of the
-    /// distance moved (<c>RecordScrubCost(step, ...)</c> in <see cref="CartSession.ScrubTo"/>) and
-    /// this goes red on the frame gate with about 190 ms against the same naive commit — a factor
-    /// of one — because the estimate has been argued down to nothing.</para>
+    /// <para><b>What stage 5b changed about this test, said plainly.</b> The aim's ceiling is now
+    /// the end of the recording, so those 120 frames no longer ask the session for anything: the
+    /// aim cannot leave the tip, <c>ScrubTo</c> is called with the tick it already stands on, and
+    /// the poisoning path is closed a layer earlier than the guard that used to close it. The
+    /// old break recipe here — price the forward travel by the step requested instead of the
+    /// distance moved — therefore no longer turns this red, and saying so is the point: the guard
+    /// in <c>ScrubToCore</c> is now belt to the ceiling's braces, and this test proves the
+    /// braces. What still turns it red, run rather than reasoned about: restore the stage-5a
+    /// ceiling and it fails with the menu printing 100 002 for a crashed session standing on
+    /// 100 000 — an aim two ticks past a tick that will never run again. The other half is the
+    /// frame gate: delete the affordability guard in <see cref="CartSession.ScrubTo"/>.</para>
     /// </summary>
     [Fact]
     public void AHeldArrowOnACrashedCartridgeDoesNotMakeTheNextRewindFree()
@@ -303,21 +325,23 @@ public class PauseScrubTests : IDisposable
         Tap(modes, keys, pointer, Keys.Down);
         Assert.Equal(PauseMenuItem.Scrub, modes.PauseMenu.Current);
 
-        // Two seconds of pushing against a wall: forward from a crashed tick is refused (M2's
-        // "REWIND TO RECOVER"), so the session must not move a single tick here.
+        // Two seconds of pushing against a wall: the aim's ceiling is the end of the recording
+        // and the session is standing on it, so there is nothing to the right — and behind that,
+        // forward from a crashed tick would be refused anyway (M2's "REWIND TO RECOVER").
         var forward = new[] { Keys.Right };
         for (int frame = 0; frame < 120; frame++)
         {
             Frame(modes, keys, pointer, forward);
         }
         Assert.Equal(CrashTick, session.Tick);
+        Assert.Equal(CrashTick, modes.MenuTick);        // and the menu is not printing a tick it cannot reach
 
         var clock = new Stopwatch();
         double heldSeconds = 0;
         double worstFrameMs = 0;
         int firstMove = -1;
         var back = new[] { Keys.Left };
-        while (session.Tick > 0 && heldSeconds <= 20.0)
+        while (session.Tick > 0 && heldSeconds <= 30.0)
         {
             int stood = session.Tick;
             clock.Restart();
@@ -356,20 +380,20 @@ public class PauseScrubTests : IDisposable
     /// The round trip: hold the left arrow to the start of the session, hold the right one back,
     /// and land on the very frame that was on screen. This is M9 stage 5's reversibility promise
     /// surviving the stage-5a controls — the thing the exact REWIND 60 / AHEAD 60 rows used to
-    /// prove and an accelerating hold cannot promise by itself, because a hold does not stop on a
-    /// number. What closes the last few ticks is therefore taps, which are exactly one tick each.
+    /// prove and an accelerating hold could not promise by itself, because a hold does not stop
+    /// on a number.
     ///
-    /// <para>It also pins Р3 in passing: the forward hold is <b>allowed</b> to run past the end of
-    /// the recording (the aim's ceiling is the tip plus a short lead), and what happens out there
-    /// is fresh simulation with no buttons held, which extends the log. Stepping back into the
-    /// recorded part then resimulates the recorded input and lands on the recorded frame.</para>
+    /// <para><b>Since stage 5b it stops on one anyway, and that is the new part.</b> The way back
+    /// used to overshoot into fresh simulation past the tip and needed taps to close the last few
+    /// ticks; the owner's ceiling is the end of the recording, so the hold cannot leave the
+    /// recorded part at all and comes to rest exactly on the tick the session was paused at. No
+    /// taps, no overshoot, and the assertion is an equality rather than a tolerance.</para>
     ///
     /// <para><b>Break recipe.</b> Make <see cref="CartSession.ScrubTo"/>'s forward branch call
     /// <c>SeekTo</c> with the aim instead of going through <see cref="CartSession.JumpTicks"/> and
-    /// the forward hold throws past the end of the log (<c>TimeMachine.SeekTo</c> refuses a tick
-    /// the log does not hold, by its own contract). Drop the frame comparison's cart state — make
-    /// <c>HeavyCart.Init</c> leave <c>_walk</c> alone — and the comparison stops meaning anything,
-    /// which is why the fixture reseeds it.</para>
+    /// the forward travel stops being a replay of the recorded input. Drop the frame comparison's
+    /// cart state — make <c>HeavyCart.Init</c> leave <c>_walk</c> alone — and the comparison stops
+    /// meaning anything, which is why the fixture reseeds it.</para>
     /// </summary>
     [Fact]
     public void AHoldOutAndAHoldBackLandOnTheFrameItLeft()
@@ -392,15 +416,64 @@ public class PauseScrubTests : IDisposable
         Assert.NotEqual(frameAtStart, session.Framebuffer.Pixels);
 
         Hold(modes, keys, pointer, Keys.Right, () => session.Tick >= start);
-        int overshoot = session.Tick - start;
-        Assert.True(overshoot < TickScrubber.FreshLeadTicks, $"the hold overshot by {overshoot} ticks");
-        for (int i = 0; i < overshoot; i++)
-        {
-            Tap(modes, keys, pointer, Keys.Left);
-        }
 
         Assert.Equal(start, session.Tick);
         Assert.Equal(frameAtStart, session.Framebuffer.Pixels);
+    }
+
+    /// <summary>
+    /// <b>The owner's own example, and the whole reason stage 5b exists: tick 1164.</b> He tried
+    /// the stage-5a scrubber in the window and could not land on that tick — "промах 30–60 тиков
+    /// за клик", because the invented ramp started at sixty ticks a second and a single frame of
+    /// hold was already most of a second's worth of speed. Here the session is paused on tick
+    /// 1200 and clicked back onto 1164, one click at a time, through the production router; the
+    /// tick after every single click is asserted, so a click that moved anything other than one
+    /// tick fails on the click that did it rather than at the end.
+    ///
+    /// <para>Then the same walk with the <b>pointer</b> on the row's <c>&gt;</c> arrow, because a
+    /// click and a key press are one gesture by the owner's UX law (Р4) and "a click is one tick"
+    /// has to be true of the thing actually called a click. It lands on 1185 — a second named
+    /// number, and one on the other side of the first.</para>
+    ///
+    /// <para><b>Break recipe.</b> Make the press edge in <see cref="TickScrubber.Frame"/> move
+    /// <c>direction * 2</c> and the first assertion goes red with 1198 for 1199. Take the edge
+    /// branch out altogether — let a press be an ordinary frame of the ramp — and the clicks stop
+    /// moving anything at all: at one tick a second, a two-frame click is a thirtieth of a tick,
+    /// and the session never leaves 1200.</para>
+    /// </summary>
+    [Fact]
+    public void ASeriesOfSingleClicksLandsExactlyOnTheTickTheOwnerNamed()
+    {
+        const int start = 1_200;
+        const int owners = 1_164;
+        const int andBack = 1_185;
+
+        ShellModeMachine modes = Playing();
+        var keys = new ShellCommandReader();
+        var pointer = new EditorMouseReader();
+        CartSession session = modes.Session!;
+
+        PlayTo(session, start);
+        Tap(modes, keys, pointer, Keys.Escape);
+        Tap(modes, keys, pointer, Keys.Down);
+        Assert.Equal(PauseMenuItem.Scrub, modes.PauseMenu.Current);
+
+        for (int clicks = 1; clicks <= start - owners; clicks++)
+        {
+            Tap(modes, keys, pointer, Keys.Left);
+            Assert.Equal(start - clicks, session.Tick);
+            Assert.Equal(session.Tick, modes.MenuTick);
+        }
+        Assert.Equal(owners, session.Tick);
+
+        Rectangle arrow = modes.PauseMenu.ScrubArrowRect(+1, ConsoleWidth, ConsoleHeight);
+        for (int clicks = 1; clicks <= andBack - owners; clicks++)
+        {
+            Click(modes, keys, pointer, arrow);
+            Assert.Equal(owners + clicks, session.Tick);
+        }
+        Assert.Equal(andBack, session.Tick);
+        Assert.Equal(andBack, modes.MenuTick);
     }
 
     // ==================================================================================
@@ -408,104 +481,196 @@ public class PauseScrubTests : IDisposable
     // ==================================================================================
 
     /// <summary>
-    /// The ramp, without a session: a tap is exactly one tick, holding accelerates, reversing
-    /// starts the ramp over, and the aim stops at tick 0 rather than going negative. The first of
-    /// those is the promise that took the STEP -1 / STEP +1 rows away without taking their
-    /// distance away (Р2); the third is what keeps a three-second hold one way from becoming a
-    /// three-second-fast jump the other way the instant a thumb slips.
+    /// <b>The owner's ramp, dictated row by row, checked row by row.</b> Speed is ticks per
+    /// second and time runs from the moment of the press: 0–3 s at 1, 3–5 at 5, 5–7 at 20, 7–8 at
+    /// 50, 8–8.5 at 100, 8.5–9 at 200, and from there a doubling every half second with no
+    /// ceiling. The table below is that dictation turned into distances — how far the aim has
+    /// travelled by the end of each row, counting the one tick the press itself is worth — and
+    /// nothing in it is computed from the class under test, which is the whole point: substitute
+    /// any one speed and every row from that boundary on is wrong.
     ///
-    /// <para><b>Break recipes, all three measured — and two guesses that were wrong are named
-    /// here rather than quietly dropped.</b> Make the press edge move two ticks
+    /// <para><b>Why it is stated as distance and not as speed.</b> Speed is what the owner
+    /// dictated, but distance is what the author sees, and the two are only the same claim if
+    /// the shell integrates the ramp correctly — which is exactly where the previous version was
+    /// wrong in a way nobody could see (it accumulated per frame, so the answer depended on the
+    /// window's refresh rate). A distance table catches an integration bug and a substituted row
+    /// with the same numbers.</para>
+    ///
+    /// <para><b>Break recipes, all four run rather than reasoned about.</b> Change the first row
+    /// from 1 tick/s to 2 and eight of the nine rows go red, the 3 s one with 7 for 4; the row
+    /// that stays green is the press itself, which the table does not own. Change the last tabled
+    /// row (8.5–9 s) from 200 to 100 and the six rows below it stay green while the last three go
+    /// red, the 9 s one with 204 for 254 — the test fails exactly where the change is. Move the
+    /// doubling tail's period from half a second to a whole one and only the 10 s row goes red,
+    /// with 654 for 854 (the first tail block is 400 ticks/s either way, so 9.5 s cannot see the
+    /// difference and this row is what covers the tail). Make the press edge move two ticks and
+    /// every row but the first is out by one, starting with 5 for 4.</para>
+    /// </summary>
+    [Theory]
+    // held seconds, where the aim stands after being held that long from tick 0
+    [InlineData(0.0, 1)]            // the press itself: one tick, and a click is exactly this
+    [InlineData(3.0, 4)]            // three seconds at 1/s — the range an exact tick is set in
+    [InlineData(5.0, 14)]           // + two seconds at 5/s
+    [InlineData(7.0, 54)]           // + two at 20/s
+    [InlineData(8.0, 104)]          // + one at 50/s
+    [InlineData(8.5, 154)]          // + half at 100/s
+    [InlineData(9.0, 254)]          // + half at 200/s — the last row of the table
+    [InlineData(9.5, 454)]          // and from here the tail doubles every half second: 400/s
+    [InlineData(10.0, 854)]         // 800/s
+    public void AHeldArrowFollowsTheOwnersRampSecondBySecond(double heldSeconds, int expected)
+    {
+        var scrubber = new TickScrubber();
+        scrubber.Sync(0);
+
+        // The press edge, then one frame of the shell's own length per sixtieth of a second.
+        scrubber.Frame(+1, FrameSeconds, int.MaxValue);
+        int frames = (int)Math.Round(heldSeconds * 60.0);
+        for (int frame = 0; frame < frames; frame++)
+        {
+            scrubber.Frame(+1, FrameSeconds, int.MaxValue);
+        }
+
+        Assert.Equal(expected, scrubber.Target);
+    }
+
+    /// <summary>
+    /// The three promises the table above does not make: a tap is one tick and stays one tick
+    /// after the arrow is let go, a reversal mid-hold starts the ramp over from one tick, and the
+    /// aim stops at tick 0 rather than going negative. The first is what took the STEP -1 /
+    /// STEP +1 rows away without taking their distance away (Р2); the second is what keeps a
+    /// nine-second hold one way from becoming a nine-second-fast jump the other way the instant a
+    /// thumb slips; the third is the floor of the timeline.
+    ///
+    /// <para><b>Break recipes, all run.</b> Make the press edge move two ticks
     /// (<c>direction * 2</c> in <see cref="TickScrubber.Frame"/>) and the tap assertion goes red
-    /// with 998 for 999. Make <see cref="TickScrubber.RateAt"/> return the base rate and the
-    /// acceleration assertion goes red on the first comparison ("second 1 covered 60 ticks, no
-    /// more than the 60 before it"). Delete the <c>direction != _direction</c> branch and only the
-    /// <b>reversal</b> assertion goes red, with 64 ticks instead of one.
-    ///
-    /// <para>The two that do <em>not</em> work, checked before being written down: raising
-    /// <see cref="TickScrubber.BaseTicksPerSecond"/> leaves the tap alone (the press edge moves one
-    /// tick by construction, not by rate), and raising
-    /// <see cref="TickScrubber.DoublingSeconds"/> leaves this test alone as well — a slower ramp is
-    /// still a growing one. What catches a ramp that is merely too slow is the measured
-    /// acceptance above, and it does: with a flat rate it never reaches tick 0 at all.</para></para>
+    /// with 998 for 999; take the whole <c>direction != _direction</c> branch out and it goes red
+    /// the other way, with 1000 for 999 — at one tick a second a two-frame click covers a
+    /// thirtieth of a tick, so without that branch a click moves nothing at all. Keep the branch
+    /// but drop its two ramp resets and the tap stays green while the <b>second</b> of the
+    /// reversal goes red with 1 000 347 for 999 748: the reversal inherits nine seconds of ramp
+    /// and covers six hundred ticks in the second that should have covered one. Drop the lower
+    /// bound in <c>Clamp</c> and the floor assertion goes red with -805 590.</para>
     /// </summary>
     [Fact]
-    public void ATapIsOneTickAndAHoldAccelerates()
+    public void ATapIsOneTickAndAReversalStartsTheRampOver()
     {
         var scrubber = new TickScrubber();
         scrubber.Sync(1_000);
 
-        // A tap: one frame down, one frame up.
-        scrubber.Frame(-1, FrameSeconds, 1_000, 1_000);
+        // A tap: one frame down, one frame up. Letting go moves nothing more.
+        scrubber.Frame(-1, FrameSeconds, 1_000);
         Assert.Equal(999, scrubber.Target);
-        scrubber.Frame(0, FrameSeconds, 999, 1_000);
+        scrubber.Frame(0, FrameSeconds, 1_000);
         Assert.Equal(999, scrubber.Target);
 
-        // A hold from the same place: each successive second covers more than the one before it.
+        // Nine seconds one way, then the other arrow: exactly one tick, not nine seconds of speed.
         scrubber.Sync(1_000_000);
-        int lastSecond = 0;
-        for (int second = 0; second < 4; second++)
+        scrubber.Frame(-1, FrameSeconds, int.MaxValue);      // the press edge, worth one tick
+        for (int frame = 0; frame < 9 * 60; frame++)
         {
-            int before = scrubber.Target;
-            for (int frame = 0; frame < 60; frame++)
-            {
-                scrubber.Frame(+1, FrameSeconds, 1_000_000, int.MaxValue);
-            }
-            int covered = scrubber.Target - before;
-            Assert.True(
-                covered > lastSecond,
-                $"second {second} covered {covered} ticks, no more than the {lastSecond} before it");
-            lastSecond = covered;
-        }
-
-        // Reversing mid-hold starts the ramp over: after three seconds of one arrow, the first
-        // frame of the other one moves exactly one tick and not three seconds' worth of speed.
-        scrubber.Sync(1_000_000);
-        for (int frame = 0; frame < 180; frame++)
-        {
-            scrubber.Frame(-1, FrameSeconds, 1_000_000, int.MaxValue);
+            scrubber.Frame(-1, FrameSeconds, int.MaxValue);
         }
         int atReversal = scrubber.Target;
-        scrubber.Frame(+1, FrameSeconds, atReversal, int.MaxValue);
+        Assert.Equal(1_000_000 - 254, atReversal);           // the ramp table's 9-second row
+        scrubber.Frame(+1, FrameSeconds, int.MaxValue);
         Assert.Equal(atReversal + 1, scrubber.Target);
+
+        // And the second the reversal is the ramp's own first second, not its tenth: one tick,
+        // the way the table's first row says. Asserting only the frame above would leave the
+        // ramp free to carry on from where it was and fly on the very next frame.
+        for (int frame = 0; frame < 60; frame++)
+        {
+            scrubber.Frame(+1, FrameSeconds, int.MaxValue);
+        }
+        Assert.Equal(atReversal + 2, scrubber.Target);
 
         // And the aim stops at the start of the session rather than running past it.
         scrubber.Sync(10);
-        for (int frame = 0; frame < 600; frame++)
+        for (int frame = 0; frame < 15 * 60; frame++)
         {
-            scrubber.Frame(-1, FrameSeconds, 10, 10);
+            scrubber.Frame(-1, FrameSeconds, 10);
         }
         Assert.Equal(0, scrubber.Target);
     }
 
     /// <summary>
-    /// Forward past the end of the recording is fresh simulation with no buttons held (Р3), and it
-    /// runs at the cartridge's real speed — tens of times slower than a resimulation. So the aim
-    /// is not allowed to accelerate away into a future nobody has computed: past the tip it leads
-    /// the session by at most <see cref="TickScrubber.FreshLeadTicks"/>, and the ramp waits for
-    /// the simulation instead of building a debt it would then spend minutes paying off.
+    /// <b>Forward stops at the end of the recording — the owner's stage-5b ruling.</b> Stage 5a
+    /// let the aim lead the session past the tip of the log, where forward is not a seek at all
+    /// but fresh simulation with no buttons held; the owner refused the idea outright: a pause is
+    /// a look at what has already been played, not playing on blind. So the ceiling is the
+    /// recording's own length, with nothing added to it.
     ///
-    /// <para><b>Break recipe.</b> Clamp to <c>logTickCount</c> alone in
-    /// <see cref="TickScrubber"/>'s <c>Clamp</c> and the aim stops dead at the tip — the forward
-    /// assertion goes red because the session never moves past it. Drop the clamp entirely and the
-    /// lead assertion goes red with an aim millions of ticks past anything simulated.</para>
+    /// <para>The second half of the test is the other side of the same rule: when the recording
+    /// <em>does</em> grow — the author's own <c>.</c> is the one road that grows it — the ceiling
+    /// grows with it, because there is only one owner of where the timeline ends and this class
+    /// is not it.</para>
+    ///
+    /// <para><b>Break recipe, run.</b> Put stage 5a's lead back — add the 600 to the ceiling in
+    /// <see cref="TickScrubber"/>'s <c>Clamp</c> — and this goes red on its very first frame:
+    /// <c>the aim reached 501, past a recording that ends at 500</c>.</para>
     /// </summary>
     [Fact]
-    public void TheAimNeverRunsAwayPastTheEndOfTheRecording()
+    public void TheAimStopsAtTheEndOfTheRecording()
     {
-        var scrubber = new TickScrubber();
-        int tick = 500;
         const int recorded = 500;
-        for (int frame = 0; frame < 600; frame++)
+        var scrubber = new TickScrubber();
+        scrubber.Sync(recorded);
+
+        for (int frame = 0; frame < 15 * 60; frame++)
         {
-            scrubber.Frame(+1, FrameSeconds, tick, recorded);
+            scrubber.Frame(+1, FrameSeconds, recorded);
             Assert.True(
-                scrubber.Target - tick <= TickScrubber.FreshLeadTicks,
-                $"the aim led the session by {scrubber.Target - tick} ticks past the recording");
-            // The session simulates as much of the lead as it can, the way ScrubTo does.
-            tick = Math.Min(scrubber.Target, tick + 40);
+                scrubber.Target <= recorded,
+                $"the aim reached {scrubber.Target}, past a recording that ends at {recorded}");
         }
-        Assert.True(tick > recorded, "the aim never let the session leave the end of the recording");
+        Assert.Equal(recorded, scrubber.Target);
+
+        // The recording grew — a step key ran one more tick — and the ceiling grew with it.
+        scrubber.Frame(0, FrameSeconds, recorded + 1);
+        scrubber.Frame(+1, FrameSeconds, recorded + 1);
+        Assert.Equal(recorded + 1, scrubber.Target);
+    }
+
+    /// <summary>
+    /// The same ruling on the production road, where it is a claim about the <b>simulation</b>
+    /// and not about a number: a right arrow held for five seconds on a session paused at the end
+    /// of its recording must not run a single tick of the cartridge. That is what "forward past
+    /// the tip" used to do — the old <c>AHEAD</c> row's fresh simulation with no buttons held —
+    /// and it is the half of the owner's complaint that a model test cannot see, because the
+    /// damage is a log that grew while the author was looking at a paused frame.
+    ///
+    /// <para><b>Break recipe, run.</b> Restore the stage-5a ceiling (see
+    /// <see cref="TheAimStopsAtTheEndOfTheRecording"/>) and this goes red with the session
+    /// standing on tick 1213 — thirteen ticks of a game nobody played, simulated under a paused
+    /// frame, and the recording thirteen ticks longer to match. Thirteen and not six hundred
+    /// because the ramp spends five seconds crawling; the number is small and the defect is
+    /// not.</para>
+    /// </summary>
+    [Fact]
+    public void AHeldRightArrowAtTheEndOfTheRecordingSimulatesNothing()
+    {
+        const int start = 1_200;
+
+        ShellModeMachine modes = Playing();
+        var keys = new ShellCommandReader();
+        var pointer = new EditorMouseReader();
+        CartSession session = modes.Session!;
+
+        PlayTo(session, start);
+        Tap(modes, keys, pointer, Keys.Escape);
+        Tap(modes, keys, pointer, Keys.Down);
+        Assert.Equal(start, session.LogTickCount);
+
+        var forward = new[] { Keys.Right };
+        for (int frame = 0; frame < 5 * 60; frame++)
+        {
+            Frame(modes, keys, pointer, forward);
+        }
+        Frame(modes, keys, pointer, NoKeys);
+
+        Assert.Equal(start, session.Tick);
+        Assert.Equal(start, session.LogTickCount);
+        Assert.Equal(start, modes.MenuTick);
     }
 
     // ==================================================================================
@@ -694,48 +859,64 @@ public class PauseScrubTests : IDisposable
     }
 
     /// <summary>
-    /// <b>One tick, one owner.</b> While a backward move waits for a frame it fits in, the pause
-    /// menu prints the aim and the session's status line prints — the same number. It used to
-    /// print the session's own tick, so for up to five and a half seconds the console showed two
-    /// different ticks on one screen, one of them in the menu the author was operating and the
-    /// other three rows below it. The header <c>PAUSED  T 93</c> was deleted this very stage
-    /// because "the tick is already on the status line"; that made the duplicate a disagreement
-    /// instead of removing it.
+    /// <b>Under the menu there is no status line, and outside it there still is.</b> Stage 5a put
+    /// the tick on screen twice — between the scrub row's arrows, and again three rows lower as
+    /// <c>PAUSE 4000</c> — and then spent a whole mechanism (a scrub aim published on the session,
+    /// expiring by itself when the tick moved) on making the two copies agree. The owner's answer
+    /// to a duplicate was to delete it: with a menu on screen the word "pause" and a second copy
+    /// of the tick say nothing the menu is not already saying. Outside the menu the line is the
+    /// only indicator there is — Space pauses without raising anything, the speed rungs print
+    /// there — so it stays exactly as it has been since M2.
     ///
-    /// <para><b>Break recipe.</b> Put <c>Tick</c> back in place of <c>ShownTick</c> in
-    /// <c>CartSession.RefreshStatus</c> and this goes red with <c>PAUSE 4000</c> against a menu
-    /// printing 3 98x.</para>
+    /// <para><b>It asks the production composition</b> (<see cref="QuarpGame.ComposeGameScreen"/>),
+    /// which is the half of the render that needs no graphics device and the one place that
+    /// decides what the overlay is told. A test that asked <see cref="CartSession.Status"/>
+    /// instead would be asking the wrong object: the session still formats its line, and the
+    /// decision under test is whether anybody is shown it.</para>
+    ///
+    /// <para><b>Break recipe.</b> Return <c>session?.Status</c> from the paused branch of
+    /// <c>ComposeGameScreen</c> — the stage-5a behaviour, restored — and the first assertion goes
+    /// red with <c>PAUSE 600</c> for null. Return null unconditionally instead and the Space and
+    /// speed rows go red, which is the other half: the owner asked for one line to go, not for
+    /// the indicator to.</para>
     /// </summary>
     [Fact]
-    public void TheMenuAndTheStatusLinePrintTheSameTick()
+    public void TheStatusLineIsGoneUnderTheMenuAndStaysOutsideIt()
     {
-        const int start = 4_000;
+        const int start = 600;
 
         ShellModeMachine modes = Playing();
         var keys = new ShellCommandReader();
         var pointer = new EditorMouseReader();
         CartSession session = modes.Session!;
+        var shell = new ShellScreen();
 
         PlayTo(session, start);
+
+        // Paused by Space, with no menu: the line is the only thing that says so.
+        Tap(modes, keys, pointer, Keys.Space);
+        Assert.True(session.IsPaused);
+        Assert.False(modes.PauseMenu.Shown);
+        Assert.Equal($"PAUSE {start}", QuarpGame.ComposeGameScreen(modes, shell, null, false).Status);
+
+        // Esc raises the menu over the same paused frame, and the line goes.
         Tap(modes, keys, pointer, Keys.Escape);
-        Tap(modes, keys, pointer, Keys.Down);
+        Assert.True(modes.PauseMenu.Shown);
+        GameScreenLayers underMenu = QuarpGame.ComposeGameScreen(modes, shell, null, false);
+        Assert.NotNull(underMenu.Band);
+        Assert.Null(underMenu.Status);
+        Assert.Equal(-1, underMenu.StatusPercent);
 
-        var arrow = new[] { Keys.Left };
-        for (int frame = 0; frame < 10; frame++)
-        {
-            Frame(modes, keys, pointer, arrow);
-            Assert.Equal($"PAUSE {modes.MenuTick}", session.Status);
-        }
+        // The session did not stop formatting it — nobody is being shown it.
+        Assert.Equal($"PAUSE {start}", session.Status);
+        Assert.Equal(start, modes.MenuTick);
 
-        // ...and the two really were free to disagree: the session has not moved at all yet.
-        Assert.Equal(start, session.Tick);
-        Assert.NotEqual(session.Tick, modes.MenuTick!.Value);
-        Assert.Equal(modes.Scrub.Target, modes.MenuTick!.Value);
-
-        // Once the arrow is let go and the session arrives, the same one number is the tick again.
-        Frame(modes, keys, pointer, NoKeys);
-        Assert.Equal(session.Tick, modes.MenuTick!.Value);
-        Assert.Equal($"PAUSE {session.Tick}", session.Status);
+        // Esc again lowers the menu and the game runs on; a speed rung has the line back.
+        Tap(modes, keys, pointer, Keys.Escape);
+        Assert.False(modes.PauseMenu.Shown);
+        Assert.False(session.IsPaused);
+        Tap(modes, keys, pointer, Keys.OemOpenBrackets);
+        Assert.Equal("<< 0.5x", QuarpGame.ComposeGameScreen(modes, shell, null, false).Status);
     }
 
     /// <summary>
@@ -928,5 +1109,21 @@ public class PauseScrubTests : IDisposable
     {
         Frame(modes, keys, pointer, down);
         Frame(modes, keys, pointer, NoKeys);
+    }
+
+    /// <summary>
+    /// The pointer's version of <see cref="Tap"/>: the button goes down on a rectangle for one
+    /// frame and up on the next, without the pointer moving. The release frame matters as much as
+    /// the press — it is the one a deferred backward move is committed on.
+    /// </summary>
+    private static void Click(
+        ShellModeMachine modes, ShellCommandReader keys, EditorMouseReader pointer, Rectangle target)
+    {
+        Frame(
+            modes, keys, pointer, NoKeys,
+            target.Center.X, target.Center.Y, ButtonState.Pressed);
+        Frame(
+            modes, keys, pointer, NoKeys,
+            target.Center.X, target.Center.Y, ButtonState.Released);
     }
 }

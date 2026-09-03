@@ -163,21 +163,25 @@ public sealed class ShellModeMachine
     public TickScrubber Scrub { get; } = new();
 
     /// <summary>
-    /// The tick the pause menu prints between its arrows: the scrubber's aim, not the session's
-    /// own tick. The two differ only while a backward move is waiting for a frame it fits in
-    /// (<see cref="CartSession.ScrubTo"/>), and during that wait the aim is the honest answer —
-    /// it is what the author's key is moving and where the release will land. Null with nothing
-    /// running, which is also when the menu has no scrub row to print it on.
+    /// The tick the pause menu prints between its arrows: the scrubber's aim while an arrow is
+    /// aiming, and the session's own tick the rest of the time. The two differ only while a
+    /// backward move is waiting for a frame it fits in (<see cref="CartSession.ScrubTo"/>), and
+    /// during that wait the aim is the honest answer — it is what the author's key is moving and
+    /// where the release will land. Null with nothing running, which is also when the menu has no
+    /// scrub row to print it on.
     ///
-    /// <para><b>Read from the session, not from <see cref="Scrub"/>.</b> The same number is
-    /// printed twice on this screen — here between the arrows, and by the session's own status
-    /// line at the bottom left — and while a move was deferred the two used to be two different
-    /// numbers on one screen for as long as the travel took. <see cref="CartSession.ShownTick"/>
-    /// is the single owner both printers read; this property still answers the scrubber's aim
-    /// only because <see cref="ScrubFrame"/> publishes that aim to the session every frame the
-    /// menu is up.</para>
+    /// <para><b>One printer, because there is no second one (M9 stage 5b).</b> Stage 5a had this
+    /// number on screen twice — here, and in the session's <c>PAUSE N</c> status line three rows
+    /// below — and reconciled them through a published aim on the session
+    /// (<c>CartSession.ShownTick</c>). The owner's answer to a duplicate was to delete it: with
+    /// the menu up the shell prints no status line at all
+    /// (<see cref="QuarpGame.ComposeGameScreen"/>), so the machinery that kept two printers
+    /// agreeing had nothing left to do and went with it. The aim never has to be published
+    /// anywhere: <see cref="TickScrubber.Aiming"/> already says whether it means anything, and
+    /// every road that moves time by some other key ends in <see cref="CancelScrub"/>.</para>
     /// </summary>
-    public int? MenuTick => Session?.ShownTick;
+    public int? MenuTick =>
+        Session is CartSession session ? (Scrub.Aiming ? Scrub.Target : session.Tick) : null;
 
     /// <summary>
     /// What the paused game's top bar calls this cartridge: the running session's manifest name,
@@ -503,7 +507,7 @@ public sealed class ShellModeMachine
         {
             return;
         }
-        Scrub.Frame(direction, seconds, session.Tick, session.LogTickCount);
+        Scrub.Frame(direction, seconds, session.LogTickCount);
         if (!Scrub.Aiming)
         {
             // Nobody is scrubbing, so the printed number simply follows the session — including
@@ -513,33 +517,24 @@ public sealed class ShellModeMachine
             return;
         }
         int stood = session.Tick;
-        // Unconditionally, including on the frame the aim and the session already agree on: this
-        // call is also what publishes the aim to CartSession.ShownTick, and a frame that skipped
-        // it would leave the status line advertising the destination of the move before this one.
         session.ScrubTo(Scrub.Target, release: direction == 0);
         if (direction == 0 && (Scrub.Target == session.Tick || session.Tick == stood))
         {
             // Released, and the session has either arrived or refused to move at all. The second
             // case is real and is not a rounding error: a crashed cartridge standing at the end
-            // of its log has no forward to run (Р3's fresh simulation needs a cartridge that
-            // still runs), so an aim past the tip is a number nobody will ever reach. Leaving it
-            // up would print a tick that never arrives — on the menu and, since ShownTick, on the
-            // status line with it.
+            // of its log has no forward to run, so an aim there is a number nobody will ever
+            // reach, and leaving it up would keep the menu printing a tick that never arrives.
             SyncScrub(session);
         }
     }
 
     /// <summary>
-    /// Puts the aim and the tick the session prints back in step. Two calls rather than one
-    /// because they are two objects with one fact between them: <see cref="TickScrubber.Sync"/>
-    /// says the arrows are no longer aiming anywhere, and
-    /// <see cref="CartSession.ForgetScrubAim"/> says the same thing to the printers.
+    /// Puts the aim back on the tick the session really stands on, which is also what makes
+    /// <see cref="MenuTick"/> go back to printing that tick: an aim only means anything while
+    /// <see cref="TickScrubber.Aiming"/> says so, and <see cref="TickScrubber.Sync"/> is the one
+    /// thing that says otherwise.
     /// </summary>
-    private void SyncScrub(CartSession session)
-    {
-        Scrub.Sync(session.Tick);
-        session.ForgetScrubAim();
-    }
+    private void SyncScrub(CartSession session) => Scrub.Sync(session.Tick);
 
     /// <summary>
     /// Makes the deferred move now, whatever the frame budget says — the release frame that a

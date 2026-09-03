@@ -126,34 +126,12 @@ public sealed class CartSession : IDisposable
     /// <summary>What one resimulated tick of THIS cartridge costs, as last measured — see <see cref="ScrubTo"/>.</summary>
     private double _msPerScrubTick = SeedMsPerScrubTick;
 
-    /// <summary>
-    /// The tick a scrub is travelling to while the session has not arrived yet, or null when the
-    /// two agree. The whole of <see cref="ShownTick"/> — see that property for why the number the
-    /// console prints has to have exactly one owner.
-    /// </summary>
-    private int? _scrubAim;
-
-    /// <summary>
-    /// Where the session stood when <see cref="_scrubAim"/> was last published. An aim is only
-    /// believed while the session is still standing there, which is what makes the aim expire by
-    /// itself: <c>,</c>, <c>.</c>, <c>Home</c>, held Backspace, a live tick and a reload all move
-    /// the tick, and every one of them therefore drops a stale destination without having to
-    /// remember to. A clearing call in every one of those roads is exactly the bookkeeping that
-    /// gets forgotten in the seventh.
-    /// </summary>
-    private int _scrubAimFrom;
-
     private string? _status;
     private int _statusPercent = -1;
     private string? _flash;
     private long _flashUntilMs;
 
-    /// <summary>
-    /// Everything <see cref="RefreshStatus"/> reads, so an unchanged frame formats nothing. The
-    /// tick in it is <see cref="ShownTick"/> and not <see cref="Tick"/>, because that is the one
-    /// the line prints: a deferred scrub moves the printed number while the session stands still,
-    /// and a signature built on the standing tick would cache the line through the whole travel.
-    /// </summary>
+    /// <summary>Everything <see cref="RefreshStatus"/> reads, so an unchanged frame formats nothing.</summary>
     private (bool Crashed, bool Paused, int Speed, int Tick, string? Replay, string? Flash, bool InPlayback, bool AtBreak)
         _statusSignature = (false, false, -1, -1, null, null, false, false);
 
@@ -230,24 +208,6 @@ public sealed class CartSession : IDisposable
 
     /// <summary>Where the console stands, in ticks since Init.</summary>
     public int Tick => Active.Tick;
-
-    /// <summary>
-    /// The tick the console is <b>showing the author</b>: the scrub's destination while a move is
-    /// still in flight, and <see cref="Tick"/> the rest of the time.
-    ///
-    /// <para><b>Why this exists at all.</b> A backward scrub is deliberately allowed to lag its
-    /// aim (<see cref="ScrubTo"/>), so for up to a few seconds "where the session stands" and
-    /// "the tick the author is moving" are two different numbers. Both were on screen at once —
-    /// the pause menu printed the aim between its arrows, this session's own status line printed
-    /// <see cref="Tick"/> — and on a long session they disagreed for seconds at a time. One number
-    /// with two printers is one number with two owners, so the answer lives here, and both the
-    /// status line below and <see cref="ShellModeMachine.MenuTick"/> read it rather than deciding
-    /// it. The aim is set by the only method that can start such a move and is cleared by the very
-    /// act of moving — see <see cref="SeekTo"/> and <see cref="JumpTicks"/> — so there is no
-    /// bookkeeping to forget except the one case the shell owns
-    /// (<see cref="ForgetScrubAim"/>).</para>
-    /// </summary>
-    public int ShownTick => _scrubAim is int aim && Tick == _scrubAimFrom ? aim : Tick;
 
     /// <summary>The selected rung of the speed ladder.</summary>
     public TimeSpeed Speed => TimeSpeed.At(_speedIndex);
@@ -546,8 +506,10 @@ public sealed class CartSession : IDisposable
     /// <para>Forward travel is two different things and both are here: as far as the recorded
     /// log reaches it is a replay of what the player already did (so a jump forward after a
     /// jump back is exactly reversible), and past the log's tip it is fresh simulation with no
-    /// buttons held, which is what <c>.</c> does at the tip too — and what the scrubber's right
-    /// arrow does past the tip (stage 5a, Р3).</para>
+    /// buttons held, which is what <c>.</c> does at the tip. The pause menu's right arrow does
+    /// <b>not</b> get there: its ceiling is the tip itself (M9 stage 5b — see
+    /// <see cref="TickScrubber"/>), so this method's fresh branch is reached from the step key
+    /// and from live play, and the recording only ever grows because the author asked it to.</para>
     /// </summary>
     public void JumpTicks(int ticks)
     {
@@ -614,9 +576,11 @@ public sealed class CartSession : IDisposable
     /// <em>is</em> the distance, and partial progress is never thrown away, so a forward scrub
     /// travels as far as this frame's budget allows and continues on the next — which is also
     /// why it ignores <paramref name="release"/>: there is nothing to defer, only work to
-    /// spread. Past the end of the recording that work is fresh simulation with no buttons held
-    /// (Р3), the old AHEAD row's own behaviour, and it is <see cref="JumpTicks"/> that owns both
-    /// halves of forward travel — this method only decides how much of it to buy this frame.</para>
+    /// spread. It is <see cref="JumpTicks"/> that owns forward travel; this method only decides
+    /// how much of it to buy this frame. Since M9 stage 5b the aim cannot ask for more than the
+    /// recording holds (<see cref="TickScrubber"/>), so every forward frame here is a replay of
+    /// what the player already did — a pause is a look at what was played, not playing on
+    /// blind.</para>
     ///
     /// <para><b>The budget is measured, not assumed.</b> <see cref="_msPerScrubTick"/> starts at
     /// a deliberately pessimistic seed and is corrected by every travel long enough to time; a
@@ -631,14 +595,7 @@ public sealed class CartSession : IDisposable
     public void ScrubTo(int target, bool release)
     {
         _paused = true;
-        target = Math.Max(0, target);
-        ScrubToCore(target, release);
-        // Published last, and from here rather than from each of ScrubToCore's three roads, so
-        // the tick the console shows is decided once for every outcome alike — arrived, deferred
-        // or refused. See ShownTick: this assignment is the whole of how the pause menu and the
-        // status line come to be printing the same number.
-        _scrubAim = target;
-        _scrubAimFrom = Tick;
+        ScrubToCore(Math.Max(0, target), release);
         RefreshStatus();
     }
 
@@ -670,31 +627,19 @@ public sealed class CartSession : IDisposable
         int stood = machine.Tick;
         long forwardStarted = Stopwatch.GetTimestamp();
         JumpTicks(step);                // owns replay-inside-the-log and fresh-past-the-tip alike
-        // What it cost is what it MOVED, never what it was asked for: JumpTicks answers some
+        // What it cost is what it MOVED, never what it was asked for. JumpTicks answers some
         // requests by declining them (a crashed cartridge standing at the end of its log has no
-        // forward to run — see its own guard — and so has a replay at the end of its film), and
-        // those frames return in microseconds. Timing a declined move against the ticks it did
-        // not travel prices a resimulated tick at nothing, and one second of a held arrow on a
-        // crashed cartridge was enough to convince the budget below that every seek is free.
+        // forward to run — see its own guard — and so has a replay at the end of its film), those
+        // frames return in microseconds, and timing a declined move against the ticks it did not
+        // travel prices a resimulated tick at nothing: one second of a held right arrow on a
+        // crashed cartridge used to convince the budget above that every seek is free.
+        //
+        // Since M9 stage 5b the scrubber cannot ask for a tick the recording does not hold, so
+        // that particular hold now declines one step earlier, in TickScrubber's own ceiling, and
+        // never reaches this line. This stays measured movement all the same: it is the caller
+        // that guarantees the aim is inside the log, and a guard that depends on its caller's
+        // arithmetic is the kind that comes back the next time somebody adds a caller.
         RecordScrubCost(Tick - stood, forwardStarted);
-    }
-
-    /// <summary>
-    /// Drops a scrub destination the session is never going to reach, so <see cref="ShownTick"/>
-    /// goes back to the tick the console really stands on. The shell calls this wherever it puts
-    /// the scrubber's aim back on the session (<see cref="ShellModeMachine.ScrubFrame"/> and its
-    /// neighbours): the aim and the printed number are one fact, and a scrubber re-aimed while
-    /// this session still advertised the old destination would be exactly the two-printer split
-    /// <see cref="ShownTick"/> exists to end.
-    /// </summary>
-    public void ForgetScrubAim()
-    {
-        if (_scrubAim is null)
-        {
-            return;
-        }
-        _scrubAim = null;
-        RefreshStatus();
     }
 
     /// <summary>How many ticks the recording holds — the far end of a forward scrub inside recorded history.</summary>
@@ -1441,7 +1386,7 @@ public sealed class CartSession : IDisposable
 
         // Cheap comparison first: everything the line is built from, packed into a value.
         // Only a real change pays for the formatting.
-        var signature = (_crashed, _paused, _speedIndex, ShownTick, _playbackName, flash, _playback is not null, _atBreak);
+        var signature = (_crashed, _paused, _speedIndex, Tick, _playbackName, flash, _playback is not null, _atBreak);
         if (signature == _statusSignature)
         {
             return;
@@ -1466,10 +1411,10 @@ public sealed class CartSession : IDisposable
         }
         else if (_paused)
         {
-            // ShownTick and not Tick: while a backward scrub waits for a frame it fits in, the
-            // tick the author is moving is the aim, and the pause menu two rows up is printing
-            // that same aim. One number, one owner — see ShownTick.
-            next = $"PAUSE {ShownTick}";
+            // The session's own tick, with no opinion about anything the shell may be drawing on
+            // top of it: while the pause menu is up this line is not shown at all (M9 stage 5b —
+            // QuarpGame.ComposeGameScreen), so the number it prints has nobody to disagree with.
+            next = $"PAUSE {Tick}";
         }
         else if (!Speed.IsNormal)
         {
